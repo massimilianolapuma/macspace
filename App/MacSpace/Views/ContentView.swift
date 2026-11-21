@@ -9,23 +9,46 @@ struct ContentView: View {
     @State private var choosingFolder = false
     @State private var showOnboarding = false
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(spacing: 0) {
-            chartPlaceholder
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            VStack(spacing: 0) {
+                BreadcrumbView(model: model)
+                    .padding(.horizontal, 12)
+                    .frame(height: 40)
+                    .opacity(model.breadcrumb.isEmpty ? 0 : 1)
+                SunburstView(model: model)
+                    .padding([.horizontal, .bottom], 8)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
             Divider()
-            listPlaceholder
+            BiggestListView(model: model)
                 .frame(width: 260)
                 .frame(maxHeight: .infinity)
         }
+        .frame(minWidth: 760, minHeight: 520)
         .background(FusionPalette.background(scheme))
+        .background {
+            // ⌘↑ goes up a level, as in Finder.
+            Button { model.goUp() } label: { EmptyView() }
+                .keyboardShortcut(.upArrow, modifiers: .command)
+                .disabled(model.breadcrumb.count < 2)
+                .opacity(0)
+                .accessibilityHidden(true)
+        }
+        .navigationTitle(Text(verbatim: model.breadcrumb.last?.name ?? "MacSpace"))
+        .toolbar(removing: .title)
         .toolbar { toolbar }
         .fileImporter(isPresented: $choosingFolder, allowedContentTypes: [.folder]) { result in
             if case let .success(url) = result {
                 chosenFolder = url
                 target = .folder(url)
             }
+        }
+        .onChange(of: target) {
+            // Picking another target mid-scan replaces the running scan.
+            if model.isScanning { model.start(target) }
         }
         .sheet(isPresented: $showOnboarding) {
             OnboardingView(dismiss: { showOnboarding = false })
@@ -55,15 +78,9 @@ struct ContentView: View {
                 Label(targetName, systemImage: target == .startupDisk ? "internaldrive" : "folder")
                     .labelStyle(.titleAndIcon)
             }
-            .disabled(model.isScanning)
         }
         ToolbarItem(placement: .status) {
-            if case let .scanning(progress) = model.phase {
-                Text("Analisi in corso… \(Formatters.count(progress.filesSeen)) file · \(Formatters.bytes(progress.bytesSeen))")
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 8)
-            }
+            status
         }
         ToolbarItem(placement: .primaryAction) {
             if model.isScanning {
@@ -76,6 +93,43 @@ struct ContentView: View {
         }
     }
 
+    /// Scan state and file count; the byte total lives only in the chart's center.
+    @ViewBuilder
+    private var status: some View {
+        switch model.phase {
+        case let .scanning(progress):
+            HStack(spacing: 8) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Analisi in corso… \(Formatters.count(progress.filesSeen)) file")
+                    .monospacedDigit()
+                    .contentTransition(reduceMotion ? .identity : .numericText(value: Double(progress.filesSeen)))
+                    .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: progress.filesSeen)
+                    .lineLimit(1)
+                    .frame(minWidth: 190, alignment: .leading)
+            }
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 12)
+        case let .done(summary) where summary.wasCancelled:
+            HStack(spacing: 6) {
+                Image(systemName: "pause.circle")
+                Text("Analisi interrotta · \(Formatters.count(summary.files)) file")
+                    .monospacedDigit()
+                    .lineLimit(1)
+            }
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 12)
+        case let .done(summary):
+            Text("\(Formatters.count(summary.files)) file")
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .padding(.horizontal, 12)
+        case .idle:
+            EmptyView()
+        }
+    }
+
     private var targetName: String {
         switch target {
         case .startupDisk: String(localized: "Macintosh HD")
@@ -83,36 +137,9 @@ struct ContentView: View {
         }
     }
 
+    /// The chosen folder's name after resolving links, as the chart root shows it.
     private static func displayName(_ url: URL) -> String {
-        FileManager.default.displayName(atPath: url.path(percentEncoded: false))
-    }
-
-    // Placeholders until the sunburst and the biggest list exist (Task 8).
-
-    private var chartPlaceholder: some View {
-        VStack(spacing: 4) {
-            if let current = model.breadcrumb.last {
-                Text(verbatim: Formatters.bytes(current.size))
-                    .font(.largeTitle.weight(.semibold))
-                    .monospacedDigit()
-                    .foregroundStyle(FusionPalette.primaryText(scheme))
-                Text(verbatim: current.name)
-                    .foregroundStyle(FusionPalette.secondaryText(scheme))
-            }
-        }
-    }
-
-    private var listPlaceholder: some View {
-        List(model.biggest) { row in
-            HStack {
-                Text(verbatim: row.name).lineLimit(1)
-                Spacer()
-                Text(verbatim: Formatters.bytes(row.size))
-                    .monospacedDigit()
-                    .foregroundStyle(.secondary)
-            }
-        }
-        .scrollContentBackground(.hidden)
+        ScanModel.root(of: .folder(url)).name
     }
 }
 
@@ -120,17 +147,26 @@ private struct OnboardingView: View {
     let dismiss: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            Label {
-                Text("Serve l'accesso completo al disco")
-                    .font(.title2.weight(.semibold))
-            } icon: {
+        VStack(alignment: .leading, spacing: 20) {
+            HStack(alignment: .top, spacing: 16) {
                 Image(systemName: "lock.shield")
-                    .font(.title)
+                    .font(.system(size: 26, weight: .regular))
                     .foregroundStyle(.secondary)
+                    .frame(width: 52, height: 52)
+                    .background(Circle().fill(.quaternary))
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Serve l'accesso completo al disco")
+                        .font(.title3.weight(.semibold))
+                    Text("Per vedere tutto lo spazio, MacSpace deve poter leggere anche le cartelle di sistema e la Libreria. Puoi analizzare anche senza: le cartelle non leggibili saranno segnate.")
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Label("Privacy e sicurezza › Accesso completo al disco › MacSpace", systemImage: "gearshape")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .padding(.top, 4)
+                }
             }
-            Text("Per vedere tutto lo spazio, MacSpace deve poter leggere anche le cartelle di sistema e la Libreria. Puoi analizzare anche senza: le cartelle non leggibili saranno segnate.")
-                .fixedSize(horizontal: false, vertical: true)
             HStack {
                 Spacer()
                 Button("Continua senza", action: dismiss)
@@ -138,22 +174,9 @@ private struct OnboardingView: View {
                 Button("Apri Impostazioni di Sistema") { FullDiskAccess.openSettings() }
                     .keyboardShortcut(.defaultAction)
             }
+            .controlSize(.large)
         }
         .padding(24)
-        .frame(width: 460)
-    }
-}
-
-/// Number and size formatting for the UI: Italian locale; sizes as Finder shows them
-/// (allocated bytes, `.file` count style).
-enum Formatters {
-    private static let locale = Locale(identifier: "it_IT")
-
-    static func bytes(_ value: UInt64) -> String {
-        Int64(clamping: value).formatted(.byteCount(style: .file).locale(locale))
-    }
-
-    static func count(_ value: Int) -> String {
-        value.formatted(.number.locale(locale))
+        .frame(width: 500)
     }
 }

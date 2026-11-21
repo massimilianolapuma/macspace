@@ -26,6 +26,8 @@ final class ScanModel {
     /// From the scan root down to `center`.
     var breadcrumb: [NodeRow] = []
     var hovered: ArcSegment?
+    /// Total capacity of the scanned volume; set only when scanning the startup disk.
+    var capacity: UInt64?
 
     var isScanning: Bool {
         if case .scanning = phase { return true }
@@ -109,6 +111,7 @@ final class ScanModel {
         self.store = store
         center = FileTree.root
         hovered = nil
+        capacity = if case .startupDisk = target { Self.startupDiskCapacity() } else { nil }
         segments = []
         biggest = []
         breadcrumb = []
@@ -133,9 +136,14 @@ final class ScanModel {
         await refreshViews()
     }
 
+    private static func startupDiskCapacity() -> UInt64? {
+        let values = try? URL(filePath: "/").resourceValues(forKeys: [.volumeTotalCapacityKey])
+        return values?.volumeTotalCapacity.map { UInt64(clamping: $0) }
+    }
+
     /// Scan root path and display name. Chosen folders are resolved first: the reader
     /// opens directories with `O_NOFOLLOW`, so a symlinked root would fail.
-    private static func root(of target: ScanTarget) -> (path: String, name: String) {
+    static func root(of target: ScanTarget) -> (path: String, name: String) {
         switch target {
         case .startupDisk:
             return ("/", "Macintosh HD")
