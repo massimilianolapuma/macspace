@@ -52,12 +52,15 @@ struct SunburstMotion {
     private var animated = false
     private var pace = Pace.refresh
 
-    /// Navigation zooms take the full spring; scan refreshes settle well inside the 250 ms
-    /// refresh interval, so the chart is idle between them instead of redrawing nonstop.
+    /// Navigation zooms take the full spring. Scan refreshes are drawn at their target directly
+    /// unless something visibly moves (`refreshMotionThreshold`); then they settle well inside
+    /// the 250 ms refresh interval. Either way the chart is idle between refreshes.
     private enum Pace { case zoom, refresh }
 
     static let spring = Spring(duration: 0.35, bounce: 0)  // == Animation.smooth(duration: 0.35)
     static let refreshDuration: TimeInterval = 0.18
+    /// Largest arc displacement, in radians (~2.9°), that a refresh snaps instead of animating.
+    static let refreshMotionThreshold = 0.05
 
     /// How long the current transition runs; 0 when it is not animated.
     var duration: TimeInterval {
@@ -80,22 +83,38 @@ struct SunburstMotion {
 
     func poses(at date: Date) -> [(arc: Arc, pose: ArcPose)] {
         let t = progress(at: date)
-        return arcs.map { ($0, t >= 1 ? $0.to : $0.from.mixed(with: $0.to, t)) }
+        return arcs.map { ($0, Self.pose(of: $0, t)) }
+    }
+
+    private static func pose(of arc: Arc, _ t: Double) -> ArcPose {
+        t >= 1 ? arc.to : arc.from.mixed(with: arc.to, t)
+    }
+
+    /// The current arc with segment `id` and where it is drawn at `date`.
+    func current(_ id: String, at date: Date) -> (arc: Arc, pose: ArcPose)? {
+        guard let arc = arcs.last(where: { $0.isCurrent && $0.segment.id == id }) else { return nil }
+        return (arc, Self.pose(of: arc, progress(at: date)))
     }
 
     /// The current segment drawn under a point at `date`: `angle` from 12 o'clock clockwise,
     /// `ring` the fractional ring position (1 = inner edge of the innermost ring).
+    /// Runs on every mouse move, so it allocates nothing.
     func hitTest(angle: Double, ring: Double, at date: Date) -> ArcSegment? {
-        let full = 2 * Double.pi
-        var a = angle.truncatingRemainder(dividingBy: full)
-        if a < 0 { a += full }
-        for (arc, pose) in poses(at: date).reversed() where arc.isCurrent && pose.alpha > 0.5 {
-            if ring >= pose.depth, ring < pose.depth + 1, a >= pose.start, a < pose.end { return arc.segment }
+        let a = SunburstLayout.normalizedAngle(angle)
+        let t = progress(at: date)
+        for arc in arcs.reversed() where arc.isCurrent {
+            let pose = Self.pose(of: arc, t)
+            if pose.alpha > 0.5, ring >= pose.depth, ring < pose.depth + 1, a >= pose.start, a < pose.end {
+                return arc.segment
+            }
         }
         return nil
     }
 
-    mutating func retarget(to segments: [ArcSegment], change: SunburstChange, at date: Date, animated: Bool) {
+    /// Moves the chart to `segments`. Returns whether the change animates: a `.refresh` whose
+    /// arcs barely move is drawn at its target directly, even when `animated` is true.
+    @discardableResult
+    mutating func retarget(to segments: [ArcSegment], change: SunburstChange, at date: Date, animated: Bool) -> Bool {
         let shown = poses(at: date).filter { $0.pose.alpha > 0.01 }
         var shownByID: [String: ArcPose] = [:]
         for (arc, pose) in shown { shownByID[arc.segment.id] = pose }
@@ -126,6 +145,10 @@ struct SunburstMotion {
             leaving.append(Arc(segment: arc.segment, from: pose, to: to, isCurrent: false))
         }
 
+        var animated = animated
+        if animated, case .refresh = change {
+            animated = Self.largestMotion(next + leaving) > Self.refreshMotionThreshold
+        }
         if animated {
             arcs = leaving + next
         } else {
@@ -134,6 +157,19 @@ struct SunburstMotion {
         startedAt = date
         self.animated = animated
         if case .refresh = change { pace = .refresh } else { pace = .zoom }
+        return animated
+    }
+
+    /// How far the most-moving arc travels, in radians; an appearing or fading arc counts its
+    /// span scaled by the change in opacity.
+    private static func largestMotion(_ arcs: [Arc]) -> Double {
+        var largest = 0.0
+        for arc in arcs {
+            let (a, b) = (arc.from, arc.to)
+            let fade = abs(a.alpha - b.alpha) * max(a.end - a.start, b.end - b.start)
+            largest = max(largest, abs(a.start - b.start), abs(a.end - b.end), fade)
+        }
+        return largest
     }
 
     /// Starting pose of an arc that is not on screen yet.

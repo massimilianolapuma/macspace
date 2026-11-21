@@ -18,7 +18,15 @@ final class ScanModel {
         case done(ScanSummary)
     }
 
-    var phase: Phase = .idle
+    var phase: Phase = .idle {
+        didSet {
+            // Stored, not derived from `phase`: views that only care whether a scan is running
+            // are not invalidated by every progress update.
+            let scanning = if case .scanning = phase { true } else { false }
+            if isScanning != scanning { isScanning = scanning }
+        }
+    }
+    private(set) var isScanning = false
     /// The folder the chart and the list are centred on.
     var center: NodeID = FileTree.root
     var segments: [ArcSegment] = []
@@ -28,11 +36,6 @@ final class ScanModel {
     var hovered: ArcSegment?
     /// Total capacity of the scanned volume; set only when scanning the startup disk.
     var capacity: UInt64?
-
-    var isScanning: Bool {
-        if case .scanning = phase { return true }
-        return false
-    }
 
     static let ringDepth = 3
     static let biggestLimit = 20
@@ -77,20 +80,22 @@ final class ScanModel {
         }
     }
 
-    /// Reloads `segments`, `biggest` and `breadcrumb` for the current `center`.
+    /// Reloads `segments`, `biggest` and `breadcrumb` for the current `center`, from one
+    /// consistent store snapshot.
     func refreshViews() async {
         guard let store else { return }
         let center = self.center
-        let segments = await store.sunburst(center: center, depth: Self.ringDepth)
-        let biggest = await store.rows(childrenOf: center, limit: Self.biggestLimit)
-        let breadcrumb = await store.breadcrumb(to: center)
+        let snapshot = await store.snapshot(center: center, depth: Self.ringDepth, biggestLimit: Self.biggestLimit)
         // A newer scan or navigation happened meanwhile: its own refresh wins.
         guard store === self.store, center == self.center else { return }
-        self.segments = segments
-        self.biggest = biggest
-        self.breadcrumb = breadcrumb
-        if let hovered {
-            self.hovered = segments.first { $0.id == hovered.id }
+        Perf.interval("refresh apply") {
+            segments = snapshot.segments
+            biggest = snapshot.biggest
+            breadcrumb = snapshot.breadcrumb
+            if let hovered {
+                let fresh = snapshot.segments.first { $0.id == hovered.id }
+                if fresh != hovered { self.hovered = fresh }
+            }
         }
     }
 
@@ -132,7 +137,7 @@ final class ScanModel {
         await ticker.value
 
         phase = .done(summary)
-        // The scanner sends no final progress callback: show the finished tree.
+        // The last timer refresh predates the final inserts: show the finished tree.
         await refreshViews()
     }
 

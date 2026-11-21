@@ -37,8 +37,7 @@ struct BiggestListView: View {
         ScrollView {
             VStack(spacing: 0) {  // at most `ScanModel.biggestLimit` rows: no need for lazy loading
                 ForEach(model.biggest) { row in
-                    BiggestRow(row: row, total: model.breadcrumb.last?.size ?? 0,
-                               highlighted: model.hovered?.node == row.id,
+                    BiggestRow(model: model, row: row, total: model.breadcrumb.last?.size ?? 0,
                                hover: { hover(row, $0) },
                                open: { model.drill(into: row.id) })
                 }
@@ -64,14 +63,17 @@ struct BiggestListView: View {
 }
 
 private struct BiggestRow: View {
+    let model: ScanModel
     let row: NodeRow
     let total: UInt64
-    let highlighted: Bool
     let hover: (Bool) -> Void
     let open: () -> Void
     @Environment(\.colorScheme) private var scheme
 
     private var canOpen: Bool { row.kind == .directory && row.hasChildren }
+
+    /// Read here, per row, so a hover change re-evaluates the rows only, not the list.
+    private var highlighted: Bool { model.hovered?.node == row.id }
 
     var body: some View {
         // Folders are buttons, so they take keyboard focus and VoiceOver can open them.
