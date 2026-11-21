@@ -101,10 +101,9 @@ struct ContentView: View {
             HStack(spacing: 8) {
                 ProgressView()
                     .controlSize(.small)
-                Text("Analisi in corso… \(Formatters.count(progress.filesSeen)) file")
+                CountingText(UInt64(progress.filesSeen)) { Text("Analisi in corso… \(Formatters.count(Int($0))) file") }
                     .monospacedDigit()
-                    .contentTransition(reduceMotion ? .identity : .numericText(value: Double(progress.filesSeen)))
-                    .animation(reduceMotion ? nil : .smooth(duration: 0.25), value: progress.filesSeen)
+                    .animation(reduceMotion ? nil : .easeOut(duration: 0.24), value: progress.filesSeen)
                     .lineLimit(1)
                     .frame(minWidth: 190, alignment: .leading)
             }

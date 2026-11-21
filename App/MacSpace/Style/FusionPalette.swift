@@ -1,3 +1,4 @@
+import MacSpaceCore
 import SwiftUI
 
 /// The "Fusion" style (spec §5.2): warm sand neutrals in light mode, graphite in dark mode.
@@ -21,17 +22,24 @@ struct FusionPalette {
     }
 
     static func ring(lightness: Double, scheme: ColorScheme) -> Color {
-        scheme == .dark ? hsl(240, 4, lightness) : hsl(30, 10, lightness)
+        color(ringRGB(lightness: lightness, scheme: scheme))
     }
 
     /// How much a hovered segment lightens, in lightness percent.
     static let hoverLift = 12.0
 
-    /// Text drawn on a ring of the given lightness: white on dark fills, ink on light ones
-    /// (at least 4.4:1 in both schemes).
+    /// Text drawn on a ring fill of the given lightness: white or the scheme's ink, whichever
+    /// contrasts more, falling back to pure black or white so every fill, hover-lifted ones
+    /// included, reaches at least 4.5:1 (checked in `ContrastTests`).
     static func ringLabel(lightness: Double, scheme: ColorScheme) -> Color {
-        if lightness < 48 { return .white }
-        return scheme == .dark ? rgb(0x1C1C1E) : rgb(0x1F1B16)
+        let ink = scheme == .dark ? Contrast.RGB(0x1C / 255, 0x1C / 255, 0x1E / 255)
+                                  : Contrast.RGB(0x1F / 255, 0x1B / 255, 0x16 / 255)
+        return color(Contrast.labelInk(on: ringRGB(lightness: lightness, scheme: scheme),
+                                       preferred: [Contrast.RGB(1, 1, 1), ink]))
+    }
+
+    private static func ringRGB(lightness: Double, scheme: ColorScheme) -> Contrast.RGB {
+        scheme == .dark ? Contrast.hsl(240, 4, lightness) : Contrast.hsl(30, 10, lightness)
     }
 
     static let background: @Sendable (ColorScheme) -> Color = { $0 == .dark ? rgb(0x1C1C1E) : rgb(0xF6F3EE) }
@@ -47,12 +55,9 @@ struct FusionPalette {
     static let accent = hsl(16, 88, 57)
 
     /// `h` in degrees, `s` and `l` in percent.
-    static func hsl(_ h: Double, _ s: Double, _ l: Double) -> Color {
-        let s = s / 100, l = l / 100
-        let brightness = l + s * min(l, 1 - l)
-        let saturation = brightness == 0 ? 0 : 2 * (1 - l / brightness)
-        return Color(hue: h / 360, saturation: saturation, brightness: brightness)
-    }
+    static func hsl(_ h: Double, _ s: Double, _ l: Double) -> Color { color(Contrast.hsl(h, s, l)) }
+
+    private static func color(_ c: Contrast.RGB) -> Color { Color(.sRGB, red: c.r, green: c.g, blue: c.b) }
 
     private static func rgb(_ hex: UInt32) -> Color {
         Color(.sRGB,

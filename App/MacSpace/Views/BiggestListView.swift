@@ -35,7 +35,7 @@ struct BiggestListView: View {
 
     private var rows: some View {
         ScrollView {
-            LazyVStack(spacing: 0) {
+            VStack(spacing: 0) {  // at most `ScanModel.biggestLimit` rows: no need for lazy loading
                 ForEach(model.biggest) { row in
                     BiggestRow(row: row, total: model.breadcrumb.last?.size ?? 0,
                                highlighted: model.hovered?.node == row.id,

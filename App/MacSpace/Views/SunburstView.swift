@@ -2,6 +2,9 @@ import MacSpaceCore
 import SwiftUI
 
 /// The interactive sunburst: rings of the three levels below `model.center`.
+///
+/// The pointer lives in `SunburstPointerLayer`, so mouse moves redraw only that small layer;
+/// the canvas redraws when the arcs, the hovered segment or the center hover change.
 struct SunburstView: View {
     let model: ScanModel
 
@@ -10,7 +13,6 @@ struct SunburstView: View {
     @State private var motionCenter: NodeID = FileTree.root
     @State private var animating = false
     @State private var motionGeneration = 0
-    @State private var pointer: CGPoint?
     @State private var hoveringCenter = false
     @State private var labels = LabelFitter()
     @Environment(\.colorScheme) private var scheme
@@ -19,12 +21,14 @@ struct SunburstView: View {
     var body: some View {
         GeometryReader { proxy in
             let geometry = ChartGeometry(size: proxy.size)
-            let size = proxy.size
+            let hoveredID = model.hovered?.id
+            let moving = animating || showsPlaceholderMotion
             ZStack {
-                TimelineView(.animation(paused: !animating && !showsPlaceholderMotion)) { timeline in
-                    Canvas { context, _ in
-                        draw(in: &context, geometry: geometry,
-                             date: animating || showsPlaceholderMotion ? timeline.date : .distantFuture)
+                TimelineView(.animation(minimumInterval: 1.0 / 60, paused: !moving)) { timeline in
+                    // Rasterized off the main thread: during a scan it redraws several times a second.
+                    Canvas(rendersAsynchronously: true) { context, _ in
+                        draw(in: &context, geometry: geometry, hoveredID: hoveredID,
+                             date: moving ? timeline.date : .distantFuture)
                     }
                 }
                 centerLabel(geometry)
@@ -38,30 +42,10 @@ struct SunburstView: View {
                         .frame(width: geometry.centerRadius * 1.7)
                         .position(geometry.center)
                 }
-                if let pointer, let hovered = model.hovered {
-                    SegmentTooltip(segment: hovered, total: centerSize)
-                        .fixedSize()
-                        .alignmentGuide(.leading) { d in
-                            pointer.x + 16 + d.width > size.width ? d.width + 10 - pointer.x : -(pointer.x + 16)
-                        }
-                        .alignmentGuide(.top) { d in
-                            pointer.y + 20 + d.height > size.height ? d.height + 8 - pointer.y : -(pointer.y + 20)
-                        }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                        .allowsHitTesting(false)
-                }
+                SunburstPointerLayer(model: model, motion: motion, motionGeneration: motionGeneration,
+                                     geometry: geometry, canGoUp: canGoUp, total: centerSize,
+                                     hoveringCenter: $hoveringCenter)
             }
-            .contentShape(Rectangle())
-            .onContinuousHover(coordinateSpace: .local) { phase in
-                switch phase {
-                case let .active(location): hover(at: location, geometry)
-                case .ended: hover(at: nil, geometry)
-                }
-            }
-            .onTapGesture(coordinateSpace: .local) { location in
-                click(at: location, geometry)
-            }
-            .pointerStyle(isPointerOverTarget ? .link : nil)
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(Text(verbatim: model.breadcrumb.last?.name ?? ""))
@@ -75,7 +59,7 @@ struct SunburstView: View {
         }
         .task(id: motionGeneration) {
             guard animating else { return }
-            try? await Task.sleep(for: .seconds(SunburstMotion.duration + 0.05))
+            try? await Task.sleep(for: .seconds(motion.duration + 0.03))
             if !Task.isCancelled { animating = false }
         }
     }
@@ -87,12 +71,6 @@ struct SunburstView: View {
 
     /// Before the first rings arrive, a scan shows a sweeping placeholder ring.
     private var showsPlaceholderMotion: Bool { model.isScanning && model.segments.isEmpty }
-
-    private var isPointerOverTarget: Bool {
-        if hoveringCenter { return canGoUp }
-        guard pointer != nil, let hovered = model.hovered else { return false }
-        return hovered.node != nil && hovered.hasChildren
-    }
 
     private func retarget(from old: [ArcSegment], to new: [ArcSegment]) {
         let change: SunburstChange
@@ -114,55 +92,15 @@ struct SunburstView: View {
         motionGeneration += 1
     }
 
-    // MARK: Interaction
-
-    private enum Target: Equatable {
-        case center
-        case segment(ArcSegment)
-        case none
-    }
-
-    private func target(at point: CGPoint, _ geometry: ChartGeometry) -> Target {
-        let dx = point.x - geometry.center.x, dy = point.y - geometry.center.y
-        let radius = (dx * dx + dy * dy).squareRoot()
-        if radius < geometry.centerRadius { return .center }
-        guard radius < geometry.radius else { return .none }
-        let depth = min(Int((radius - geometry.centerRadius) / geometry.ringWidth) + 1, ScanModel.ringDepth)
-        // atan2(x, -y): 0 at 12 o'clock, growing clockwise (y points down).
-        let angle = atan2(Double(dx), Double(-dy))
-        guard let segment = SunburstLayout.hitTest(model.segments, angle: angle, depth: depth) else { return .none }
-        return .segment(segment)
-    }
-
-    private func hover(at point: CGPoint?, _ geometry: ChartGeometry) {
-        pointer = point
-        let target = point.map { self.target(at: $0, geometry) } ?? .none
-        hoveringCenter = target == .center
-        let segment: ArcSegment? = if case let .segment(segment) = target { segment } else { nil }
-        if model.hovered != segment { model.hovered = segment }
-    }
-
-    private func click(at point: CGPoint, _ geometry: ChartGeometry) {
-        switch target(at: point, geometry) {
-        case .center:
-            if canGoUp { model.goUp() }
-        case let .segment(segment):
-            if let node = segment.node, segment.hasChildren { model.drill(into: node) }
-        case .none:
-            break
-        }
-    }
-
     // MARK: Center
 
     @ViewBuilder
     private func centerLabel(_ geometry: ChartGeometry) -> some View {
         let showsCapacity = model.capacity != nil && model.center == FileTree.root
         VStack(spacing: 2) {
-            Text(verbatim: Formatters.bytes(centerSize))
+            CountingText(centerSize) { Text(verbatim: Formatters.bytes($0)) }
                 .font(.system(size: geometry.centerFontSize, weight: .semibold))
                 .monospacedDigit()
-                .contentTransition(reduceMotion ? .opacity : .numericText(value: Double(centerSize)))
                 .foregroundStyle(FusionPalette.primaryText(scheme))
             Group {
                 if showsCapacity, let capacity = model.capacity {
@@ -188,14 +126,14 @@ struct SunburstView: View {
                     .transition(.opacity)
             }
         }
-        .animation(reduceMotion ? nil : .smooth(duration: 0.35), value: centerSize)
+        .animation(reduceMotion ? nil : .easeOut(duration: 0.24), value: centerSize)
         .animation(.easeOut(duration: 0.15), value: hoveringCenter)
         .opacity(model.breadcrumb.isEmpty ? 0 : 1)
     }
 
     // MARK: Drawing
 
-    private func draw(in context: inout GraphicsContext, geometry: ChartGeometry, date: Date) {
+    private func draw(in context: inout GraphicsContext, geometry: ChartGeometry, hoveredID: String?, date: Date) {
         let background = FusionPalette.background(scheme)
 
         var rings = context
@@ -217,7 +155,7 @@ struct SunburstView: View {
             let path = Self.sector(center: geometry.center, inner: inner, outer: outer,
                                    start: pose.start, end: pose.end)
             var lightness = FusionPalette.ringLightness(depth: pose.shadeDepth, step: pose.shadeStep, scheme: scheme)
-            if arc.isCurrent, arc.segment.id == model.hovered?.id { lightness += FusionPalette.hoverLift }
+            if arc.isCurrent, arc.segment.id == hoveredID { lightness += FusionPalette.hoverLift }
             rings.fill(path, with: .color(FusionPalette.ring(lightness: lightness, scheme: scheme).opacity(pose.alpha)))
             drawn.append((path, arc, pose, inner, lightness))
         }
@@ -226,9 +164,10 @@ struct SunburstView: View {
             // instead of a white blur.
             rings.stroke(item.path, with: .color(background.opacity(item.pose.alpha)), lineWidth: 1)
         }
+        var placed: [LabelBox] = []
         for item in drawn where item.arc.isCurrent {
             drawLabel(in: &rings, segment: item.arc.segment, pose: item.pose, inner: item.inner,
-                      lightness: item.lightness, geometry: geometry)
+                      lightness: item.lightness, geometry: geometry, placed: &placed)
         }
 
         let disc = Path(ellipseIn: geometry.rect(radius: geometry.centerRadius - 0.5))
@@ -266,56 +205,90 @@ struct SunburstView: View {
         }
     }
 
+    private static let nameFont = Font.system(size: 11, weight: .semibold)
+    private static let sizeFont = Font.system(size: 10).monospacedDigit()
+    /// Half heights of the label lines and their offsets from the ring's mid radius.
+    private static let nameHalf = 7.0, sizeHalf = 6.5, nameOffset = 6.5, sizeOffset = 7.0
+
+    /// Draws a segment's name (and size, when there is room) as straight text along the ring.
+    /// Each line is fitted to the room at the radius where it sits: within the segment's angle
+    /// at the line's inner edge, and inside the ring where its ends bow outwards. A label
+    /// whose box would touch one already placed is skipped.
     private func drawLabel(in context: inout GraphicsContext, segment: ArcSegment, pose: ArcPose, inner: Double,
-                           lightness: Double, geometry: ChartGeometry) {
+                           lightness: Double, geometry: ChartGeometry, placed: inout [LabelBox]) {
         guard pose.alpha > 0.5, inner >= geometry.centerRadius - 0.5,
               inner + geometry.ringWidth <= geometry.radius + 0.5 else { return }
         let span = pose.end - pose.start
         let mid = inner + geometry.ringWidth / 2
         guard mid * span >= 60 else { return }
+        let outer = inner + geometry.ringWidth
 
-        // Straight text centered on the arc: as wide as the chord, and no wider than what stays
-        // inside the ring as the text's ends bow outwards.
-        let chord = 2 * mid * sin(min(span, .pi) / 2)
-        let bow = mid + geometry.ringWidth * 0.32
-        let width = min(chord, 2 * (bow * bow - mid * mid).squareRoot(), 200) - 14
-        guard width > 24 else { return }
+        /// Widest straight line centered on the mid angle at radius `r` with half height `h`.
+        func room(_ r: Double, _ h: Double) -> Double {
+            guard r - h >= inner + 2 else { return 0 }
+            let angular = span / 2 >= .pi / 2 - 0.05 ? .infinity : 2 * ((r - h) * tan(span / 2) - 4)
+            let bowLimit = (outer - 3) * (outer - 3) - (r + h) * (r + h)
+            let bow = bowLimit > 0 ? 2 * bowLimit.squareRoot() : 0
+            return min(angular, bow, 200)
+        }
 
-        let ink = FusionPalette.ringLabel(lightness: lightness, scheme: scheme)
+        let midAngle = (pose.start + pose.end) / 2
+        let upright = midAngle > .pi / 2 && midAngle < 3 * .pi / 2
+        // Local "up" points outwards on the top half and inwards on the flipped bottom half.
+        let outward: Double = upright ? -1 : 1
         let locked = segment.flags.contains(.unreadable)
-        let name = labels.fitted(Self.title(of: segment), width: width - (locked ? 15 : 0), in: context) { text in
-            Text(verbatim: text).font(.system(size: 11, weight: .semibold))
+        let lockRoom = locked ? 14.0 : 0
+        let title = Self.title(of: segment)
+        let sizeText = Formatters.bytes(segment.size)
+
+        var name: FittedText?
+        var size: FittedText?
+        if geometry.ringWidth >= 34 {
+            let nameRoom = room(mid + outward * Self.nameOffset, Self.nameHalf) - lockRoom
+            let sizeRoom = room(mid - outward * Self.sizeOffset, Self.sizeHalf)
+            name = labels.fitted(title, width: nameRoom, in: context, font: Self.nameFont)
+            size = labels.fitted(sizeText, width: sizeRoom, in: context, font: Self.sizeFont, truncate: false)
+        }
+        let twoLines = name != nil && size != nil
+        if !twoLines {
+            size = nil
+            name = labels.fitted(title, width: room(mid, Self.nameHalf) - lockRoom, in: context, font: Self.nameFont)
         }
         guard let name else { return }
-        let twoLines = geometry.ringWidth >= 34
-        let midAngle = (pose.start + pose.end) / 2
+
         let point = geometry.point(angle: midAngle, radius: mid)
-        let upright = midAngle > .pi / 2 && midAngle < 3 * .pi / 2
+        let rotation = upright ? midAngle + .pi : midAngle
+        let box = LabelBox(center: point, rotation: rotation,
+                           halfWidth: (max(name.width + lockRoom, size?.width ?? 0)) / 2 + 2,
+                           halfHeight: twoLines ? Self.nameOffset + Self.nameHalf : Self.nameHalf)
+        guard !placed.contains(where: { $0.overlaps(box) }) else { return }
+        placed.append(box)
+
+        let ink = FusionPalette.ringLabel(lightness: lightness, scheme: scheme)
         var label = context
         label.opacity = pose.alpha
         label.translateBy(x: point.x, y: point.y)
-        label.rotate(by: .radians(upright ? midAngle + .pi : midAngle))
-        let nameY = twoLines ? -6.5 : 0
-        let nameText = label.resolve(Text(verbatim: name).font(.system(size: 11, weight: .semibold)).foregroundStyle(ink))
+        label.rotate(by: .radians(rotation))
+        let nameY = twoLines ? -Self.nameOffset : 0
+        let nameText = label.resolve(Text(verbatim: name.string).font(Self.nameFont).foregroundStyle(ink))
         if locked {
             // Lock glyph before the name; the pair stays centered.
-            let nameWidth = nameText.measure(in: CGSize(width: 1000, height: 40)).width
             let lock = label.resolve(Text(Image(systemName: "lock.fill")).font(.system(size: 9, weight: .semibold))
                 .foregroundStyle(ink))
-            label.draw(lock, at: CGPoint(x: -(nameWidth + 14) / 2 + 5, y: nameY), anchor: .center)
-            label.draw(nameText, at: CGPoint(x: 7, y: nameY), anchor: .center)
+            label.draw(lock, at: CGPoint(x: -(name.width + lockRoom) / 2 + 5, y: nameY), anchor: .center)
+            label.draw(nameText, at: CGPoint(x: lockRoom / 2, y: nameY), anchor: .center)
         } else {
             label.draw(nameText, at: CGPoint(x: 0, y: nameY), anchor: .center)
         }
-        if twoLines {
-            label.draw(Text(verbatim: Formatters.bytes(segment.size)).font(.system(size: 10).monospacedDigit())
-                .foregroundStyle(ink.opacity(0.82)),
-                       at: CGPoint(x: 0, y: 7), anchor: .center)
+        if let size {
+            label.draw(Text(verbatim: size.string).font(Self.sizeFont).foregroundStyle(ink),
+                       at: CGPoint(x: 0, y: Self.sizeOffset), anchor: .center)
         }
     }
 
     static func title(of segment: ArcSegment) -> String {
-        segment.node == nil ? String(localized: "Altri \(segment.otherCount) elementi") : segment.name
+        // The layout only merges two or more siblings, so "Altri" is always plural.
+        segment.node == nil ? String(localized: "Altri \(Formatters.count(segment.otherCount)) elementi") : segment.name
     }
 
     /// Annular sector between radii, angles from 12 o'clock clockwise.
@@ -335,14 +308,121 @@ struct SunburstView: View {
     }
 }
 
+/// Pointer tracking, hit testing, clicks and the hover card. Hit tests use the arcs as drawn at
+/// that moment, and are repeated after every chart update, so a still pointer never names a
+/// segment that has moved away.
+private struct SunburstPointerLayer: View {
+    let model: ScanModel
+    let motion: SunburstMotion
+    let motionGeneration: Int
+    let geometry: ChartGeometry
+    let canGoUp: Bool
+    let total: UInt64
+    @Binding var hoveringCenter: Bool
+    @State private var pointer: CGPoint?
+    /// The segment this layer last hovered, so leaving the chart never clears a list hover.
+    @State private var chartHoveredID: String?
+
+    var body: some View {
+        Color.clear
+            .contentShape(Rectangle())
+            .overlay(alignment: .topLeading) { tooltip }
+            .onContinuousHover(coordinateSpace: .local) { phase in
+                switch phase {
+                case let .active(location):
+                    pointer = location
+                    updateHover()
+                case .ended:
+                    pointer = nil
+                    if hoveringCenter { hoveringCenter = false }
+                    if let id = model.hovered?.id, id == chartHoveredID { model.hovered = nil }
+                }
+            }
+            .onTapGesture(coordinateSpace: .local) { location in
+                click(at: location)
+            }
+            .pointerStyle(isOverTarget ? .link : nil)
+            .task(id: motionGeneration) {
+                // The arcs move under a still pointer: follow them while they settle.
+                updateHover()
+                try? await Task.sleep(for: .seconds(motion.duration + 0.02))
+                if !Task.isCancelled { updateHover() }
+            }
+    }
+
+    @ViewBuilder
+    private var tooltip: some View {
+        if let pointer, let hovered = model.hovered {
+            let size = geometry.size
+            SegmentTooltip(segment: hovered, total: total)
+                .fixedSize()
+                .alignmentGuide(.leading) { d in
+                    pointer.x + 16 + d.width > size.width ? d.width + 10 - pointer.x : -(pointer.x + 16)
+                }
+                .alignmentGuide(.top) { d in
+                    pointer.y + 20 + d.height > size.height ? d.height + 8 - pointer.y : -(pointer.y + 20)
+                }
+                .frame(width: size.width, height: size.height, alignment: .topLeading)
+                .allowsHitTesting(false)
+        }
+    }
+
+    private var isOverTarget: Bool {
+        if hoveringCenter { return canGoUp }
+        guard pointer != nil, let hovered = model.hovered else { return false }
+        return hovered.node != nil && hovered.hasChildren
+    }
+
+    private enum Target: Equatable {
+        case center
+        case segment(ArcSegment)
+        case none
+    }
+
+    private func target(at point: CGPoint) -> Target {
+        let dx = point.x - geometry.center.x, dy = point.y - geometry.center.y
+        let radius = (dx * dx + dy * dy).squareRoot()
+        if radius < geometry.centerRadius { return .center }
+        guard radius < geometry.radius else { return .none }
+        let ring = (radius - geometry.centerRadius) / geometry.ringWidth + 1
+        // atan2(x, -y): 0 at 12 o'clock, growing clockwise (y points down).
+        let angle = atan2(Double(dx), Double(-dy))
+        guard let segment = motion.hitTest(angle: angle, ring: ring, at: .now) else { return .none }
+        return .segment(segment)
+    }
+
+    private func updateHover() {
+        guard let pointer else { return }
+        let target = self.target(at: pointer)
+        let overCenter = target == .center
+        if hoveringCenter != overCenter { hoveringCenter = overCenter }
+        let segment: ArcSegment? = if case let .segment(segment) = target { segment } else { nil }
+        chartHoveredID = segment?.id
+        if model.hovered != segment { model.hovered = segment }
+    }
+
+    private func click(at point: CGPoint) {
+        switch target(at: point) {
+        case .center:
+            if canGoUp { model.goUp() }
+        case let .segment(segment):
+            if let node = segment.node, segment.hasChildren { model.drill(into: node) }
+        case .none:
+            break
+        }
+    }
+}
+
 /// Radii of the chart in a given size: center hole 0.30·R, three rings sharing the rest.
 struct ChartGeometry {
+    let size: CGSize
     let center: CGPoint
     let radius: Double
     let centerRadius: Double
     let ringWidth: Double
 
     init(size: CGSize) {
+        self.size = size
         center = CGPoint(x: size.width / 2, y: size.height / 2)
         radius = max(min(size.width, size.height) / 2 - 16, 40)
         centerRadius = 0.30 * radius
@@ -362,29 +442,70 @@ struct ChartGeometry {
     }
 }
 
+/// A placed label's rotated bounding box.
+private struct LabelBox {
+    let center: CGPoint
+    let rotation: Double
+    let halfWidth: Double
+    let halfHeight: Double
+
+    private var axes: [CGVector] {
+        [CGVector(dx: cos(rotation), dy: sin(rotation)), CGVector(dx: -sin(rotation), dy: cos(rotation))]
+    }
+
+    /// Separating-axis test between two rotated rectangles.
+    func overlaps(_ other: LabelBox) -> Bool {
+        let d = CGVector(dx: other.center.x - center.x, dy: other.center.y - center.y)
+        for axis in axes + other.axes {
+            let distance = abs(d.dx * axis.dx + d.dy * axis.dy)
+            if distance > projectedRadius(on: axis) + other.projectedRadius(on: axis) { return false }
+        }
+        return true
+    }
+
+    private func projectedRadius(on axis: CGVector) -> Double {
+        let (u, v) = (axes[0], axes[1])
+        return halfWidth * abs(u.dx * axis.dx + u.dy * axis.dy) + halfHeight * abs(v.dx * axis.dx + v.dy * axis.dy)
+    }
+}
+
+struct FittedText {
+    let string: String
+    let width: Double
+}
+
 /// Truncates labels to a width, remembering results so animation frames stay cheap.
 @MainActor
 final class LabelFitter {
-    private var cache: [String: String?] = [:]
+    private var cache: [String: FittedText?] = [:]
 
-    func fitted(_ string: String, width: Double, in context: GraphicsContext,
-                style: (String) -> Text) -> String? {
-        let bucket = Int(width / 6)
-        let key = "\(bucket)|\(string)"
+    /// `string` (or its longest "…" prefix when `truncate`) that fits `width`, with its width;
+    /// nil when nothing useful fits.
+    func fitted(_ string: String, width: Double, in context: GraphicsContext, font: Font,
+                truncate: Bool = true) -> FittedText? {
+        guard width > 20 else { return nil }
+        let bucket = Int(width / 4)
+        let limit = Double(bucket * 4)
+        let key = "\(bucket)|\(truncate)|\(string)"
         if let hit = cache[key] { return hit }
-        let limit = CGSize(width: 10_000, height: 40)
-        func fits(_ s: String) -> Bool { context.resolve(style(s)).measure(in: limit).width <= Double(bucket * 6) }
-        var result: String?
-        if fits(string) {
-            result = string
-        } else {
+        func measure(_ s: String) -> Double {
+            context.resolve(Text(verbatim: s).font(font)).measure(in: CGSize(width: 10_000, height: 40)).width
+        }
+        var result: FittedText?
+        let full = measure(string)
+        if full <= limit {
+            result = FittedText(string: string, width: full)
+        } else if truncate {
             let characters = Array(string)
             var low = 0, high = characters.count
             while low < high {
                 let mid = (low + high + 1) / 2
-                if fits(String(characters[..<mid]) + "…") { low = mid } else { high = mid - 1 }
+                if measure(String(characters[..<mid]) + "…") <= limit { low = mid } else { high = mid - 1 }
             }
-            result = low >= 3 ? String(characters[..<low]).trimmingCharacters(in: .whitespaces) + "…" : nil
+            if low >= 3 {
+                let text = String(characters[..<low]).trimmingCharacters(in: .whitespaces) + "…"
+                result = FittedText(string: text, width: measure(text))
+            }
         }
         if cache.count > 4000 { cache.removeAll(keepingCapacity: true) }
         cache[key] = result
@@ -423,3 +544,4 @@ private struct SegmentTooltip: View {
         .shadow(color: .black.opacity(0.12), radius: 8, y: 3)
     }
 }
+

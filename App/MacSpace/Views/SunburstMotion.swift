@@ -50,22 +50,49 @@ struct SunburstMotion {
     private(set) var arcs: [Arc] = []
     private(set) var startedAt = Date.distantPast
     private var animated = false
+    private var pace = Pace.refresh
+
+    /// Navigation zooms take the full spring; scan refreshes settle well inside the 250 ms
+    /// refresh interval, so the chart is idle between them instead of redrawing nonstop.
+    private enum Pace { case zoom, refresh }
 
     static let spring = Spring(duration: 0.35, bounce: 0)  // == Animation.smooth(duration: 0.35)
-    static var duration: TimeInterval { spring.settlingDuration }
+    static let refreshDuration: TimeInterval = 0.18
+
+    /// How long the current transition runs; 0 when it is not animated.
+    var duration: TimeInterval {
+        guard animated else { return 0 }
+        return pace == .zoom ? Self.spring.settlingDuration : Self.refreshDuration
+    }
 
     /// Eased progress, 0...1.
     func progress(at date: Date) -> Double {
-        guard animated else { return 1 }
         let elapsed = date.timeIntervalSince(startedAt)
-        guard elapsed < Self.duration else { return 1 }
-        return min(max(Self.spring.value(target: 1.0, time: max(elapsed, 0)), 0), 1)
+        guard animated, elapsed < duration else { return 1 }
+        switch pace {
+        case .zoom:
+            return min(max(Self.spring.value(target: 1.0, time: max(elapsed, 0)), 0), 1)
+        case .refresh:
+            let t = max(elapsed, 0) / Self.refreshDuration
+            return 1 - pow(1 - t, 3)  // ease-out cubic
+        }
     }
-
 
     func poses(at date: Date) -> [(arc: Arc, pose: ArcPose)] {
         let t = progress(at: date)
         return arcs.map { ($0, t >= 1 ? $0.to : $0.from.mixed(with: $0.to, t)) }
+    }
+
+    /// The current segment drawn under a point at `date`: `angle` from 12 o'clock clockwise,
+    /// `ring` the fractional ring position (1 = inner edge of the innermost ring).
+    func hitTest(angle: Double, ring: Double, at date: Date) -> ArcSegment? {
+        let full = 2 * Double.pi
+        var a = angle.truncatingRemainder(dividingBy: full)
+        if a < 0 { a += full }
+        for (arc, pose) in poses(at: date).reversed() where arc.isCurrent && pose.alpha > 0.5 {
+            if ring >= pose.depth, ring < pose.depth + 1, a >= pose.start, a < pose.end { return arc.segment }
+        }
+        return nil
     }
 
     mutating func retarget(to segments: [ArcSegment], change: SunburstChange, at date: Date, animated: Bool) {
@@ -106,6 +133,7 @@ struct SunburstMotion {
         }
         startedAt = date
         self.animated = animated
+        if case .refresh = change { pace = .refresh } else { pace = .zoom }
     }
 
     /// Starting pose of an arc that is not on screen yet.
