@@ -52,6 +52,8 @@ public enum SunburstLayout {
             let parentSize = Double(tree.size(parent))
             guard parentSize > 0 else { continue }
             let span = end - start
+            // Summed proportional spans drift by an ulp or so: the last one ends exactly at `end`.
+            func snapped(_ angle: Double) -> Double { abs(end - angle) < 1e-9 ? end : angle }
             let children = tree.children(of: parent)
             var cursor = start
             var index = 0
@@ -61,15 +63,16 @@ public enum SunburstLayout {
                 if size == 0 { break }  // sorted by size descending: the rest are empty too
                 let childSpan = span * Double(size) / parentSize
                 if childSpan < minAngle { break }  // so are all following siblings
+                let childEnd = snapped(cursor + childSpan)
                 let row = tree.row(child)
                 result.append(ArcSegment(id: "\(child)", node: child, parent: parent, depth: ringDepth,
-                                         startAngle: cursor, endAngle: cursor + childSpan, size: size,
+                                         startAngle: cursor, endAngle: childEnd, size: size,
                                          name: row.name, otherCount: 0, flags: row.flags,
                                          hasChildren: row.hasChildren))
                 if ringDepth < depth, tree.kind(child) == .directory {
-                    queue.append((child, cursor, cursor + childSpan, ringDepth + 1))
+                    queue.append((child, cursor, childEnd, ringDepth + 1))
                 }
-                cursor += childSpan
+                cursor = childEnd
                 index += 1
             }
             var otherSize: UInt64 = 0
@@ -87,11 +90,11 @@ public enum SunburstLayout {
                 let child = children[firstOther]
                 let row = tree.row(child)
                 result.append(ArcSegment(id: "\(child)", node: child, parent: parent, depth: ringDepth,
-                                         startAngle: cursor, endAngle: cursor + span * Double(otherSize) / parentSize,
+                                         startAngle: cursor, endAngle: snapped(cursor + span * Double(otherSize) / parentSize),
                                          size: otherSize, name: row.name, otherCount: 0, flags: row.flags,
                                          hasChildren: row.hasChildren))
             } else if otherCount > 1 {
-                let otherEnd = cursor + span * Double(otherSize) / parentSize
+                let otherEnd = snapped(cursor + span * Double(otherSize) / parentSize)
                 result.append(ArcSegment(id: "other-\(parent)-\(ringDepth)", node: nil, parent: parent,
                                          depth: ringDepth, startAngle: cursor, endAngle: otherEnd,
                                          size: otherSize, name: "", otherCount: otherCount))
@@ -102,9 +105,16 @@ public enum SunburstLayout {
 
     /// The segment at `depth` containing `angle` (any real value; normalized into [0, 2π)).
     public static func hitTest(_ segments: [ArcSegment], angle: Double, depth: Int) -> ArcSegment? {
+        let a = normalizedAngle(angle)
+        return segments.first { $0.depth == depth && a >= $0.startAngle && a < $0.endAngle }
+    }
+
+    /// `angle` folded into [0, 2π). A tiny negative angle (just left of 12 o'clock) would
+    /// round to exactly 2π when shifted up, past the end of every segment: it maps to 0.
+    public static func normalizedAngle(_ angle: Double) -> Double {
         let full = 2 * Double.pi
         var a = angle.truncatingRemainder(dividingBy: full)
         if a < 0 { a += full }
-        return segments.first { $0.depth == depth && a >= $0.startAngle && a < $0.endAngle }
+        return a >= full ? 0 : a
     }
 }

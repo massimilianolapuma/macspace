@@ -88,3 +88,30 @@ private func tree(_ sizes: [UInt64]) -> FileTree {
     #expect(!segs.contains { $0.node == nil })
     #expect(segs.count == 2)
 }
+
+@Test func lastSegmentEndsExactlyAtItsParentsEnd() {
+    // Summing proportional spans drifts by an ulp: 875+98 falls short of 2π, 843+358 overshoots.
+    for sizes: [UInt64] in [[875, 98], [843, 358]] {
+        let segs = SunburstLayout.compute(tree: tree(sizes), center: 0)
+        #expect(segs.last?.endAngle == 2 * .pi, "\(sizes)")
+    }
+    let t = FileTree(rootName: "r", rootPath: "/r")
+    t.addChild(of: 0, name: "big", kind: .file, allocatedSize: 1000)
+    let d = t.addChild(of: 0, name: "d", kind: .directory, allocatedSize: 0)
+    t.addChild(of: d, name: "a", kind: .file, allocatedSize: 875)
+    t.addChild(of: d, name: "b", kind: .file, allocatedSize: 98)
+    let segs = SunburstLayout.compute(tree: t, center: 0)
+    let parent = try! #require(segs.first { $0.node == d })
+    #expect(segs.filter { $0.depth == 2 }.last?.endAngle == parent.endAngle)
+}
+
+@Test func hitTestCoversTheTwelveOClockSeam() {
+    let segs = SunburstLayout.compute(tree: tree([875, 98]), center: 0)
+    // atan2 just left of 12 o'clock gives a tiny negative angle; just right of it, a tiny positive one.
+    #expect(SunburstLayout.hitTest(segs, angle: -1e-17, depth: 1)?.name == "f0")
+    #expect(SunburstLayout.hitTest(segs, angle: (2 * .pi).nextDown, depth: 1)?.name == "f1")
+    #expect(SunburstLayout.hitTest(segs, angle: 1e-17, depth: 1)?.name == "f0")
+    #expect(SunburstLayout.normalizedAngle(-1e-17) == 0)
+    #expect(SunburstLayout.normalizedAngle(2 * .pi) == 0)
+    #expect(SunburstLayout.normalizedAngle(-.pi / 2) == 1.5 * .pi)
+}
