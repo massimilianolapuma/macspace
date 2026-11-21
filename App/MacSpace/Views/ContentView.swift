@@ -5,7 +5,8 @@ import SwiftUI
 struct ContentView: View {
     @State private var model = ScanModel()
     @State private var target: ScanTarget = .startupDisk
-    @State private var chosenFolder: URL?
+    /// The folder picked with "Scegli cartella…" and its display name, resolved once.
+    @State private var chosenFolder: (url: URL, name: String)?
     @State private var choosingFolder = false
     @State private var showOnboarding = false
     @Environment(\.colorScheme) private var scheme
@@ -42,7 +43,8 @@ struct ContentView: View {
         .toolbar { toolbar }
         .fileImporter(isPresented: $choosingFolder, allowedContentTypes: [.folder]) { result in
             if case let .success(url) = result {
-                chosenFolder = url
+                // Resolved here, once: the toolbar reads the name on every progress update.
+                chosenFolder = (url, ScanModel.root(of: .folder(url)).name)
                 target = .folder(url)
             }
         }
@@ -64,9 +66,9 @@ struct ContentView: View {
         ToolbarItem(placement: .navigation) {
             Menu {
                 Picker(selection: $target) {
-                    Text("Macintosh HD").tag(ScanTarget.startupDisk)
+                    Text(verbatim: ScanModel.startupDiskName).tag(ScanTarget.startupDisk)
                     if let chosenFolder {
-                        Text(verbatim: Self.displayName(chosenFolder)).tag(ScanTarget.folder(chosenFolder))
+                        Text(verbatim: chosenFolder.name).tag(ScanTarget.folder(chosenFolder.url))
                     }
                 } label: {
                     EmptyView()
@@ -129,16 +131,12 @@ struct ContentView: View {
         }
     }
 
+    /// The target's name after resolving links, as the chart root shows it.
     private var targetName: String {
         switch target {
-        case .startupDisk: String(localized: "Macintosh HD")
-        case let .folder(url): Self.displayName(url)
+        case .startupDisk: ScanModel.startupDiskName
+        case .folder: chosenFolder?.name ?? ""
         }
-    }
-
-    /// The chosen folder's name after resolving links, as the chart root shows it.
-    private static func displayName(_ url: URL) -> String {
-        ScanModel.root(of: .folder(url)).name
     }
 }
 

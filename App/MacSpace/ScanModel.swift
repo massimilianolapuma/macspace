@@ -141,6 +141,12 @@ final class ScanModel {
         await refreshViews()
     }
 
+    /// The startup volume's name as Finder shows it ("Macintosh HD" unless renamed).
+    static let startupDiskName: String = {
+        let values = try? URL(filePath: "/").resourceValues(forKeys: [.volumeLocalizedNameKey])
+        return values?.volumeLocalizedName ?? "Macintosh HD"
+    }()
+
     private static func startupDiskCapacity() -> UInt64? {
         let values = try? URL(filePath: "/").resourceValues(forKeys: [.volumeTotalCapacityKey])
         return values?.volumeTotalCapacity.map { UInt64(clamping: $0) }
@@ -151,7 +157,7 @@ final class ScanModel {
     static func root(of target: ScanTarget) -> (path: String, name: String) {
         switch target {
         case .startupDisk:
-            return ("/", "Macintosh HD")
+            return ("/", startupDiskName)
         case let .folder(url):
             var path = url.path(percentEncoded: false)
             if let resolved = realpath(path, nil) {
