@@ -55,6 +55,7 @@ private func tree(_ sizes: [UInt64]) -> FileTree {
     t.addChild(of: deep, name: "leaf", kind: .file, allocatedSize: 1_000_000)
     let tiny = t.addChild(of: 0, name: "tiny", kind: .directory, allocatedSize: 0)
     t.addChild(of: tiny, name: "x", kind: .file, allocatedSize: 1)
+    t.addChild(of: 0, name: "tiny2", kind: .file, allocatedSize: 1)  // "altri" needs two or more
     let segs = SunburstLayout.compute(tree: t, center: 0, depth: 3)
     #expect(segs.map(\.depth).max() == 3)
     #expect(segs.contains { $0.node == nil && $0.depth == 1 })
@@ -73,4 +74,11 @@ private func tree(_ sizes: [UInt64]) -> FileTree {
     #expect(fullSeg.hasChildren && fullSeg.flags.isEmpty)
     #expect(!lockedSeg.hasChildren && lockedSeg.flags.contains(.unreadable))
     #expect(segs.first { $0.depth == 2 }?.hasChildren == false)
+}
+
+@Test func loneTinySiblingIsNotMergedIntoOther() {
+    let segs = SunburstLayout.compute(tree: tree([1_000_000_000, 1]), center: 0)
+    #expect(segs.count == 2)
+    #expect(segs.allSatisfy { $0.node != nil && $0.otherCount == 0 })
+    #expect(abs(segs.last!.endAngle - 2 * .pi) < 1e-9)
 }
