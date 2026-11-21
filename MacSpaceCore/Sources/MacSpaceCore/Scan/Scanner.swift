@@ -2,7 +2,8 @@ import Foundation
 
 public struct ScanProgress: Sendable {
     public var filesSeen: Int
-    /// Sum of entry sizes read so far (hard-link duplicates included; the final total does not).
+    /// Bytes added to the tree so far: equals the store's `rootSize` when reported
+    /// (hard-link duplicates excluded).
     public var bytesSeen: UInt64
     /// Directories queued or being read.
     public var directoriesPending: Int
@@ -45,7 +46,8 @@ public struct Scanner: Sendable {
 
     /// Scans from `rootPath` into `store`, whose root node represents `rootPath`.
     /// On cancellation, reads already in flight are drained and the summary reports
-    /// `wasCancelled`; the store keeps whatever was inserted.
+    /// `wasCancelled`; the store keeps whatever was inserted. `progress` is called at most every
+    /// `progressInterval`, plus once with the final counts when the scan ends.
     ///
     /// Directory reads (and their `ScanStore` inserts) run in child tasks at `.utility`
     /// priority, whatever the caller's priority, so higher-priority work, such as UI queries
@@ -96,6 +98,7 @@ public struct Scanner: Sendable {
                 }
             }
         }
+        progress?(ScanProgress(filesSeen: files, bytesSeen: bytes, directoriesPending: 0))
 
         return ScanSummary(files: files, directories: directories, unreadable: unreadable,
                            totalSize: await store.rootSize(), duration: clock.now - start,
@@ -120,12 +123,10 @@ public struct Scanner: Sendable {
             return .unreadable
         }
         var files = 0, directories = 0
-        var bytes: UInt64 = 0
         for entry in entries {
             if entry.kind == .directory { directories += 1 } else { files += 1 }
-            bytes &+= entry.allocatedSize
         }
-        let children = await store.insert(entries, under: id, parentPath: path, boundary: boundary)
-        return .read(children: children, files: files, directories: directories, bytes: bytes)
+        let inserted = await store.insert(entries, under: id, parentPath: path, boundary: boundary)
+        return .read(children: inserted.descend, files: files, directories: directories, bytes: inserted.bytes)
     }
 }

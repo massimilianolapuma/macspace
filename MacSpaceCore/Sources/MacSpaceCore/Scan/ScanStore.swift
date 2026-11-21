@@ -9,14 +9,23 @@ public actor ScanStore {
         tree = FileTree(rootName: rootName, rootPath: rootPath)
     }
 
+    /// What `insert` added.
+    public struct Inserted: Sendable {
+        /// Child directories to descend into.
+        public var descend: [(id: NodeID, path: String)]
+        /// Bytes added to the tree (hard-link duplicates count 0), so progress can match `rootSize`.
+        public var bytes: UInt64
+    }
+
     /// Adds `entries` as children of `parent` (located at `parentPath`) and returns the child
-    /// directories to descend into, per `boundary`. Symbolic links and dataless directories are
-    /// never descended. A file with `linkCount > 1` is counted once per `(device, inode)`:
-    /// later links are added with size 0 and `.hardLinkDuplicate`.
+    /// directories to descend into, per `boundary`, with the bytes counted. Symbolic links and
+    /// dataless directories are never descended. A file with `linkCount > 1` is counted once
+    /// per `(device, inode)`: later links are added with size 0 and `.hardLinkDuplicate`.
     public func insert(_ entries: [DirectoryEntry], under parent: NodeID, parentPath: String,
-                       boundary: ScanBoundary) -> [(id: NodeID, path: String)] {
+                       boundary: ScanBoundary) -> Inserted {
         let prefix = parentPath.hasSuffix("/") ? parentPath : parentPath + "/"
         var descend: [(id: NodeID, path: String)] = []
+        var bytes: UInt64 = 0
         for entry in entries {
             var flags: NodeFlags = []
             if entry.isDataless { flags.insert(.dataless) }
@@ -27,6 +36,7 @@ public actor ScanStore {
                 flags.insert(.hardLinkDuplicate)
                 size = 0
             }
+            bytes &+= size
             let id = tree.addChild(of: parent, name: entry.name, kind: entry.kind,
                                    allocatedSize: size, flags: flags)
             guard entry.kind == .directory, !entry.isDataless else { continue }
@@ -35,7 +45,7 @@ public actor ScanStore {
                 descend.append((id: id, path: path))
             }
         }
-        return descend
+        return Inserted(descend: descend, bytes: bytes)
     }
 
     public func markUnreadable(_ id: NodeID) {

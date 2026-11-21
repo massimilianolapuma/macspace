@@ -1,6 +1,7 @@
 import Darwin
 import Foundation
 import Testing
+import Synchronization
 @testable import MacSpaceCore
 
 func scanFixture(_ fx: Fixture) async throws -> (ScanStore, ScanSummary) {
@@ -38,15 +39,15 @@ func scanFixture(_ fx: Fixture) async throws -> (ScanStore, ScanSummary) {
     let boundary = ScanBoundary(allowedDevices: [1], excludedPaths: ["/System/Volumes/Data"])
     let store = ScanStore(rootName: "Macintosh HD", rootPath: "/")
     let top = await store.insert([dir("System"), dir("Users")], under: FileTree.root,
-                                 parentPath: "/", boundary: boundary)
+                                 parentPath: "/", boundary: boundary).descend
     #expect(Set(top.map(\.path)) == ["/System", "/Users"])
     for child in top { #expect(await store.path(of: child.id) == child.path) }
     let system = try #require(top.first { $0.path == "/System" })
     let volumes = await store.insert([dir("Volumes")], under: system.id,
-                                     parentPath: "/System", boundary: boundary)
+                                     parentPath: "/System", boundary: boundary).descend
     #expect(volumes.map(\.path) == ["/System/Volumes"])
     let data = await store.insert([dir("Data", mountPoint: true)], under: volumes[0].id,
-                                  parentPath: "/System/Volumes", boundary: boundary)
+                                  parentPath: "/System/Volumes", boundary: boundary).descend
     #expect(data.isEmpty)
 }
 @Test func symlinkToDirectoryIsNotDescended() async throws {
@@ -91,4 +92,16 @@ func scanFixture(_ fx: Fixture) async throws -> (ScanStore, ScanSummary) {
     let a = await store.rows(childrenOf: FileTree.root, limit: 1)[0].id
     let b = await store.rows(childrenOf: a, limit: 1)[0].id
     #expect(await store.breadcrumb(to: b).map(\.name) == ["fx", "a", "b"])
+}
+@Test func finalProgressAgreesWithTreeTotals() async throws {
+    let fx = try Fixture(); defer { fx.cleanup() }
+    let f = try fx.file("x/big", bytes: 200_000); try fx.hardLink("y/big", to: f)
+    _ = try fx.file("x/small", bytes: 10_000)
+    let store = ScanStore(rootName: "fx", rootPath: fx.root.path)
+    let reports = Mutex<[ScanProgress]>([])
+    let summary = await Scanner(rootPath: fx.root.path, boundary: try .forFolder(fx.root.path))
+        .scan(into: store) { p in reports.withLock { $0.append(p) } }
+    let last = try #require(reports.withLock { $0.last })
+    #expect(last.bytesSeen == (await store.rootSize()))
+    #expect(last.filesSeen == summary.files && last.directoriesPending == 0)
 }
