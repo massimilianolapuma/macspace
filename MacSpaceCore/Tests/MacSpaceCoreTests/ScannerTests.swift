@@ -50,6 +50,17 @@ func scanFixture(_ fx: Fixture) async throws -> (ScanStore, ScanSummary) {
                                   parentPath: "/System/Volumes", boundary: boundary).descend
     #expect(data.isEmpty)
 }
+@Test func rootIsReadEvenWhenTheBoundaryWouldRejectIt() async throws {
+    // The root may itself be a mount point (e.g. a chosen /Volumes/USB): only children are gated.
+    let fx = try Fixture(); defer { fx.cleanup() }
+    try fx.file("f", bytes: 4096); try fx.file("d/g", bytes: 4096)
+    let store = ScanStore(rootName: "fx", rootPath: fx.root.path)
+    let rejectAll = ScanBoundary(allowedDevices: [], excludedPaths: [fx.root.path])
+    let s = await Scanner(rootPath: fx.root.path, boundary: rejectAll).scan(into: store)
+    #expect(s.files == 1 && s.directories == 1 && s.unreadable == 0)
+    let d = try #require(await store.rows(childrenOf: FileTree.root, limit: 10).first { $0.name == "d" })
+    #expect(!d.hasChildren)
+}
 @Test func symlinkToDirectoryIsNotDescended() async throws {
     let fx = try Fixture(); defer { fx.cleanup() }
     let target = try Fixture(); defer { target.cleanup() }

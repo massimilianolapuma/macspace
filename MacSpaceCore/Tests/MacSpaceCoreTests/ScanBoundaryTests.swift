@@ -10,7 +10,16 @@ import Testing
 
 @Test func otherDevicesAreNotEntered() {
     let b = ScanBoundary(allowedDevices: [1], excludedPaths: [])
-    #expect(!b.shouldDescend(path: "/Users/me/USB", device: 9, isMountPoint: true))
+    #expect(!b.shouldDescend(path: "/Users/me/elsewhere", device: 9, isMountPoint: false))
+}
+
+@Test func mountPointsAreNotEnteredEvenOnAnAllowedDevice() {
+    // getattrlistbulk reports a mount-point entry with its PARENT's device (e.g.
+    // /Library/Developer/CoreSimulator/Volumes/iOS_…), so the device check alone lets it through.
+    let b = ScanBoundary(allowedDevices: [1], excludedPaths: [])
+    #expect(!b.shouldDescend(path: "/Library/Developer/CoreSimulator/Volumes/iOS", device: 1, isMountPoint: true))
+    // Firmlinks such as /Users and /Applications are not mount points.
+    #expect(b.shouldDescend(path: "/Users", device: 1, isMountPoint: false))
 }
 
 @Test func startupDiskBoundaryIsReal() throws {
