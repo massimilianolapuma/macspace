@@ -64,6 +64,11 @@ public actor ScanStore {
 
     public func path(of id: NodeID) -> String { tree.path(of: id) }
 
+    /// Sunburst ring segments below `center`, `depth` rings deep.
+    public func sunburst(center: NodeID, depth: Int) -> [ArcSegment] {
+        SunburstLayout.compute(tree: tree, center: center, depth: depth)
+    }
+
     private struct HardLinkKey: Hashable {
         let device: Int32
         let inode: UInt64
