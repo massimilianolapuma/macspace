@@ -37,7 +37,7 @@ public struct ArcSegment: Sendable, Hashable, Identifiable {
 public enum SunburstLayout {
     /// Lays out `depth` rings of descendants of `center`. Each segment's children subdivide its
     /// span proportionally to size. Siblings narrower than `minAngle` are merged into one
-    /// trailing "altri" segment (two or more of them; a lone one is kept as itself), which is
+    /// trailing "altri" segment (only two or more non-empty ones; a lone one is kept as itself), which is
     /// never subdivided. Output is ordered ring by ring.
     public static func compute(tree: FileTree, center: NodeID, depth: Int = 3,
                                minAngle: Double = 0.006) -> [ArcSegment] {
@@ -72,18 +72,9 @@ public enum SunburstLayout {
                 cursor += childSpan
                 index += 1
             }
-            // A lone small sibling is drawn as itself: "Altri" only ever stands for two or more.
-            if index == children.count - 1, tree.size(children[index]) > 0 {
-                let child = children[index], size = tree.size(child)
-                let row = tree.row(child)
-                result.append(ArcSegment(id: "\(child)", node: child, parent: parent, depth: ringDepth,
-                                         startAngle: cursor, endAngle: cursor + span * Double(size) / parentSize,
-                                         size: size, name: row.name, otherCount: 0, flags: row.flags,
-                                         hasChildren: row.hasChildren))
-                continue
-            }
             var otherSize: UInt64 = 0
             var otherCount = 0
+            let firstOther = index
             while index < children.count {
                 let size = tree.size(children[index])
                 if size == 0 { break }
@@ -91,7 +82,15 @@ public enum SunburstLayout {
                 otherCount += 1
                 index += 1
             }
-            if otherCount > 0 {
+            if otherCount == 1 {
+                // A lone small sibling is drawn as itself: "altri" only ever stands for two or more.
+                let child = children[firstOther]
+                let row = tree.row(child)
+                result.append(ArcSegment(id: "\(child)", node: child, parent: parent, depth: ringDepth,
+                                         startAngle: cursor, endAngle: cursor + span * Double(otherSize) / parentSize,
+                                         size: otherSize, name: row.name, otherCount: 0, flags: row.flags,
+                                         hasChildren: row.hasChildren))
+            } else if otherCount > 1 {
                 let otherEnd = cursor + span * Double(otherSize) / parentSize
                 result.append(ArcSegment(id: "other-\(parent)-\(ringDepth)", node: nil, parent: parent,
                                          depth: ringDepth, startAngle: cursor, endAngle: otherEnd,

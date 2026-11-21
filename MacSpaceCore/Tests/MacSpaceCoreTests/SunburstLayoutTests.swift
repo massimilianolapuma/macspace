@@ -82,3 +82,9 @@ private func tree(_ sizes: [UInt64]) -> FileTree {
     #expect(segs.allSatisfy { $0.node != nil && $0.otherCount == 0 })
     #expect(abs(segs.last!.endAngle - 2 * .pi) < 1e-9)
 }
+
+@Test func loneTinySiblingFollowedByEmptyOnesIsNotMergedIntoOther() {
+    let segs = SunburstLayout.compute(tree: tree([1_000_000_000, 1, 0]), center: 0)
+    #expect(!segs.contains { $0.node == nil })
+    #expect(segs.count == 2)
+}
