@@ -9,6 +9,7 @@ struct ContentView: View {
     @State private var chosenFolder: (url: URL, name: String)?
     @State private var choosingFolder = false
     @State private var showOnboarding = false
+    @AppStorage(ColorMode.storageKey) private var colorMode: ColorMode = .neutral
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -19,12 +20,16 @@ struct ContentView: View {
                     .padding(.horizontal, 12)
                     .frame(height: 40)
                     .opacity(model.breadcrumb.isEmpty ? 0 : 1)
-                SunburstView(model: model)
-                    .padding([.horizontal, .bottom], 8)
+                SunburstView(model: model, colorMode: colorMode)
+                    .padding(.horizontal, 8)
+                    .padding(.bottom, colorMode == .neutral ? 8 : 4)
+                ChartLegend(model: model, mode: colorMode)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 12)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             Divider()
-            BiggestListView(model: model)
+            BiggestListView(model: model, colorMode: colorMode)
                 .frame(width: 260)
                 .frame(maxHeight: .infinity)
         }
@@ -83,6 +88,19 @@ struct ContentView: View {
         }
         ToolbarItem(placement: .status) {
             status
+        }
+        ToolbarItem(placement: .primaryAction) {
+            Menu {
+                Picker("Colori", selection: $colorMode) {
+                    ForEach(ColorMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                .pickerStyle(.inline)
+            } label: {
+                Label("Colori", systemImage: "paintpalette")
+            }
+            .help(Text("Colori"))
         }
         ToolbarItem(placement: .primaryAction) {
             if model.isScanning {

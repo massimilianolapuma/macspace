@@ -18,6 +18,8 @@ final class ChartHover {
 /// layers that show it.
 struct SunburstView: View {
     let model: ScanModel
+    /// Changing it only repaints the arcs; it never retargets or animates them.
+    let colorMode: ColorMode
 
     @State private var motion = SunburstMotion()
     /// The center `motion` is showing; tells refreshes apart from navigation.
@@ -46,7 +48,7 @@ struct SunburstView: View {
                         }
                         SunburstHoverLayer(model: model, hover: hover, motion: motion, labels: labels,
                                            generation: generation, geometry: geometry, canGoUp: canGoUp,
-                                           date: date)
+                                           colorMode: colorMode, date: date)
                     }
                 }
                 centerLabel(geometry)
@@ -155,14 +157,15 @@ struct SunburstView: View {
             drawPlaceholder(in: &rings, band: geometry.band, geometry: geometry, date: date)
         }
 
+        let now = Date.now.timestamp
         var drawn: [(path: Path, pose: ArcPose, inner: Double)] = []
         drawn.reserveCapacity(poses.count)
-        for (_, pose) in poses {
+        for (arc, pose) in poses {
             guard let inner = geometry.drawableInner(pose) else { continue }
             let path = Self.sector(center: geometry.center, inner: inner, outer: inner + geometry.ringWidth,
                                    start: pose.start, end: pose.end)
-            let lightness = FusionPalette.ringLightness(depth: pose.shadeDepth, step: pose.shadeStep, scheme: scheme)
-            rings.fill(path, with: .color(FusionPalette.ring(lightness: lightness, scheme: scheme).opacity(pose.alpha)))
+            let fill = Self.fill(arc.segment, pose: pose, mode: colorMode, scheme: scheme, now: now).fill
+            rings.fill(path, with: .color(fill.opacity(pose.alpha)))
             drawn.append((path, pose, inner))
         }
         for item in drawn where geometry.hasSeparator(item.pose, inner: item.inner) {
@@ -170,9 +173,8 @@ struct SunburstView: View {
         }
         labels.prepare(generation: generation, size: geometry.size)
         for label in RingLabel.place(poses, geometry: geometry, planner: labels, in: rings) {
-            let lightness = FusionPalette.ringLightness(depth: label.pose.shadeDepth, step: label.pose.shadeStep,
-                                                        scheme: scheme)
-            RingLabel.draw(label, ink: FusionPalette.ringLabel(lightness: lightness, scheme: scheme), in: rings)
+            let ink = Self.fill(label.segment, pose: label.pose, mode: colorMode, scheme: scheme, now: now).label
+            RingLabel.draw(label, ink: ink, in: rings)
         }
 
         let disc = Path(ellipseIn: geometry.rect(radius: geometry.centerRadius - 0.5))
@@ -209,6 +211,13 @@ struct SunburstView: View {
         }
     }
 
+    /// Fill and label ink of `segment` drawn at `pose`, lifted by `lift` lightness points.
+    static func fill(_ segment: ArcSegment, pose: ArcPose, mode: ColorMode, lift: Double = 0, scheme: ColorScheme,
+                     now: UInt32) -> (fill: Color, label: Color) {
+        FusionPalette.fill(category: segment.category, lastUsed: segment.lastUsed, mode: mode,
+                           depth: pose.shadeDepth, step: pose.shadeStep, lift: lift, scheme: scheme, now: now)
+    }
+
     static func title(of segment: ArcSegment) -> String {
         // The layout only merges two or more siblings, so "Altri" is always plural.
         segment.node == nil ? String(localized: "Altri \(Formatters.count(segment.otherCount)) elementi") : segment.name
@@ -241,6 +250,7 @@ private struct SunburstHoverLayer: View {
     let generation: Int
     let geometry: ChartGeometry
     let canGoUp: Bool
+    let colorMode: ColorMode
     let date: Date
     @Environment(\.colorScheme) private var scheme
 
@@ -256,15 +266,16 @@ private struct SunburstHoverLayer: View {
     }
 
     private func draw(in context: inout GraphicsContext, hoveredID: String?, overCenter: Bool) {
-        if let hoveredID, let pose = motion.current(hoveredID, at: date)?.pose,
-           let inner = geometry.drawableInner(pose) {
+        if let hoveredID, let current = motion.current(hoveredID, at: date),
+           let inner = geometry.drawableInner(current.pose) {
+            let pose = current.pose
             var ring = context
             ring.clip(to: geometry.band, style: FillStyle(eoFill: true))
             let path = SunburstView.sector(center: geometry.center, inner: inner, outer: inner + geometry.ringWidth,
                                            start: pose.start, end: pose.end)
-            let lightness = FusionPalette.ringLightness(depth: pose.shadeDepth, step: pose.shadeStep, scheme: scheme)
-                + FusionPalette.hoverLift
-            ring.fill(path, with: .color(FusionPalette.ring(lightness: lightness, scheme: scheme).opacity(pose.alpha)))
+            let lifted = SunburstView.fill(current.arc.segment, pose: pose, mode: colorMode,
+                                           lift: FusionPalette.hoverLift, scheme: scheme, now: Date.now.timestamp)
+            ring.fill(path, with: .color(lifted.fill.opacity(pose.alpha)))
             if geometry.hasSeparator(pose, inner: inner) {
                 ring.stroke(path, with: .color(FusionPalette.background(scheme).opacity(pose.alpha)), lineWidth: 1)
             }
@@ -272,7 +283,7 @@ private struct SunburstHoverLayer: View {
             labels.prepare(generation: generation, size: geometry.size)
             if let label = RingLabel.place(motion.poses(at: date), geometry: geometry, planner: labels, in: ring,
                                            through: hoveredID).last, label.id == hoveredID {
-                RingLabel.draw(label, ink: FusionPalette.ringLabel(lightness: lightness, scheme: scheme), in: ring)
+                RingLabel.draw(label, ink: lifted.label, in: ring)
             }
         }
         if overCenter {
@@ -516,6 +527,7 @@ enum RingLabel {
     /// A label positioned for one frame.
     struct Placed {
         let id: String
+        let segment: ArcSegment
         let plan: LabelPlan
         let pose: ArcPose
         let point: CGPoint
@@ -594,7 +606,8 @@ enum RingLabel {
                            halfHeight: plan.size != nil ? nameOffset + nameHalf : nameHalf)
         guard !boxes.contains(where: { $0.overlaps(box) }) else { return nil }
         boxes.append(box)
-        return Placed(id: arc.segment.id, plan: plan, pose: pose, point: point, rotation: rotation)
+        return Placed(id: arc.segment.id, segment: arc.segment, plan: plan, pose: pose, point: point,
+                      rotation: rotation)
     }
 
     static func draw(_ label: Placed, ink: Color, in context: GraphicsContext) {
@@ -710,7 +723,8 @@ final class LabelPlanner {
     }
 }
 
-/// Hover card: name, size and share of the current folder, and whether it could be read.
+/// Hover card: name, size and share of the current folder, file type, estimated last use, and
+/// whether it could be read. Type and last use are always in words, whatever the color mode.
 private struct SegmentTooltip: View {
     let segment: ArcSegment
     let total: UInt64
@@ -727,6 +741,15 @@ private struct SegmentTooltip: View {
                 .font(.callout)
                 .monospacedDigit()
                 .foregroundStyle(FusionPalette.secondaryText(scheme))
+            Group {
+                // A merged "altri" segment mixes types: only its latest use is meaningful.
+                if segment.node != nil {
+                    Text("Tipo: \(String(localized: segment.category.title))")
+                }
+                Text("Ultimo uso (stimato): \(Formatters.lastUsedDate(segment.lastUsed))")
+            }
+            .font(.callout)
+            .foregroundStyle(FusionPalette.secondaryText(scheme))
             if segment.flags.contains(.unreadable) {
                 Label("Non leggibile", systemImage: "lock.fill")
                     .font(.callout)

@@ -32,3 +32,18 @@ import Testing
         }
     }
 }
+
+@Test func colorHelpersMatchReferenceValues() {
+    let white = Contrast.RGB(1, 1, 1), black = Contrast.RGB(0, 0, 0)
+    #expect(abs(Contrast.deltaE(white, black) - 100) < 0.01)
+    #expect(Contrast.deltaE(white, white) == 0)
+    #expect(abs(Contrast.lightness(Contrast.hsl(30, 10, 34)) - 34) < 1e-9)
+    let (h, s, l) = Contrast.hslComponents(Contrast.hsl(212, 40, 61))
+    #expect(abs(h - 212) < 1e-9 && abs(s - 40) < 1e-9 && abs(l - 61) < 1e-9)
+    // The "deletable" accent is the reserved orange; muted browns and other hues are not.
+    #expect(Contrast.isReservedOrange(Contrast.hsl(16, 88, 57)))
+    #expect(!Contrast.isReservedOrange(Contrast.hsl(16, 40, 57)))
+    #expect(!Contrast.isReservedOrange(Contrast.hsl(45, 88, 57)))
+    // The label actually drawn reaches AA even on the mid tone where white and black tie.
+    #expect(Contrast.bestLabelRatio(on: Contrast.hsl(0, 0, 46)) >= 4.5)
+}

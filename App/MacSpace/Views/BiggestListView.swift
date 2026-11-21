@@ -5,6 +5,7 @@ import SwiftUI
 /// segment; clicking a folder drills into it.
 struct BiggestListView: View {
     let model: ScanModel
+    let colorMode: ColorMode
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
@@ -37,7 +38,7 @@ struct BiggestListView: View {
         ScrollView {
             VStack(spacing: 0) {  // at most `ScanModel.biggestLimit` rows: no need for lazy loading
                 ForEach(model.biggest) { row in
-                    BiggestRow(model: model, row: row, total: model.breadcrumb.last?.size ?? 0,
+                    BiggestRow(model: model, row: row, total: model.breadcrumb.last?.size ?? 0, colorMode: colorMode,
                                hover: { hover(row, $0) },
                                open: { model.drill(into: row.id) })
                 }
@@ -66,6 +67,7 @@ private struct BiggestRow: View {
     let model: ScanModel
     let row: NodeRow
     let total: UInt64
+    let colorMode: ColorMode
     let hover: (Bool) -> Void
     let open: () -> Void
     @Environment(\.colorScheme) private var scheme
@@ -114,12 +116,32 @@ private struct BiggestRow: View {
                         .monospacedDigit()
                         .foregroundStyle(FusionPalette.secondaryText(scheme))
                 }
+                detail
                 share
             }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
         .contentShape(Rectangle())
+    }
+
+    /// The row's file type (by type) or estimated last use (by last use), with its chart color;
+    /// nothing in neutral mode.
+    @ViewBuilder
+    private var detail: some View {
+        switch colorMode {
+        case .neutral:
+            EmptyView()
+        case .category:
+            RowDetail(color: FusionPalette.swatch(row.category, scheme: scheme),
+                      text: String(localized: row.category.title))
+        case .lastUse:
+            let age = Formatters.lastUsedAge(row.lastUsed)
+            RowDetail(color: FusionPalette.swatch(AgeBucket(lastUsed: row.lastUsed, now: Date.now.timestamp),
+                                                  scheme: scheme),
+                      text: age)
+                .accessibilityLabel(Text("Ultimo uso (stimato): \(age)"))
+        }
     }
 
     /// Thin bar: the row's share of the current folder.
@@ -143,6 +165,27 @@ private struct BiggestRow: View {
         case .directory: "folder"
         case .symlink: "link"
         case .file, .other: "doc"
+        }
+    }
+}
+
+/// A small color dot and the words it stands for, under a row's name.
+private struct RowDetail: View {
+    let color: Color
+    let text: String
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Circle()
+                .fill(color)
+                .overlay(Circle().strokeBorder(FusionPalette.swatchRing(scheme), lineWidth: 0.5))
+                .frame(width: 7, height: 7)
+                .accessibilityHidden(true)
+            Text(verbatim: text)
+                .font(.caption)
+                .foregroundStyle(FusionPalette.secondaryText(scheme))
+                .lineLimit(1)
         }
     }
 }
