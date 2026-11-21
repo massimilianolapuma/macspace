@@ -3,8 +3,9 @@ import Foundation
 import Testing
 @testable import MacSpaceCore
 
-/// Current process physical footprint in bytes (what Activity Monitor reports).
-private func physFootprint() -> UInt64 {
+/// Footprint of the whole test process (runner included, not just the scanner), in bytes.
+/// `peak` is the lifetime high-water mark (`ledger_phys_footprint_peak`); `current` is "now".
+private func footprint() -> (current: UInt64, peak: UInt64) {
     var info = task_vm_info_data_t()
     var count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<integer_t>.size)
     let kr = withUnsafeMutablePointer(to: &info) {
@@ -12,7 +13,8 @@ private func physFootprint() -> UInt64 {
             task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count)
         }
     }
-    return kr == KERN_SUCCESS ? info.phys_footprint : 0
+    guard kr == KERN_SUCCESS else { return (0, 0) }
+    return (info.phys_footprint, UInt64(max(info.ledger_phys_footprint_peak, 0)))
 }
 
 /// Opt-in: `MACSPACE_BENCH=1 swift test -c release --filter startupDiskScan`.
@@ -21,20 +23,26 @@ private func physFootprint() -> UInt64 {
 func startupDiskScan() async throws {
     let store = ScanStore(rootName: "Macintosh HD", rootPath: "/")
     let summary = await Scanner(rootPath: "/", boundary: try .forStartupDisk()).scan(into: store)
-    let footprint = physFootprint()
-    let seconds = Double(summary.duration.components.seconds)
-        + Double(summary.duration.components.attoseconds) / 1e18
+    let mem = footprint()
+    let seconds = max(Double(summary.duration.components.seconds)
+        + Double(summary.duration.components.attoseconds) / 1e18, 0.001)
     let rootSize = await store.rootSize()
     let values = try URL(fileURLWithPath: "/").resourceValues(
         forKeys: [.volumeTotalCapacityKey, .volumeAvailableCapacityKey])
-    let used = UInt64((values.volumeTotalCapacity ?? 0) - (values.volumeAvailableCapacity ?? 0))
+    let total = try #require(values.volumeTotalCapacity)
+    let available = try #require(values.volumeAvailableCapacity)
+    let used = UInt64(max(total - available, 0))
+    let mb = { (b: UInt64) in b / 1_000_000 }
     print("""
     BENCH files=\(summary.files) dirs=\(summary.directories) unreadable=\(summary.unreadable) \
     duration=\(String(format: "%.2f", seconds))s files/s=\(Int(Double(summary.files) / seconds)) \
-    footprint=\(footprint / 1_048_576)MB rootSize=\(rootSize) usedSpace=\(used)
+    footprintPeak=\(mb(mem.peak))MB footprintCurrent=\(mb(mem.current))MB \
+    rootSize=\(mb(rootSize))MB usedSpace=\(mb(used))MB
     """)
     #expect(!summary.wasCancelled)
     #expect(summary.duration < .seconds(90))
-    #expect(footprint < 1_000_000_000)
-    #expect(rootSize <= used, "scan total above used space implies double counting")
+    #expect(mem.peak < 1_000_000_000)
+    // Not a strict bound: APFS clones report full size each while sharing storage.
+    #expect(rootSize <= used + used / 10,
+            "scan total far above used space: firmlink double counting, or APFS clones/compression")
 }
