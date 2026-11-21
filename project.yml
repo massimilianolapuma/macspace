@@ -1,0 +1,29 @@
+name: MacSpace
+options:
+  developmentLanguage: it
+packages:
+  MacSpaceCore:
+    path: MacSpaceCore
+targets:
+  MacSpace:
+    type: application
+    platform: macOS
+    deploymentTarget: "27.0"
+    sources:
+      - App/MacSpace
+    dependencies:
+      - package: MacSpaceCore
+    configFiles:
+      Debug: Local.xcconfig
+      Release: Local.xcconfig
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.massilp.macspace
+        ENABLE_HARDENED_RUNTIME: YES
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_ENTITLEMENTS: App/MacSpace/MacSpace.entitlements
+        SWIFT_VERSION: 6.0
+        DEVELOPMENT_LANGUAGE: it
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: MacSpace
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities
