@@ -59,3 +59,19 @@ private let c = CategoryClassifier(home: "/Users/me")
     #expect(n == 500_000)
     #expect(ContinuousClock.now - start < .seconds(2))   // debug-build bound; the release benchmark (Task 3) is the real gate
 }
+
+@Test func localModelStoresAreDevelopment() {
+    #expect(c.context(forDirectory: ".ollama", path: "/Users/me/.ollama", parent: nil) == .development)
+    #expect(c.context(forDirectory: ".lmstudio", path: "/Users/me/.lmstudio", parent: nil) == .development)
+    #expect(c.context(forDirectory: "huggingface", path: "/Users/me/.cache/huggingface", parent: nil) == .development)
+    // Only the cache one: a folder that merely shares the name keeps no context.
+    #expect(c.context(forDirectory: "huggingface", path: "/Users/me/Documents/huggingface", parent: nil) == nil)
+}
+
+@Test func cargoTargetIsDevelopmentOnlyBesideCargoToml() {
+    let path = "/Users/me/p/cubelite/target"
+    #expect(c.context(forDirectory: "target", path: path, parent: nil, siblingHasCargoToml: true) == .development)
+    #expect(c.context(forDirectory: "target", path: path, parent: nil, siblingHasCargoToml: false) == nil)
+    #expect(c.context(forDirectory: "target", path: path, parent: nil) == nil)
+    #expect(c.context(forDirectory: "other", path: "/Users/me/p/other", parent: nil, siblingHasCargoToml: true) == nil)
+}

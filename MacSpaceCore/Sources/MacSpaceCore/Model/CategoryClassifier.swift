@@ -26,7 +26,7 @@ public struct CategoryClassifier: Sendable {
         var names: [UInt64: FileCategory] = [:]
         for n in ["node_modules", "DerivedData", ".git", ".build", ".swiftpm", "Pods", "Carthage", ".gradle",
                   ".venv", "venv", "__pycache__", ".tox", ".next", ".nuxt", ".terraform", ".cargo", ".rustup",
-                  ".npm", ".pnpm-store", ".yarn"] {
+                  ".npm", ".pnpm-store", ".yarn", ".ollama", ".lmstudio"] {
             names[Self.key(of: Array(n.utf8))] = .development
         }
         directoryNames = names
@@ -52,8 +52,14 @@ public struct CategoryClassifier: Sendable {
     }
 
     /// The category a directory imposes on everything below it, or nil if it imposes none.
-    public func context(forDirectory name: String, path: String, parent: FileCategory?) -> FileCategory? {
+    /// `siblingHasCargoToml` tells whether the directory's own folder holds a `Cargo.toml`, which
+    /// makes a `target` folder a Rust build directory.
+    public func context(forDirectory name: String, path: String, parent: FileCategory?,
+                        siblingHasCargoToml: Bool = false) -> FileCategory? {
         if parent == .app { return .app }
+        if siblingHasCargoToml, name == "target" { return .development }
+        // Model weights downloaded by Hugging Face tools.
+        if name == "huggingface", path.hasSuffix("/.cache/huggingface") { return .development }
         var path = path
         return path.withUTF8 { classifyDirectory(name, $0) } ?? parent
     }

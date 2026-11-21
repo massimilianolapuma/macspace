@@ -24,9 +24,11 @@ public struct NodeRow: Sendable, Hashable, Identifiable {
     public let category: FileCategory
     /// Seconds since 1970 (0 = unknown); for a directory, the latest over its contents.
     public let lastUsed: UInt32
+    /// A file's age bucket; for a directory, the bucket holding most of its bytes.
+    public let ageBucket: AgeBucket
 
     public init(id: NodeID, name: String, size: UInt64, kind: NodeKind, flags: NodeFlags, hasChildren: Bool,
-                category: FileCategory = .other, lastUsed: UInt32 = 0) {
+                category: FileCategory = .other, lastUsed: UInt32 = 0, ageBucket: AgeBucket = .unknown) {
         self.id = id
         self.name = name
         self.size = size
@@ -35,5 +37,6 @@ public struct NodeRow: Sendable, Hashable, Identifiable {
         self.hasChildren = hasChildren
         self.category = category
         self.lastUsed = lastUsed
+        self.ageBucket = ageBucket
     }
 }

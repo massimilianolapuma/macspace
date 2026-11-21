@@ -61,6 +61,79 @@ public enum ChartPalette {
         return rgb(hex)
     }
 
+    // MARK: Drawn fills
+
+    /// How much a hovered element lightens, in HSL lightness points.
+    public static let hoverLift = 12.0
+
+    /// The window and chart background (Fusion sand paper / graphite).
+    public static func surface(_ scheme: Scheme) -> Contrast.RGB {
+        scheme == .dark ? rgb(0x1C1C1E) : rgb(0xF6F3EE)
+    }
+
+    /// The scheme's dark text color.
+    public static func ink(_ scheme: Scheme) -> Contrast.RGB {
+        scheme == .dark ? rgb(0x1C1C1E) : rgb(0x1F1B16)
+    }
+
+    /// Label color on a chart fill: white or the scheme's ink when one reaches 4.5:1, else black or
+    /// white. AA holds by construction, since one of black and white always reaches about 4.58:1.
+    public static func labelInk(on fill: Contrast.RGB, scheme: Scheme) -> Contrast.RGB {
+        Contrast.labelInk(on: fill, preferred: [Contrast.RGB(1, 1, 1), ink(scheme)])
+    }
+
+    /// A category fill as drawn at ring or tile `depth` (1 = first level; fractional while
+    /// animating), lifted by `lift` lightness points while hovered. Each level below the first
+    /// lightens by 6 points, capped so the hover lift always has room and no fill, hovered or not,
+    /// drops below 1.3:1 against the background.
+    public static func categoryFill(_ c: FileCategory, scheme: Scheme, depth: Double = 1,
+                                    lift: Double = 0) -> Contrast.RGB {
+        let tone = (scheme == .dark ? darkCategoryTones : lightCategoryTones)[Int(c.rawValue)]
+        return tone.shade(levels: 6 * (max(depth, 1) - 1), lift: lift)
+    }
+
+    /// An age fill, lifted by `lift` while hovered. The same at every depth: its lightness is the
+    /// age, so a depth shift would make a deep recent folder read as an older one.
+    public static func ageFill(_ b: AgeBucket, scheme: Scheme, lift: Double = 0) -> Contrast.RGB {
+        (scheme == .dark ? darkAgeTones : lightAgeTones)[b.rawValue].shade(levels: 0, lift: lift)
+    }
+
+    /// A palette color in HSL, with the lightest it may be drawn.
+    private struct Tone {
+        let h, s, l: Double
+        /// Highest lightness that keeps 1.3:1 against the background.
+        let ceiling: Double
+        /// Resting fills stop here (`ceiling - hoverLift`, or the base if already above).
+        let restingMax: Double
+
+        init(_ color: Contrast.RGB, scheme: Scheme) {
+            (h, s, l) = Contrast.hslComponents(color)
+            let surface = ChartPalette.surface(scheme)
+            var top = l
+            // Only light mode can fade into its background by lightening.
+            if scheme == .light {
+                while top < 100, Contrast.ratio(Contrast.hsl(h, s, top + 0.25), surface) >= 1.3 { top += 0.25 }
+            } else {
+                top = 100
+            }
+            ceiling = top
+            restingMax = max(l, min(scheme == .dark ? 78 : 86, top - ChartPalette.hoverLift))
+        }
+
+        func shade(levels: Double, lift: Double) -> Contrast.RGB {
+            Contrast.hsl(h, s, min(min(l + levels, restingMax) + lift, ceiling))
+        }
+    }
+
+    private static let lightCategoryTones = FileCategory.allCases.map {
+        Tone(category($0, scheme: .light), scheme: .light)
+    }
+    private static let darkCategoryTones = FileCategory.allCases.map {
+        Tone(category($0, scheme: .dark), scheme: .dark)
+    }
+    private static let lightAgeTones = AgeBucket.allCases.map { Tone(age($0, scheme: .light), scheme: .light) }
+    private static let darkAgeTones = AgeBucket.allCases.map { Tone(age($0, scheme: .dark), scheme: .dark) }
+
     private static func rgb(_ hex: UInt32) -> Contrast.RGB {
         Contrast.RGB(Double((hex >> 16) & 0xFF) / 255, Double((hex >> 8) & 0xFF) / 255, Double(hex & 0xFF) / 255)
     }

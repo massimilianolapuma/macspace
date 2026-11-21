@@ -26,6 +26,9 @@ public struct TreemapTile: Sendable, Hashable, Identifiable {
     public var category: FileCategory
     /// The node's last use (0 = unknown); for "altri", the latest of the merged siblings.
     public var lastUsed: UInt32
+    /// The node's age bucket by bytes (`FileTree.dominantAgeBucket`); for "altri", the bucket
+    /// holding most of the merged siblings' bytes.
+    public var ageBucket: AgeBucket
     /// Whether the top `Style.header` points of the tile (below the `gap / 2` inset) are reserved
     /// for a section header; its children sit below it.
     public var hasHeader: Bool
@@ -33,7 +36,7 @@ public struct TreemapTile: Sendable, Hashable, Identifiable {
     public init(id: String, node: NodeID?, parent: NodeID, depth: Int, x: Double, y: Double,
                 width: Double, height: Double, size: UInt64, name: String, otherCount: Int,
                 flags: NodeFlags = [], hasChildren: Bool = false, category: FileCategory = .other,
-                lastUsed: UInt32 = 0, hasHeader: Bool = false) {
+                lastUsed: UInt32 = 0, ageBucket: AgeBucket = .unknown, hasHeader: Bool = false) {
         self.id = id
         self.node = node
         self.parent = parent
@@ -49,6 +52,7 @@ public struct TreemapTile: Sendable, Hashable, Identifiable {
         self.hasChildren = hasChildren
         self.category = category
         self.lastUsed = lastUsed
+        self.ageBucket = ageBucket
         self.hasHeader = hasHeader
     }
 }
@@ -136,11 +140,13 @@ public enum TreemapLayout {
             var otherSize: UInt64 = 0
             var otherCount = 0
             var otherLastUsed: UInt32 = 0
+            var otherAges = [UInt64](repeating: 0, count: FileTree.ageCount)
             var lastOther: NodeID = 0
             func addOther(_ child: NodeID, size: UInt64) {
                 otherSize &+= size
                 otherCount += 1
                 otherLastUsed = max(otherLastUsed, tree.lastUsed(child))
+                tree.addAgeBytes(of: child, to: &otherAges)
                 lastOther = child
             }
             // The one pass over all children: a folder of a million tiny files costs O(n). What
@@ -229,7 +235,7 @@ public enum TreemapLayout {
                                           x: rect.x, y: rect.y, width: rect.width, height: rect.height,
                                           size: row.size, name: row.name, otherCount: 0, flags: row.flags,
                                           hasChildren: row.hasChildren, category: row.category,
-                                          lastUsed: row.lastUsed, hasHeader: hasHeader))
+                                          lastUsed: row.lastUsed, ageBucket: row.ageBucket, hasHeader: hasHeader))
                 guard subdivide else { continue }
                 let inset = style.gap / 2
                 let top = inset + (hasHeader ? style.header : 0)
@@ -247,7 +253,8 @@ public enum TreemapLayout {
                                           depth: level, x: rect.x, y: rect.y, width: rect.width,
                                           height: rect.height, size: otherSize, name: "",
                                           otherCount: otherCount, category: .other,
-                                          lastUsed: otherLastUsed))
+                                          lastUsed: otherLastUsed,
+                                          ageBucket: FileTree.dominantAgeBucket(otherAges)))
             }
         }
         return result

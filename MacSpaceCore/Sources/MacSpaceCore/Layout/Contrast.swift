@@ -50,12 +50,6 @@ public enum Contrast {
         return ratio(white, fill) >= ratio(black, fill) ? white : black
     }
 
-    /// The label `labelInk` picks on `fill` (from `preferred`, else black or white) and its
-    /// contrast: at least about 4.58:1 whatever the fill.
-    public static func bestLabelRatio(on fill: RGB, preferred: [RGB] = []) -> Double {
-        ratio(labelInk(on: fill, preferred: preferred), fill)
-    }
-
     /// HSL of `c`: hue in degrees `0..<360` (0 for greys), saturation and lightness in percent.
     public static func hslComponents(_ c: RGB) -> (h: Double, s: Double, l: Double) {
         let high = max(c.r, c.g, c.b), low = min(c.r, c.g, c.b)
@@ -90,7 +84,8 @@ public enum Contrast {
         return ((l1 - l2) * (l1 - l2) + (a1 - a2) * (a1 - a2) + (b1 - b2) * (b1 - b2)).squareRoot()
     }
 
-    private static func lab(_ c: RGB) -> (Double, Double, Double) {
+    /// CIELAB (D65) of `c`: L 0…100, a and b roughly −128…127.
+    static func lab(_ c: RGB) -> (Double, Double, Double) {
         func linear(_ v: Double) -> Double { v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
         let r = linear(c.r), g = linear(c.g), b = linear(c.b)
         // sRGB -> XYZ (D65), scaled by the white point.

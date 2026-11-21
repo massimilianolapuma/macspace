@@ -1,3 +1,5 @@
+import Foundation
+
 /// Compact struct-of-arrays tree for millions of nodes. Not thread-safe; owned by a single actor.
 ///
 /// Names live in one UTF-8 arena (`nameBytes`), delimited by `nameEnds`, instead of one `String`
@@ -8,7 +10,8 @@
 /// `FileCategory`; for a directory it is the context the directory imposes on its contents, with
 /// `.other` meaning "none" (the classifier never yields `.other` as a context, so that is lossless).
 /// Directories additionally own a slot in `categoryBytes`, a flat table of per-category byte totals
-/// kept up to date on insert, O(depth), exactly like `sizes`.
+/// kept up to date on insert, O(depth), exactly like `sizes`, and a row in `ageBytes`: byte totals
+/// per `AgeBucket`, each file's bucket taken against the tree's fixed `now` (the scan start).
 public final class FileTree {
     public static let root: NodeID = 0
 
@@ -30,13 +33,21 @@ public final class FileTree {
     private var dirSlots = ContiguousArray<Int32>()
     /// `categoryCount` byte totals per directory slot, indexed `slot * categoryCount + rawValue`.
     private var categoryBytes = ContiguousArray<UInt64>()
+    /// `ageCount` byte totals per directory slot, indexed `slot * ageCount + AgeBucket.rawValue`.
+    private var ageBytes = ContiguousArray<UInt64>()
     private let rootPath: String
+    /// Seconds since 1970 that ages are measured from, fixed for the tree's life.
+    public let now: UInt32
 
     private static let categoryCount = FileCategory.allCases.count
+    static let ageCount = AgeBucket.allCases.count
 
-    /// `rootCategory` is the root directory's context, `.other` for none.
-    public init(rootName: String, rootPath: String, rootCategory: FileCategory = .other) {
+    /// `rootCategory` is the root directory's context, `.other` for none; `now` is the time ages
+    /// are measured from (seconds since 1970).
+    public init(rootName: String, rootPath: String, rootCategory: FileCategory = .other,
+                now: UInt32 = UInt32(clamping: Int64(Date().timeIntervalSince1970))) {
         self.rootPath = rootPath
+        self.now = now
         parents.append(-1)
         firstChildren.append(-1)
         nextSiblings.append(-1)
@@ -48,6 +59,7 @@ public final class FileTree {
         lastUsedStore.append(0)
         dirSlots.append(0)
         categoryBytes.append(contentsOf: repeatElement(0, count: Self.categoryCount))
+        ageBytes.append(contentsOf: repeatElement(0, count: Self.ageCount))
     }
 
     public var count: Int { parents.count }
@@ -55,8 +67,9 @@ public final class FileTree {
     /// Bytes held by the name arena.
     var nameArenaByteCount: Int { nameBytes.count }
 
-    /// Adds a node, then adds its size to `parent` and every ancestor, both to their sizes and to
-    /// their `category` totals, and raises their last use to at least `lastUsed`. O(depth).
+    /// Adds a node, then adds its size to `parent` and every ancestor, to their sizes, their
+    /// `category` totals and the totals of `lastUsed`'s age bucket, and raises their last use to at
+    /// least `lastUsed`. O(depth).
     ///
     /// For a directory `category` is the context it imposes (`.other` for none); for anything else
     /// it is the node's own category. A directory's own size, if any, counts under its context.
@@ -76,12 +89,15 @@ public final class FileTree {
         categories.append(category.rawValue)
         lastUsedStore.append(lastUsed)
         let column = Int(category.rawValue)
+        let ageColumn = AgeBucket(lastUsed: lastUsed, now: now).rawValue
         if kind == .directory {
             let slot = categoryBytes.count / Self.categoryCount
             precondition(slot < Int(Int32.max), "FileTree has too many directories")
             dirSlots.append(Int32(slot))
             categoryBytes.append(contentsOf: repeatElement(0, count: Self.categoryCount))
             categoryBytes[slot * Self.categoryCount + column] = allocatedSize
+            ageBytes.append(contentsOf: repeatElement(0, count: Self.ageCount))
+            ageBytes[slot * Self.ageCount + ageColumn] = allocatedSize
         } else {
             dirSlots.append(-1)
         }
@@ -91,6 +107,7 @@ public final class FileTree {
             let i = Int(p)
             sizes[i] &+= allocatedSize
             categoryBytes[Int(dirSlots[i]) * Self.categoryCount + column] &+= allocatedSize
+            ageBytes[Int(dirSlots[i]) * Self.ageCount + ageColumn] &+= allocatedSize
             if lastUsedStore[i] < lastUsed { lastUsedStore[i] = lastUsed }
             p = parents[i]
         }
@@ -150,6 +167,47 @@ public final class FileTree {
     }
 
     private static func category(raw: UInt8) -> FileCategory { FileCategory(rawValue: raw) ?? .other }
+
+    /// A file's own age bucket; for a directory, the bucket holding the most bytes below it (ties go
+    /// to the more recent bucket), or `.unknown` while it holds no bytes. A folder touched by one
+    /// recent file stays as old as most of what it holds; `lastUsed` keeps the latest use.
+    public func dominantAgeBucket(_ id: NodeID) -> AgeBucket {
+        let slot = Int(dirSlots[Int(id)])
+        guard slot >= 0 else { return AgeBucket(lastUsed: lastUsedStore[Int(id)], now: now) }
+        return Self.dominantAgeBucket(ageBytes[(slot * Self.ageCount)..<((slot + 1) * Self.ageCount)])
+    }
+
+    /// Bytes per age bucket below `id` (a file: its own size), non-zero entries only.
+    public func ageTotals(_ id: NodeID) -> [AgeBucket: UInt64] {
+        var totals = [UInt64](repeating: 0, count: Self.ageCount)
+        addAgeBytes(of: id, to: &totals)
+        var result: [AgeBucket: UInt64] = [:]
+        for (raw, bytes) in totals.enumerated() where bytes > 0 {
+            result[AgeBucket(rawValue: raw) ?? .unknown] = bytes
+        }
+        return result
+    }
+
+    /// Adds `id`'s bytes per age bucket to `totals` (`ageCount` entries, by raw value).
+    func addAgeBytes(of id: NodeID, to totals: inout [UInt64]) {
+        let slot = Int(dirSlots[Int(id)])
+        guard slot >= 0 else {
+            totals[AgeBucket(lastUsed: lastUsedStore[Int(id)], now: now).rawValue] &+= sizes[Int(id)]
+            return
+        }
+        for column in 0..<Self.ageCount { totals[column] &+= ageBytes[slot * Self.ageCount + column] }
+    }
+
+    /// The bucket holding the most of `totals` (ties to the more recent one), `.unknown` if none.
+    static func dominantAgeBucket<C: Collection<UInt64>>(_ totals: C) -> AgeBucket {
+        var best = AgeBucket.unknown
+        var bestBytes: UInt64 = 0
+        for (raw, bytes) in totals.enumerated() where bytes > bestBytes {
+            best = AgeBucket(rawValue: raw) ?? .unknown
+            bestBytes = bytes
+        }
+        return best
+    }
 
     public func parent(_ id: NodeID) -> NodeID? {
         let p = parents[Int(id)]
@@ -259,7 +317,8 @@ public final class FileTree {
     public func row(_ id: NodeID) -> NodeRow {
         NodeRow(id: id, name: name(id), size: sizes[Int(id)], kind: kinds[Int(id)],
                 flags: flagsStore[Int(id)], hasChildren: firstChildren[Int(id)] >= 0,
-                category: dominantCategory(id), lastUsed: lastUsedStore[Int(id)])
+                category: dominantCategory(id), lastUsed: lastUsedStore[Int(id)],
+                ageBucket: dominantAgeBucket(id))
     }
 
     // MARK: Name arena

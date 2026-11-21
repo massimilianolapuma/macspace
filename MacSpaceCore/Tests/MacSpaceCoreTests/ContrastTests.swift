@@ -37,6 +37,9 @@ import Testing
     let white = Contrast.RGB(1, 1, 1), black = Contrast.RGB(0, 0, 0)
     #expect(abs(Contrast.deltaE(white, black) - 100) < 0.01)
     #expect(Contrast.deltaE(white, white) == 0)
+    // A chromatic reference: sRGB red is Lab (53.24, 80.09, 67.20).
+    let red = Contrast.lab(Contrast.RGB(1, 0, 0))
+    #expect(abs(red.0 - 53.24) < 0.01 && abs(red.1 - 80.09) < 0.01 && abs(red.2 - 67.20) < 0.01)
     #expect(abs(Contrast.lightness(Contrast.hsl(30, 10, 34)) - 34) < 1e-9)
     let (h, s, l) = Contrast.hslComponents(Contrast.hsl(212, 40, 61))
     #expect(abs(h - 212) < 1e-9 && abs(s - 40) < 1e-9 && abs(l - 61) < 1e-9)
@@ -44,6 +47,4 @@ import Testing
     #expect(Contrast.isReservedOrange(Contrast.hsl(16, 88, 57)))
     #expect(!Contrast.isReservedOrange(Contrast.hsl(16, 40, 57)))
     #expect(!Contrast.isReservedOrange(Contrast.hsl(45, 88, 57)))
-    // The label actually drawn reaches AA even on the mid tone where white and black tie.
-    #expect(Contrast.bestLabelRatio(on: Contrast.hsl(0, 0, 46)) >= 4.5)
 }

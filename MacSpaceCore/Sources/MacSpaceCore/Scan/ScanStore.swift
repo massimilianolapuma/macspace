@@ -18,12 +18,14 @@ public actor ScanStore {
 
     /// `home` is the user's home folder, for the classifier's `~/Library` rules. The root's own
     /// context comes from `rootPath` (scanning an `.app` bundle directly makes everything App).
-    public init(rootName: String, rootPath: String, home: String = NSHomeDirectory()) {
+    /// `now` (seconds since 1970, by default the scan start) is what ages are measured from.
+    public init(rootName: String, rootPath: String, home: String = NSHomeDirectory(),
+                now: UInt32 = UInt32(clamping: Int64(Date().timeIntervalSince1970))) {
         let classifier = CategoryClassifier(home: home)
         let rootContext = classifier.context(forDirectory: (rootPath as NSString).lastPathComponent,
                                              path: rootPath, parent: nil)
         self.classifier = classifier
-        tree = FileTree(rootName: rootName, rootPath: rootPath, rootCategory: rootContext ?? .other)
+        tree = FileTree(rootName: rootName, rootPath: rootPath, rootCategory: rootContext ?? .other, now: now)
     }
 
     /// What `insert` added.
@@ -49,6 +51,8 @@ public actor ScanStore {
         let parentContext = tree.context(parent)
         var descend: [(id: NodeID, path: String)] = []
         var bytes: UInt64 = 0
+        /// Whether the listing holds a `Cargo.toml`, looked up only once a `target` folder needs it.
+        var hasCargoToml: Bool?
         for entry in entries {
             var flags: NodeFlags = []
             if entry.isDataless { flags.insert(.dataless) }
@@ -67,7 +71,11 @@ public actor ScanStore {
                 continue
             }
             let path = prefix + entry.name
-            let context = classifier.context(forDirectory: entry.name, path: path, parent: parentContext)
+            if hasCargoToml == nil, entry.name == "target" {
+                hasCargoToml = entries.contains { $0.kind != .directory && $0.name == "Cargo.toml" }
+            }
+            let context = classifier.context(forDirectory: entry.name, path: path, parent: parentContext,
+                                             siblingHasCargoToml: hasCargoToml ?? false)
             let id = tree.addChild(of: parent, name: entry.name, kind: entry.kind, allocatedSize: size,
                                    flags: flags, category: context ?? .other)
             guard !entry.isDataless else { continue }
@@ -90,6 +98,9 @@ public actor ScanStore {
     public func rows(childrenOf id: NodeID, limit: Int) -> [NodeRow] {
         tree.largestChildren(of: id, limit: limit).map(tree.row)
     }
+
+    /// Bytes per age bucket below `id`, non-zero entries only.
+    public func ageTotals(of id: NodeID) -> [AgeBucket: UInt64] { tree.ageTotals(id) }
 
     /// Bytes per category below `id`, non-zero entries only.
     public func categoryTotals(of id: NodeID) -> [FileCategory: UInt64] { tree.categoryTotals(id) }
@@ -130,6 +141,8 @@ public actor ScanStore {
         public var breadcrumb: [NodeRow]
         /// Bytes per category below `center`, non-zero entries only.
         public var categoryTotals: [FileCategory: UInt64]
+        /// Bytes per age bucket below `center`, non-zero entries only.
+        public var ageTotals: [AgeBucket: UInt64]
     }
 
     /// Lays out only the chart `chart` asks for, so the other one costs nothing.
@@ -145,7 +158,7 @@ public actor ScanStore {
         return Snapshot(segments: segments, tiles: tiles,
                         biggest: rows(childrenOf: center, limit: biggestLimit),
                         breadcrumb: breadcrumb(to: center),
-                        categoryTotals: categoryTotals(of: center))
+                        categoryTotals: categoryTotals(of: center), ageTotals: ageTotals(of: center))
     }
 
     private struct HardLinkKey: Hashable {

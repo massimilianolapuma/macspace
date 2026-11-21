@@ -177,3 +177,23 @@ func scanFixture(_ fx: Fixture) async throws -> (ScanStore, ScanSummary) {
     #expect(await store.categoryTotals(of: FileTree.root) == [.video: 4096])
     #expect(await store.row(FileTree.root).lastUsed == 30)
 }
+
+@Test func cargoTargetIsClassifiedFromItsSiblings() async throws {
+    func entry(_ name: String, _ kind: NodeKind) -> DirectoryEntry {
+        DirectoryEntry(name: name, kind: kind, allocatedSize: 0, device: 1, inode: 0, linkCount: 1,
+                       isMountPoint: false, isDataless: false)
+    }
+    let boundary = ScanBoundary(allowedDevices: [1], excludedPaths: [])
+    let store = ScanStore(rootName: "p", rootPath: "/p", home: "/Users/me")
+    let crates = await store.insert([entry("rust", .directory), entry("web", .directory)], under: FileTree.root,
+                                    parentPath: "/p", boundary: boundary).descend
+    let rust = try #require(crates.first { $0.path == "/p/rust" })
+    let web = try #require(crates.first { $0.path == "/p/web" })
+    let rustTarget = try #require(await store.insert([entry("Cargo.toml", .file), entry("target", .directory)],
+                                                     under: rust.id, parentPath: rust.path, boundary: boundary)
+        .descend.first)
+    let webTarget = try #require(await store.insert([entry("target", .directory)], under: web.id,
+                                                    parentPath: web.path, boundary: boundary).descend.first)
+    #expect(await store.row(rustTarget.id).category == .development)
+    #expect(await store.row(webTarget.id).category == .other)
+}
