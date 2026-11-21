@@ -80,9 +80,10 @@ import Testing
     #expect(throws: DirectoryReadError.notADirectory) { try DirectoryReader.read(path: f.path) }
 }
 
-@Test func cancelledReadStopsBetweenBatches() async throws {
+@Test func preCancelledReadReturnsNothing() async throws {
     let fx = try Fixture(); defer { fx.cleanup() }
-    for i in 0..<20_000 { try fx.file("f\(i)", bytes: 1) }
+    for i in 0..<10 { try fx.file("f\(i)", bytes: 1) }
+    // Checks the cancellation check that runs before each batch (here, before the first).
     let n = try await Task { withUnsafeCurrentTask { $0?.cancel() }; return try DirectoryReader.read(path: fx.root.path).count }.value
-    #expect(n < 20_000)
+    #expect(n == 0)
 }

@@ -7,6 +7,9 @@ public enum DirectoryReader {
 
     /// Lists the entries of the directory at `path` ("." and ".." are never reported).
     /// Entries the file system reports a per-entry error for are skipped.
+    /// When the calling task is cancelled, reading stops between batches and the listing so far
+    /// is returned without throwing: callers must check `Task.isCancelled` before treating the
+    /// result as complete.
     public static func read(path: String) throws(DirectoryReadError) -> [DirectoryEntry] {
         let fd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         guard fd >= 0 else { throw DirectoryReadError(errno: errno) }
