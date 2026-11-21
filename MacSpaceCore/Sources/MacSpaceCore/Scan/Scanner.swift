@@ -6,6 +6,12 @@ public struct ScanProgress: Sendable {
     public var bytesSeen: UInt64
     /// Directories queued or being read.
     public var directoriesPending: Int
+
+    public init(filesSeen: Int, bytesSeen: UInt64, directoriesPending: Int) {
+        self.filesSeen = filesSeen
+        self.bytesSeen = bytesSeen
+        self.directoriesPending = directoriesPending
+    }
 }
 
 public struct ScanSummary: Sendable {
