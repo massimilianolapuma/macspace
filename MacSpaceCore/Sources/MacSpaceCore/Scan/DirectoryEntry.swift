@@ -12,10 +12,15 @@ public struct DirectoryEntry: Sendable, Equatable {
     public let isMountPoint: Bool
     /// Contents live only in the cloud (`SF_DATALESS`); `allocatedSize` reflects the local footprint.
     public let isDataless: Bool
+    /// Last modification, seconds since 1970 clamped to `UInt32` (0 = unknown).
+    public let modificationTime: UInt32
+    /// Last access, seconds since 1970 clamped to `UInt32` (0 = unknown).
+    public let accessTime: UInt32
 
     public init(
         name: String, kind: NodeKind, allocatedSize: UInt64, device: Int32, inode: UInt64,
-        linkCount: UInt32, isMountPoint: Bool, isDataless: Bool
+        linkCount: UInt32, isMountPoint: Bool, isDataless: Bool,
+        modificationTime: UInt32 = 0, accessTime: UInt32 = 0
     ) {
         self.name = name
         self.kind = kind
@@ -25,6 +30,8 @@ public struct DirectoryEntry: Sendable, Equatable {
         self.linkCount = linkCount
         self.isMountPoint = isMountPoint
         self.isDataless = isDataless
+        self.modificationTime = modificationTime
+        self.accessTime = accessTime
     }
 }
 

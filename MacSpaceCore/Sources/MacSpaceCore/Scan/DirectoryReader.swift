@@ -17,7 +17,7 @@ public enum DirectoryReader {
         defer { buffer.deallocate() }
 
         var entries: [DirectoryEntry] = []
-        while true {
+        while !Task.isCancelled {
             let count = getattrlistbulk(fd, &request, buffer, bulkBufferSize, 0)
             if count < 0 {
                 if errno == EINTR { continue }
@@ -60,7 +60,8 @@ public enum DirectoryReader {
 
     private static let commonAttributes: attrgroup_t =
         attrgroup_t(ATTR_CMN_RETURNED_ATTRS) | attrgroup_t(ATTR_CMN_NAME) | attrgroup_t(ATTR_CMN_DEVID)
-        | attrgroup_t(ATTR_CMN_OBJTYPE) | attrgroup_t(ATTR_CMN_FLAGS) | attrgroup_t(ATTR_CMN_FILEID)
+        | attrgroup_t(ATTR_CMN_OBJTYPE) | attrgroup_t(ATTR_CMN_MODTIME) | attrgroup_t(ATTR_CMN_ACCTIME)
+        | attrgroup_t(ATTR_CMN_FLAGS) | attrgroup_t(ATTR_CMN_FILEID)
 
     private static func attributeRequest(includeError: Bool) -> attrlist {
         var request = attrlist()
@@ -103,6 +104,16 @@ public enum DirectoryReader {
             guard let value = cursor.read(fsobj_type_t.self) else { return nil }
             objectType = value
         }
+        var modificationTime: UInt32 = 0
+        if common & attrgroup_t(ATTR_CMN_MODTIME) != 0 {
+            guard let value = cursor.read(timespec.self) else { return nil }
+            modificationTime = clampedSeconds(value)
+        }
+        var accessTime: UInt32 = 0
+        if common & attrgroup_t(ATTR_CMN_ACCTIME) != 0 {
+            guard let value = cursor.read(timespec.self) else { return nil }
+            accessTime = clampedSeconds(value)
+        }
         var flags: UInt32 = 0
         if common & attrgroup_t(ATTR_CMN_FLAGS) != 0 {
             guard let value = cursor.read(UInt32.self) else { return nil }
@@ -140,8 +151,14 @@ public enum DirectoryReader {
             inode: inode,
             linkCount: linkCount,
             isMountPoint: mountStatus & UInt32(DIR_MNTSTATUS_MNTPOINT) != 0,
-            isDataless: flags & UInt32(SF_DATALESS) != 0
+            isDataless: flags & UInt32(SF_DATALESS) != 0,
+            modificationTime: modificationTime,
+            accessTime: accessTime
         )
+    }
+
+    private static func clampedSeconds(_ time: timespec) -> UInt32 {
+        UInt32(clamping: max(0, time.tv_sec))
     }
 
     /// `attr_length` counts the trailing NUL; the bytes must lie entirely inside the record.
