@@ -1,0 +1,233 @@
+/// One block of the treemap. Rects are in points, origin top-left, y down.
+///
+/// A rect is the tile's whole layout slot: siblings' slots abut. Draw each tile inset by
+/// `Style.gap / 2` so siblings show a gap; children are laid out inside the parent's slot inset by
+/// the same amount (and below its header), so they keep that gap from the parent's drawn edge too.
+public struct TreemapTile: Sendable, Hashable, Identifiable {
+    /// `"\(node)"`, or `"other-\(parent)-\(depth)"` for a merged "altri" tile.
+    public var id: String
+    /// `nil` for a merged "altri" tile.
+    public var node: NodeID?
+    public var parent: NodeID
+    /// 1 = children of the center.
+    public var depth: Int
+    public var x: Double
+    public var y: Double
+    public var width: Double
+    public var height: Double
+    public var size: UInt64
+    public var name: String
+    /// Number of merged siblings; > 0 only for "altri".
+    public var otherCount: Int
+    public var flags: NodeFlags
+    /// Whether the node has children to drill into; always false for "altri".
+    public var hasChildren: Bool
+    /// The node's dominant category; `.other` for "altri".
+    public var category: FileCategory
+    /// The node's last use (0 = unknown); for "altri", the latest of the merged siblings.
+    public var lastUsed: UInt32
+    /// Whether the top `Style.header` points of the tile (below the `gap / 2` inset) are reserved
+    /// for a section header; its children sit below it.
+    public var hasHeader: Bool
+
+    public init(id: String, node: NodeID?, parent: NodeID, depth: Int, x: Double, y: Double,
+                width: Double, height: Double, size: UInt64, name: String, otherCount: Int,
+                flags: NodeFlags = [], hasChildren: Bool = false, category: FileCategory = .other,
+                lastUsed: UInt32 = 0, hasHeader: Bool = false) {
+        self.id = id
+        self.node = node
+        self.parent = parent
+        self.depth = depth
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+        self.size = size
+        self.name = name
+        self.otherCount = otherCount
+        self.flags = flags
+        self.hasChildren = hasChildren
+        self.category = category
+        self.lastUsed = lastUsed
+        self.hasHeader = hasHeader
+    }
+}
+
+public enum TreemapLayout {
+    /// Geometry knobs, in points. All must be finite and non-negative.
+    public struct Style: Sendable {
+        /// Space between sibling tiles, and between a parent's drawn edge and its children.
+        public var gap: Double
+        /// Height of the section header band reserved at the top of large parent tiles.
+        public var header: Double
+        /// A parent tile gets a header only when at least this wide…
+        public var headerMinWidth: Double
+        /// …and at least this tall.
+        public var headerMinHeight: Double
+        /// Siblings whose tile would cover less than this area merge into "altri".
+        public var minTileArea: Double
+
+        public init(gap: Double = 3.0, header: Double = 18.0, headerMinWidth: Double = 120.0,
+                    headerMinHeight: Double = 60.0, minTileArea: Double = 36.0) {
+            self.gap = gap
+            self.header = header
+            self.headerMinWidth = headerMinWidth
+            self.headerMinHeight = headerMinHeight
+            self.minTileArea = minTileArea
+        }
+    }
+
+    private struct Rect {
+        var x, y, width, height: Double
+    }
+
+    /// Lays out `depth` levels of descendants of `center` in a `width × height` canvas with the
+    /// squarified algorithm (Bruls, Huizing, van Wijk 2000). Each tile gets an area proportional
+    /// to its size over its parent's (a folder's own bytes leave a little space unused, as in the
+    /// sunburst). Siblings whose tile would be smaller than `minTileArea` are merged into one
+    /// trailing "altri" tile (only two or more non-empty ones; a lone one is kept as itself).
+    /// Empty nodes are skipped; files, "altri" and the last level are never subdivided, nor is a
+    /// tile whose inner area is under 1 pt on either side. Output is ordered level by level, each
+    /// family by size descending, so parents always precede their children.
+    ///
+    /// Cost is bounded by the canvas, not the tree: every tile but "altri" covers at least
+    /// `minTileArea`, and only a folder's visible children get sorted (the rest take one pass).
+    public static func compute(tree: FileTree, center: NodeID, width: Double, height: Double,
+                               depth: Int = 3, style: Style = .init()) -> [TreemapTile] {
+        guard depth > 0, width.isFinite, height.isFinite, width >= 1, height >= 1,
+              tree.size(center) > 0 else { return [] }
+        var result: [TreemapTile] = []
+        // Regions queued for subdivision, each at least 1 × 1 pt.
+        var queue: [(node: NodeID, region: Rect, depth: Int)] = [(center, Rect(x: 0, y: 0, width: width, height: height), 1)]
+        var head = 0
+        while head < queue.count {
+            let (parent, region, level) = queue[head]
+            head += 1
+            let parentSize = tree.size(parent)
+            guard parentSize > 0 else { continue }
+            let scale = region.width * region.height / Double(parentSize)  // pt² per byte
+
+            // A child gets its own tile when it covers at least minTileArea, i.e. holds at least
+            // `minSize` bytes. Only those get sorted; the rest are tallied in one unsorted pass,
+            // so a folder of a million tiny files costs O(n), not a full sort.
+            let threshold = style.minTileArea / scale
+            let minSize = threshold >= Double(UInt64.max) ? UInt64.max : UInt64(max(1, threshold.rounded(.up)))
+            var otherSize: UInt64 = 0
+            var otherCount = 0
+            var otherLastUsed: UInt32 = 0
+            var lastOther: NodeID = 0
+            tree.forEachChild(of: parent) { child in
+                let size = tree.size(child)
+                guard size > 0, size < minSize else { return }
+                otherSize &+= size
+                otherCount += 1
+                otherLastUsed = max(otherLastUsed, tree.lastUsed(child))
+                lastOther = child
+            }
+            var members = tree.children(of: parent, minSize: minSize)
+            // A lone small sibling is drawn as itself: "altri" only ever stands for two or more.
+            if otherCount == 1 { members.append(lastOther) }
+            var areas = members.map { Double(tree.size($0)) * scale }
+            if otherCount > 1 { areas.append(Double(otherSize) * scale) }
+
+            let rects = squarify(areas, in: region)
+            for (index, rect) in rects.enumerated() {
+                guard index < members.count else {
+                    result.append(TreemapTile(id: "other-\(parent)-\(level)", node: nil, parent: parent,
+                                              depth: level, x: rect.x, y: rect.y, width: rect.width,
+                                              height: rect.height, size: otherSize, name: "",
+                                              otherCount: otherCount, category: .other,
+                                              lastUsed: otherLastUsed))
+                    continue
+                }
+                let child = members[index]
+                let row = tree.row(child)
+                let subdivide = level < depth && row.kind == .directory && row.hasChildren
+                let hasHeader = subdivide && rect.width >= style.headerMinWidth
+                    && rect.height >= style.headerMinHeight
+                result.append(TreemapTile(id: "\(child)", node: child, parent: parent, depth: level,
+                                          x: rect.x, y: rect.y, width: rect.width, height: rect.height,
+                                          size: row.size, name: row.name, otherCount: 0, flags: row.flags,
+                                          hasChildren: row.hasChildren, category: row.category,
+                                          lastUsed: row.lastUsed, hasHeader: hasHeader))
+                guard subdivide else { continue }
+                let inset = style.gap / 2
+                let top = inset + (hasHeader ? style.header : 0)
+                let inner = Rect(x: rect.x + inset, y: rect.y + top,
+                                 width: rect.width - 2 * inset, height: rect.height - inset - top)
+                if inner.width >= 1, inner.height >= 1 {
+                    queue.append((child, inner, level + 1))
+                }
+            }
+        }
+        return result
+    }
+
+    /// The deepest tile containing the point (edges half-open: left/top in, right/bottom out).
+    public static func hitTest(_ tiles: [TreemapTile], x: Double, y: Double) -> TreemapTile? {
+        var best: TreemapTile?
+        for tile in tiles where x >= tile.x && x < tile.x + tile.width && y >= tile.y && y < tile.y + tile.height {
+            if best.map({ tile.depth > $0.depth }) ?? true { best = tile }
+        }
+        return best
+    }
+
+    /// Squarified rects for `areas` (descending, positive, summing to at most `bounds`' area),
+    /// in order. Each row runs along the shorter side of the space left and takes items while that
+    /// does not worsen its worst aspect ratio. Rects never leave `bounds` and are never negative;
+    /// should float drift exhaust the space, the remaining items get no rect.
+    private static func squarify(_ areas: [Double], in bounds: Rect) -> [Rect] {
+        var rects: [Rect] = []
+        rects.reserveCapacity(areas.count)
+        var free = bounds
+        var start = 0
+        while start < areas.count {
+            let vertical = free.width >= free.height  // the row is a column at the left
+            let side = vertical ? free.height : free.width
+            let depthLeft = vertical ? free.width : free.height
+            guard side > 0, depthLeft > 0 else { break }
+
+            // Worst aspect ratio of a row of total `sum` whose largest item is areas[start]
+            // and smallest `smallest`: max(s²·max / sum², sum² / (s²·min)).
+            let side2 = side * side
+            func worst(sum: Double, smallest: Double) -> Double {
+                let sum2 = sum * sum
+                return max(side2 * areas[start] / sum2, sum2 / (side2 * smallest))
+            }
+            var end = start + 1
+            var sum = areas[start]
+            var best = worst(sum: sum, smallest: areas[start])
+            while end < areas.count {
+                let candidate = worst(sum: sum + areas[end], smallest: areas[end])
+                if candidate > best { break }
+                best = candidate
+                sum += areas[end]
+                end += 1
+            }
+
+            var thickness = min(sum / side, depthLeft)
+            // The last row of a full layout ends exactly at the far edge, despite summing drift.
+            if end == areas.count, depthLeft - thickness <= 1e-9 * max(1, depthLeft) { thickness = depthLeft }
+            guard thickness > 0 else { break }
+            let rowStart = vertical ? free.y : free.x
+            let rowEnd = rowStart + side
+            var cursor = rowStart
+            for index in start..<end {
+                let next = index == end - 1 ? rowEnd : min(cursor + areas[index] / thickness, rowEnd)
+                rects.append(vertical
+                    ? Rect(x: free.x, y: cursor, width: thickness, height: next - cursor)
+                    : Rect(x: cursor, y: free.y, width: next - cursor, height: thickness))
+                cursor = next
+            }
+            if vertical {
+                free.x += thickness
+                free.width = max(0, free.width - thickness)
+            } else {
+                free.y += thickness
+                free.height = max(0, free.height - thickness)
+            }
+            start = end
+        }
+        return rects
+    }
+}

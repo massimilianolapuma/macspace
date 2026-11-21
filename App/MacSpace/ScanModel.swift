@@ -85,7 +85,8 @@ final class ScanModel {
     func refreshViews() async {
         guard let store else { return }
         let center = self.center
-        let snapshot = await store.snapshot(center: center, depth: Self.ringDepth, biggestLimit: Self.biggestLimit)
+        let snapshot = await store.snapshot(center: center, chart: .sunburst(depth: Self.ringDepth),
+                                            biggestLimit: Self.biggestLimit)
         // A newer scan or navigation happened meanwhile: its own refresh wins.
         guard store === self.store, center == self.center else { return }
         Perf.interval("refresh apply") {

@@ -132,11 +132,17 @@ func scanFixture(_ fx: Fixture) async throws -> (ScanStore, ScanSummary) {
     try fx.file("a/b/c", bytes: 30_000); try fx.file("a/d", bytes: 10_000); try fx.file("e", bytes: 5_000)
     let (store, _) = try await scanFixture(fx)
     let a = await store.rows(childrenOf: FileTree.root, limit: 1)[0].id
-    let snapshot = await store.snapshot(center: a, depth: 3, biggestLimit: 1)
+    let snapshot = await store.snapshot(center: a, chart: .sunburst(depth: 3), biggestLimit: 1)
+    #expect(!snapshot.segments.isEmpty && snapshot.tiles.isEmpty)
     #expect(snapshot.segments == (await store.sunburst(center: a, depth: 3)))
     #expect(snapshot.biggest == (await store.rows(childrenOf: a, limit: 1)))
     #expect(snapshot.breadcrumb == (await store.breadcrumb(to: a)))
+    #expect(snapshot.categoryTotals == (await store.categoryTotals(of: a)) && !snapshot.categoryTotals.isEmpty)
     #expect(snapshot.breadcrumb.map(\.name) == ["fx", "a"] && snapshot.biggest.count == 1)
+    let treemap = await store.snapshot(center: a, chart: .treemap(width: 400, height: 300, depth: 3), biggestLimit: 1)
+    #expect(!treemap.tiles.isEmpty && treemap.segments.isEmpty)
+    #expect(treemap.tiles == (await store.treemap(center: a, width: 400, height: 300, depth: 3)))
+    #expect(treemap.biggest == snapshot.biggest && treemap.breadcrumb == snapshot.breadcrumb)
 }
 @Test func scanClassifiesWithContext() async throws {
     let fx = try Fixture(); defer { fx.cleanup() }

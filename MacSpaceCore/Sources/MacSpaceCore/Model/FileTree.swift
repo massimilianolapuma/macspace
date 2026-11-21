@@ -190,6 +190,26 @@ public final class FileTree {
         return result
     }
 
+    /// The children of `id` of at least `minSize` bytes, in `children(of:)` order. Only those get
+    /// sorted, so a folder of a million mostly tiny files costs one pass plus a small sort.
+    func children(of id: NodeID, minSize: UInt64) -> [NodeID] {
+        var result: [NodeID] = []
+        forEachChild(of: id) { if sizes[Int($0)] >= minSize { result.append($0) } }
+        nameBytes.withUnsafeBufferPointer { arena in
+            result.sort { precedes($0, $1, arena) }
+        }
+        return result
+    }
+
+    /// Calls `body` on every child of `id`, in no particular order, without sorting or allocating.
+    func forEachChild(of id: NodeID, _ body: (NodeID) -> Void) {
+        var c = firstChildren[Int(id)]
+        while c >= 0 {
+            body(c)
+            c = nextSiblings[Int(c)]
+        }
+    }
+
     /// The first `limit` of `children(of: id)`, in the same order, found by partial selection: a
     /// bounded heap keeps the best `limit` seen so far, O(n log limit), and only those get sorted.
     public func largestChildren(of id: NodeID, limit: Int) -> [NodeID] {
