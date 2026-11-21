@@ -33,3 +33,28 @@ import Testing
     #expect(t.row(d) == NodeRow(id: d, name: "d", size: 0, kind: .directory, flags: .unreadable, hasChildren: false))
     #expect(t.parent(0) == nil)
 }
+
+@Test func oddNamesRoundTripThroughTheArena() {
+    let long = String(repeating: "lungo-", count: 40) + "fine"     // 244 UTF-8 bytes
+    let emoji = "📦 Archivio 👩‍👩‍👧‍👦"
+    let nfd = "Cafe\u{301}"                                      // decomposed "Café"
+    let t = FileTree(rootName: "Disco 🖥", rootPath: "/r")
+    let a = t.addChild(of: 0, name: long, kind: .directory, allocatedSize: 0)
+    let b = t.addChild(of: a, name: emoji, kind: .directory, allocatedSize: 0)
+    let c = t.addChild(of: b, name: nfd, kind: .file, allocatedSize: 1)
+    #expect(t.name(0) == "Disco 🖥")
+    #expect(t.name(a) == long && t.name(b) == emoji)
+    #expect(Array(t.name(c).utf8) == Array(nfd.utf8))    // bytes kept as given, not normalized
+    #expect(t.row(c).name.unicodeScalars.elementsEqual(nfd.unicodeScalars))
+    #expect(Array(t.path(of: c).utf8) == Array("/r/\(long)/\(emoji)/\(nfd)".utf8))
+    #expect(t.nameArenaByteCount == ["Disco 🖥", long, emoji, nfd].reduce(0) { $0 + $1.utf8.count })
+}
+
+@Test func equalSizesSortLikeStringComparison() {
+    // Ties break by name exactly as `String.<` does, including canonical equivalence:
+    // decomposed "é" (bytes "e\u{301}") sorts as "é", after "f".
+    let t = FileTree(rootName: "r", rootPath: "/r")
+    let names = ["f", "e\u{301}", "Z", "a", "zz", "z", "ü", "日本", "Ω"]
+    for name in names { t.addChild(of: 0, name: name, kind: .file, allocatedSize: 7) }
+    #expect(t.children(of: 0).map(t.name) == names.sorted())
+}
