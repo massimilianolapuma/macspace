@@ -2,8 +2,8 @@ import Foundation
 
 public struct ScanProgress: Sendable {
     public var filesSeen: Int
-    /// Bytes added to the tree so far: equals the store's `rootSize` when reported
-    /// (hard-link duplicates excluded).
+    /// Bytes added to the tree by the reads completed so far (hard-link duplicates excluded).
+    /// The final report equals the store's `rootSize`; earlier ones can trail it slightly.
     public var bytesSeen: UInt64
     /// Directories queued or being read.
     public var directoriesPending: Int
@@ -37,8 +37,13 @@ public struct Scanner: Sendable {
 
     static let progressInterval: Duration = .milliseconds(100)
 
-    public init(rootPath: String, boundary: ScanBoundary,
-                maxConcurrency: Int = ProcessInfo.processInfo.activeProcessorCount) {
+    /// One read per active core, minus two: the cooperative pool keeps threads free for
+    /// UI-facing work (store queries, the main actor's tasks) while a scan saturates the rest.
+    public static var defaultConcurrency: Int {
+        max(1, ProcessInfo.processInfo.activeProcessorCount - 2)
+    }
+
+    public init(rootPath: String, boundary: ScanBoundary, maxConcurrency: Int = Scanner.defaultConcurrency) {
         self.rootPath = rootPath
         self.boundary = boundary
         self.maxConcurrency = max(1, maxConcurrency)
@@ -51,8 +56,8 @@ public struct Scanner: Sendable {
     ///
     /// Directory reads (and their `ScanStore` inserts) run in child tasks at `.utility`
     /// priority, whatever the caller's priority, so higher-priority work, such as UI queries
-    /// to the same store, is scheduled ahead of them. Together with the default limit of one
-    /// read per active core, this keeps store queries responsive while a scan is running.
+    /// to the same store, is scheduled ahead of them. Together with the default limit
+    /// (`defaultConcurrency`), this keeps store queries responsive while a scan is running.
     public func scan(into store: ScanStore,
                      progress: (@Sendable (ScanProgress) -> Void)? = nil) async -> ScanSummary {
         let clock = ContinuousClock()

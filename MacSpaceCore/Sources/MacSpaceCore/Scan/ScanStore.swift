@@ -79,6 +79,22 @@ public actor ScanStore {
         SunburstLayout.compute(tree: tree, center: center, depth: depth)
     }
 
+    /// Everything the UI shows around `center`, taken in one actor call so the pieces agree
+    /// with each other while a scan keeps inserting.
+    public struct Snapshot: Sendable {
+        public var segments: [ArcSegment]
+        /// The `biggestLimit` largest children of `center`.
+        public var biggest: [NodeRow]
+        /// From the root down to and including `center`.
+        public var breadcrumb: [NodeRow]
+    }
+
+    public func snapshot(center: NodeID, depth: Int, biggestLimit: Int) -> Snapshot {
+        Snapshot(segments: sunburst(center: center, depth: depth),
+                 biggest: rows(childrenOf: center, limit: biggestLimit),
+                 breadcrumb: breadcrumb(to: center))
+    }
+
     private struct HardLinkKey: Hashable {
         let device: Int32
         let inode: UInt64

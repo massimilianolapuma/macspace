@@ -84,9 +84,14 @@ func scanFixture(_ fx: Fixture) async throws -> (ScanStore, ScanSummary) {
     let fx = try Fixture(); defer { fx.cleanup() }
     try fx.file("a/b", bytes: 1)
     let store = ScanStore(rootName: "fx", rootPath: fx.root.path)
-    let task = Task { await Scanner(rootPath: fx.root.path, boundary: try! .forFolder(fx.root.path)).scan(into: store) }
-    task.cancel()
-    #expect(await task.value.wasCancelled)
+    let scanner = Scanner(rootPath: fx.root.path, boundary: try .forFolder(fx.root.path))
+    // Cancelled from inside the task before the scan starts, so the outcome never depends on timing.
+    let summary = await Task {
+        withUnsafeCurrentTask { $0?.cancel() }
+        return await scanner.scan(into: store)
+    }.value
+    #expect(summary.wasCancelled && summary.files == 0 && summary.directories == 0)
+    #expect(await store.rootSize() == 0)
 }
 @Test func pathTooLongIsMarkedUnreadable() async throws {
     let fx = try Fixture(); defer { fx.cleanup() }
@@ -115,4 +120,21 @@ func scanFixture(_ fx: Fixture) async throws -> (ScanStore, ScanSummary) {
     let last = try #require(reports.withLock { $0.last })
     #expect(last.bytesSeen == (await store.rootSize()))
     #expect(last.filesSeen == summary.files && last.directoriesPending == 0)
+}
+@Test func defaultConcurrencyLeavesTwoCoresForTheUI() {
+    let cores = ProcessInfo.processInfo.activeProcessorCount
+    #expect(Scanner.defaultConcurrency == max(1, cores - 2))
+    #expect(Scanner(rootPath: "/", boundary: ScanBoundary(allowedDevices: [], excludedPaths: [])).maxConcurrency
+            == Scanner.defaultConcurrency)
+}
+@Test func snapshotMatchesTheSeparateQueries() async throws {
+    let fx = try Fixture(); defer { fx.cleanup() }
+    try fx.file("a/b/c", bytes: 30_000); try fx.file("a/d", bytes: 10_000); try fx.file("e", bytes: 5_000)
+    let (store, _) = try await scanFixture(fx)
+    let a = await store.rows(childrenOf: FileTree.root, limit: 1)[0].id
+    let snapshot = await store.snapshot(center: a, depth: 3, biggestLimit: 1)
+    #expect(snapshot.segments == (await store.sunburst(center: a, depth: 3)))
+    #expect(snapshot.biggest == (await store.rows(childrenOf: a, limit: 1)))
+    #expect(snapshot.breadcrumb == (await store.breadcrumb(to: a)))
+    #expect(snapshot.breadcrumb.map(\.name) == ["fx", "a"] && snapshot.biggest.count == 1)
 }
