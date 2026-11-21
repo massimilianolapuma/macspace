@@ -115,3 +115,29 @@ private func tree(_ sizes: [UInt64]) -> FileTree {
     #expect(SunburstLayout.normalizedAngle(2 * .pi) == 0)
     #expect(SunburstLayout.normalizedAngle(-.pi / 2) == 1.5 * .pi)
 }
+
+@Test func segmentsCarryDominantCategoryAndLastUse() {
+    let t = FileTree(rootName: "r", rootPath: "/r")
+    let d = t.addChild(of: 0, name: "d", kind: .directory, allocatedSize: 0)
+    t.addChild(of: d, name: "a.mov", kind: .file, allocatedSize: 600, category: .video, lastUsed: 40)
+    t.addChild(of: d, name: "b.pdf", kind: .file, allocatedSize: 300, category: .document, lastUsed: 70)
+    t.addChild(of: 0, name: "c.mp3", kind: .file, allocatedSize: 500, category: .music, lastUsed: 20)
+    let segs = SunburstLayout.compute(tree: t, center: 0)
+    #expect(segs.count == 4)
+    for seg in segs {
+        let node = try! #require(seg.node)
+        #expect(seg.category == t.dominantCategory(node) && seg.lastUsed == t.lastUsed(node), "\(seg.name)")
+    }
+    #expect(segs.first { $0.node == d }?.category == .video)
+}
+
+@Test func mergedOtherIsOtherCategoryWithTheLatestUse() {
+    let t = FileTree(rootName: "r", rootPath: "/r")
+    t.addChild(of: 0, name: "big.mov", kind: .file, allocatedSize: 1_000_000_000, category: .video, lastUsed: 5)
+    for i in 0..<100 {
+        t.addChild(of: 0, name: "s\(i).pdf", kind: .file, allocatedSize: 1, category: .document, lastUsed: UInt32(100 + i))
+    }
+    let segs = SunburstLayout.compute(tree: t, center: 0)
+    let other = try! #require(segs.first { $0.node == nil })
+    #expect(other.otherCount == 100 && other.category == .other && other.lastUsed == 199)
+}

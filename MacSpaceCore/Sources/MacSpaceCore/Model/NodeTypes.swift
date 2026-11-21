@@ -20,13 +20,20 @@ public struct NodeRow: Sendable, Hashable, Identifiable {
     public let kind: NodeKind
     public let flags: NodeFlags
     public let hasChildren: Bool
+    /// A file's category; for a directory, its dominant category (`FileTree.dominantCategory`).
+    public let category: FileCategory
+    /// Seconds since 1970 (0 = unknown); for a directory, the latest over its contents.
+    public let lastUsed: UInt32
 
-    public init(id: NodeID, name: String, size: UInt64, kind: NodeKind, flags: NodeFlags, hasChildren: Bool) {
+    public init(id: NodeID, name: String, size: UInt64, kind: NodeKind, flags: NodeFlags, hasChildren: Bool,
+                category: FileCategory = .other, lastUsed: UInt32 = 0) {
         self.id = id
         self.name = name
         self.size = size
         self.kind = kind
         self.flags = flags
         self.hasChildren = hasChildren
+        self.category = category
+        self.lastUsed = lastUsed
     }
 }

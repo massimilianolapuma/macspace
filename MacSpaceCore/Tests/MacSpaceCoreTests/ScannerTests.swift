@@ -138,3 +138,36 @@ func scanFixture(_ fx: Fixture) async throws -> (ScanStore, ScanSummary) {
     #expect(snapshot.breadcrumb == (await store.breadcrumb(to: a)))
     #expect(snapshot.breadcrumb.map(\.name) == ["fx", "a"] && snapshot.biggest.count == 1)
 }
+@Test func scanClassifiesWithContext() async throws {
+    let fx = try Fixture(); defer { fx.cleanup() }
+    try fx.file("node_modules/x/big.js", bytes: 200_000); try fx.file("film.mov", bytes: 100_000)
+    let store = ScanStore(rootName: "fx", rootPath: fx.root.path, home: "/nonexistent")
+    _ = await Scanner(rootPath: fx.root.path, boundary: try .forFolder(fx.root.path)).scan(into: store)
+    let totals = await store.categoryTotals(of: FileTree.root)
+    #expect(totals[.development, default: 0] >= 200_000 && totals[.video, default: 0] >= 100_000)
+    let rows = await store.rows(childrenOf: FileTree.root, limit: 10)
+    #expect(rows.first { $0.name == "node_modules" }?.category == .development)
+    #expect(rows.allSatisfy { $0.lastUsed > 0 })
+}
+@Test func insertUsesRootContextTimesAndHardLinkDuplicates() async {
+    func file(_ name: String, size: UInt64, links: UInt32 = 1, mtime: UInt32, atime: UInt32) -> DirectoryEntry {
+        DirectoryEntry(name: name, kind: .file, allocatedSize: size, device: 1, inode: 42, linkCount: links,
+                       isMountPoint: false, isDataless: false, modificationTime: mtime, accessTime: atime)
+    }
+    let boundary = ScanBoundary(allowedDevices: [1], excludedPaths: [])
+    // Scanning an app bundle directly: everything inside is App, whatever its extension.
+    let app = ScanStore(rootName: "Xcode", rootPath: "/Applications/Xcode.app", home: "/nonexistent")
+    _ = await app.insert([file("clip.mov", size: 4096, mtime: 5, atime: 9)], under: FileTree.root,
+                         parentPath: "/Applications/Xcode.app", boundary: boundary)
+    #expect(await app.categoryTotals(of: FileTree.root) == [.app: 4096])
+    #expect(await app.row(FileTree.root).lastUsed == 9)
+    // A hard-link duplicate adds no bytes but still raises the last use.
+    let store = ScanStore(rootName: "fx", rootPath: "/fx", home: "/nonexistent")
+    _ = await store.insert([file("a.mov", size: 4096, links: 2, mtime: 10, atime: 20)], under: FileTree.root,
+                           parentPath: "/fx", boundary: boundary)
+    let dup = await store.insert([file("b.mov", size: 4096, links: 2, mtime: 30, atime: 25)], under: FileTree.root,
+                                 parentPath: "/fx", boundary: boundary)
+    #expect(dup.bytes == 0)
+    #expect(await store.categoryTotals(of: FileTree.root) == [.video: 4096])
+    #expect(await store.row(FileTree.root).lastUsed == 30)
+}

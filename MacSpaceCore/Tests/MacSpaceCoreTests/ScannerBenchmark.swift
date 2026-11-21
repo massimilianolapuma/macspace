@@ -44,6 +44,9 @@ func startupDiskScan() async throws {
     peakBytesPerFile=\(peakBytesPerFile) (max \(maxBytesPerFile)) \
     rootSize=\(mb(rootSize))MB usedSpace=\(mb(used))MB
     """)
+    let totals = await store.categoryTotals(of: FileTree.root)
+    print("BENCH categories " + FileCategory.allCases.filter { totals[$0] != nil }
+        .map { "\($0)=\(mb(totals[$0]!))MB" }.joined(separator: " "))
     #expect(!summary.wasCancelled)
     #expect(summary.duration < .seconds(90))
     #expect(peakBytesPerFile <= maxBytesPerFile)
