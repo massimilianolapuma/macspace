@@ -13,9 +13,13 @@ public struct ArcSegment: Sendable, Hashable, Identifiable {
     public var name: String
     /// Number of merged siblings; > 0 only for "altri".
     public var otherCount: Int
+    public var flags: NodeFlags
+    /// Whether the node has children to drill into; always false for "altri".
+    public var hasChildren: Bool
 
     public init(id: String, node: NodeID?, parent: NodeID, depth: Int, startAngle: Double,
-                endAngle: Double, size: UInt64, name: String, otherCount: Int) {
+                endAngle: Double, size: UInt64, name: String, otherCount: Int,
+                flags: NodeFlags = [], hasChildren: Bool = false) {
         self.id = id
         self.node = node
         self.parent = parent
@@ -25,6 +29,8 @@ public struct ArcSegment: Sendable, Hashable, Identifiable {
         self.size = size
         self.name = name
         self.otherCount = otherCount
+        self.flags = flags
+        self.hasChildren = hasChildren
     }
 }
 
@@ -54,9 +60,11 @@ public enum SunburstLayout {
                 if size == 0 { break }  // sorted by size descending: the rest are empty too
                 let childSpan = span * Double(size) / parentSize
                 if childSpan < minAngle { break }  // so are all following siblings
+                let row = tree.row(child)
                 result.append(ArcSegment(id: "\(child)", node: child, parent: parent, depth: ringDepth,
                                          startAngle: cursor, endAngle: cursor + childSpan, size: size,
-                                         name: tree.name(child), otherCount: 0))
+                                         name: row.name, otherCount: 0, flags: row.flags,
+                                         hasChildren: row.hasChildren))
                 if ringDepth < depth, tree.kind(child) == .directory {
                     queue.append((child, cursor, cursor + childSpan, ringDepth + 1))
                 }
