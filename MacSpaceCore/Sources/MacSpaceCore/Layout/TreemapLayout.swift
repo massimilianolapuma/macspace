@@ -66,7 +66,8 @@ public enum TreemapLayout {
         public var headerMinHeight: Double
         /// Siblings whose tile would cover less than this area merge into "altri".
         public var minTileArea: Double
-        /// At most this many siblings get tiles of their own; smaller ones merge into "altri".
+        /// At most this many siblings get tiles of their own: the largest, ties going to the
+        /// earliest inserted. The rest merge into "altri".
         public var maxTilesPerFamily: Int
         /// Subdivision stops before the layout would exceed this many tiles (the center's own
         /// children are always laid out, so keep it above `maxTilesPerFamily`).
@@ -93,11 +94,12 @@ public enum TreemapLayout {
     /// squarified algorithm (Bruls, Huizing, van Wijk 2000). Each tile gets an area proportional
     /// to its size over its parent's (a folder's own bytes leave a little space unused, as in the
     /// sunburst). Siblings whose tile would be smaller than `minTileArea`, or that fall outside
-    /// the `maxTilesPerFamily` largest, are merged into one trailing "altri" tile (only two or
-    /// more non-empty ones; a lone one is kept as itself). Empty nodes are skipped; files,
-    /// "altri" and the last level are never subdivided, nor is a tile whose inner area is under
-    /// 1 pt on either side. Output is ordered level by level, each family by size descending with
-    /// "altri" last, so parents always precede their children.
+    /// the `maxTilesPerFamily` largest (ties: earliest inserted first), are merged into one
+    /// trailing "altri" tile (only two or more non-empty ones; a lone one is kept as itself).
+    /// Empty nodes are skipped; files, "altri" and the last level are never subdivided, nor is a
+    /// tile whose inner area is under 1 pt on either side. Output is ordered level by level, each
+    /// family like `children(of:)` (size descending, then name) with "altri" last, so parents
+    /// always precede their children.
     ///
     /// Cost is bounded by the style, not the tree: a family has at most `maxTilesPerFamily + 1`
     /// tiles, and families are laid out breadth-first until the next one would push the total
@@ -125,38 +127,72 @@ public enum TreemapLayout {
             guard parentSize > 0 else { continue }
             let scale = region.width * region.height / Double(parentSize)  // pt² per byte
 
-            // A child gets its own tile when it holds at least `minSize` bytes: enough to cover
-            // minTileArea, and among the family's `maxTilesPerFamily` largest.
+            // A child gets its own tile when it holds at least `minSize` bytes (enough to cover
+            // minTileArea) and is among the family's `maxTilesPerFamily` largest, ranked by size
+            // then node id (earliest inserted first), so ties never compare names. The rest is
+            // tallied into "altri".
             let threshold = style.minTileArea / scale
-            var minSize = threshold >= Double(UInt64.max) ? UInt64.max : UInt64(max(1, threshold.rounded(.up)))
-            // Sizes only, no names: at most canvas area / minTileArea of them, cheap to sort.
-            var visibleSizes: [UInt64] = []
-            tree.forEachChild(of: parent) { child in
-                let size = tree.size(child)
-                if size >= minSize { visibleSizes.append(size) }
-            }
-            let familyLimit = max(0, style.maxTilesPerFamily)
-            if visibleSizes.count > familyLimit {
-                // The (limit + 1)-th largest size, and everything that small or smaller, merges.
-                visibleSizes.sort(by: >)
-                let firstOut = visibleSizes[familyLimit]
-                minSize = max(minSize, firstOut == .max ? .max : firstOut + 1)
-            }
-            // The merged ones are tallied in one unsorted pass, so a folder of a million tiny
-            // files costs O(n), not a full sort; only the visible ones get sorted.
+            let minSize = threshold >= Double(UInt64.max) ? UInt64.max : UInt64(max(1, threshold.rounded(.up)))
             var otherSize: UInt64 = 0
             var otherCount = 0
             var otherLastUsed: UInt32 = 0
             var lastOther: NodeID = 0
-            tree.forEachChild(of: parent) { child in
-                let size = tree.size(child)
-                guard size > 0, size < minSize else { return }
+            func addOther(_ child: NodeID, size: UInt64) {
                 otherSize &+= size
                 otherCount += 1
                 otherLastUsed = max(otherLastUsed, tree.lastUsed(child))
                 lastOther = child
             }
-            var members = tree.children(of: parent, minSize: minSize)
+            // The one pass over all children: a folder of a million tiny files costs O(n). What
+            // passes the area test is bounded by canvas area / minTileArea.
+            var members: [NodeID] = []
+            tree.forEachChild(of: parent) { child in
+                let size = tree.size(child)
+                guard size > 0 else { return }
+                if size >= minSize { members.append(child) } else { addOther(child, size: size) }
+            }
+            let familyLimit = max(0, style.maxTilesPerFamily)
+            if members.count > familyLimit {
+                let candidates = members
+                members = []
+                // The last member's size is the smallest of the `familyLimit` largest, found with
+                // a min-heap of sizes. Of the children that size, the earliest inserted fill the
+                // places the larger ones leave.
+                var cutoff = UInt64.max
+                var lastTie: NodeID = -1
+                if familyLimit > 0 {
+                    var largest: [UInt64] = []
+                    largest.reserveCapacity(familyLimit)
+                    for child in candidates {
+                        let size = tree.size(child)
+                        if largest.count < familyLimit {
+                            largest.append(size)
+                            siftUp(&largest, from: largest.count - 1)
+                        } else if size > largest[0] {
+                            largest[0] = size
+                            siftDown(&largest, from: 0)
+                        }
+                    }
+                    cutoff = largest[0]
+                    var larger = 0
+                    var ties: [NodeID] = []
+                    for child in candidates {
+                        let size = tree.size(child)
+                        if size > cutoff { larger += 1 } else if size == cutoff { ties.append(child) }
+                    }
+                    ties.sort()
+                    lastTie = ties[familyLimit - larger - 1]
+                }
+                for child in candidates {
+                    let size = tree.size(child)
+                    if size > cutoff || (size == cutoff && child <= lastTie) {
+                        members.append(child)
+                    } else {
+                        addOther(child, size: size)
+                    }
+                }
+            }
+            tree.sortLikeChildren(&members)
             // A lone small sibling is drawn as itself: "altri" only ever stands for two or more.
             if otherCount == 1 { members.append(lastOther) }
             let hasOther = otherCount > 1
@@ -224,6 +260,30 @@ public enum TreemapLayout {
             if best.map({ tile.depth > $0.depth }) ?? true { best = tile }
         }
         return best
+    }
+
+    /// Min-heap helpers on sizes, for picking the largest children without sorting them all.
+    private static func siftUp(_ heap: inout [UInt64], from index: Int) {
+        var i = index
+        while i > 0 {
+            let up = (i - 1) / 2
+            guard heap[i] < heap[up] else { return }
+            heap.swapAt(i, up)
+            i = up
+        }
+    }
+
+    private static func siftDown(_ heap: inout [UInt64], from index: Int) {
+        var i = index
+        while true {
+            let l = 2 * i + 1, r = l + 1
+            var smallest = i
+            if l < heap.count, heap[l] < heap[smallest] { smallest = l }
+            if r < heap.count, heap[r] < heap[smallest] { smallest = r }
+            if smallest == i { return }
+            heap.swapAt(i, smallest)
+            i = smallest
+        }
     }
 
     /// Squarified rects for `areas` (descending, positive, summing to at most `bounds`' area),

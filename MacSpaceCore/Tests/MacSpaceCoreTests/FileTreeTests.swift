@@ -119,10 +119,13 @@ import Testing
     #expect(t.categoryTotals(0).values.reduce(0, +) == t.size(0))
 }
 
-@Test func childrenWithMinSizeMatchSortedPrefix() {
+@Test func sortLikeChildrenMatchesChildrenOrder() {
     let t = FileTree(rootName: "r", rootPath: "/r")
     for i in 0..<200 { t.addChild(of: 0, name: "f\(i % 37)", kind: .file, allocatedSize: UInt64(i % 50)) }
-    #expect(t.children(of: 0, minSize: 30) == t.children(of: 0).filter { t.size($0) >= 30 })
-    #expect(t.children(of: 0, minSize: 0) == t.children(of: 0))
-    #expect(t.children(of: 0, minSize: .max).isEmpty)
+    var picked = t.children(of: 0).filter { $0 % 3 == 0 }.shuffled()
+    t.sortLikeChildren(&picked)
+    #expect(picked == t.children(of: 0).filter { $0 % 3 == 0 })
+    var all = (1...200).map { NodeID($0) }
+    t.sortLikeChildren(&all)
+    #expect(all == t.children(of: 0))
 }

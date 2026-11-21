@@ -190,15 +190,12 @@ public final class FileTree {
         return result
     }
 
-    /// The children of `id` of at least `minSize` bytes, in `children(of:)` order. Only those get
-    /// sorted, so a folder of a million mostly tiny files costs one pass plus a small sort.
-    func children(of id: NodeID, minSize: UInt64) -> [NodeID] {
-        var result: [NodeID] = []
-        forEachChild(of: id) { if sizes[Int($0)] >= minSize { result.append($0) } }
+    /// Sorts `ids` into `children(of:)` order (size descending, then name), so a caller can pick
+    /// a few children in one unsorted pass and sort only those.
+    func sortLikeChildren(_ ids: inout [NodeID]) {
         nameBytes.withUnsafeBufferPointer { arena in
-            result.sort { precedes($0, $1, arena) }
+            ids.sort { precedes($0, $1, arena) }
         }
-        return result
     }
 
     /// Calls `body` on every child of `id`, in no particular order, without sorting or allocating.

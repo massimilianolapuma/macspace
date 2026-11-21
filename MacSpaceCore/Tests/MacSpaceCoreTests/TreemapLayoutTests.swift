@@ -153,22 +153,34 @@ func randomTreeTilesAreFiniteNonNegativeAndNested(width: Double, height: Double)
     #expect(tiles.reduce(0) { $0 + $1.size } == t.size(0))
 }
 
-@Test func familyBudgetMergesTheRestIntoOther() {
+@Test func familyBudgetKeepsTheLargestAndMergesTheRest() {
     // Every one of these would cover > 36 pt², but only 1 200 siblings get tiles of their own.
-    let equal = TreemapLayout.compute(tree: flat(Array(repeating: 10, count: 100_000)), center: 0, width: 2560, height: 1600)
-    #expect(equal.count <= 1201 && equal.allSatisfy { $0.depth == 1 })
     let tiles = TreemapLayout.compute(tree: flat((1...100_000).map { UInt64($0) }), center: 0, width: 2560, height: 1600)
     #expect(tiles.count == 1201 && tiles.last!.node == nil && tiles.last!.otherCount == 100_000 - 1200)
     #expect(tiles.dropLast().allSatisfy { $0.size > 100_000 - 1200 })
     #expect(tiles.reduce(0) { $0 + $1.size } == 100_000 * 100_001 / 2)
 }
 
+@Test func familyBudgetKeepsEqualSizedFilesVisible() {
+    // 5 000 similar photos: 1 200 of them are drawn, not one grey "altri" block.
+    let tiles = TreemapLayout.compute(tree: flat(Array(repeating: 1_000, count: 5_000)), center: 0, width: 2560, height: 1600)
+    let members = tiles.filter { $0.node != nil }
+    #expect(tiles.count == 1201 && members.count == 1200)
+    #expect(tiles.last!.node == nil && tiles.last!.otherCount == 3_800 && tiles.last!.size == 3_800_000)
+    // Ties go to the earliest inserted (node ids 1...1200), then are ordered like `children(of:)`.
+    #expect(Set(members.compactMap(\.node)) == Set(1...1200))
+    let names = members.map(\.name)
+    #expect(names == names.sorted())
+    let equal = TreemapLayout.compute(tree: flat(Array(repeating: 10, count: 100_000)), center: 0, width: 2560, height: 1600)
+    #expect(equal.count == 1201 && equal.last!.otherCount == 100_000 - 1200)
+}
+
 @Test func largeOtherIsSquarifiedInSizeOrder() {
-    // 2 000 small siblings exceed the family budget and merge into an "altri" (320 000 pt²)
+    // 10 000 small siblings (32 pt² each, under minTileArea) merge into an "altri" of 320 000 pt²,
     // far larger than the four big ones (40 000 pt² each).
-    let tiles = TreemapLayout.compute(tree: flat(Array(repeating: 40_000, count: 4) + Array(repeating: 160, count: 2_000)),
+    let tiles = TreemapLayout.compute(tree: flat(Array(repeating: 40_000, count: 4) + Array(repeating: 32, count: 10_000)),
                                       center: 0, width: 800, height: 600)
-    #expect(tiles.count == 5 && tiles[4].node == nil && tiles[4].otherCount == 2_000)
+    #expect(tiles.count == 5 && tiles[4].node == nil && tiles[4].otherCount == 10_000)
     #expect(abs(tiles[4].width * tiles[4].height - 320_000) < 1)
     #expect(tiles.allSatisfy { max($0.width / $0.height, $0.height / $0.width) <= 3 })
     #expect(tiles.allSatisfy { $0.x >= 0 && $0.y >= 0 && $0.x + $0.width <= 800.001 && $0.y + $0.height <= 600.001 })
