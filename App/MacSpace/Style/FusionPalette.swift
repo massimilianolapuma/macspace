@@ -26,69 +26,106 @@ struct FusionPalette {
     }
 
     /// How much a hovered segment lightens, in lightness percent.
-    static let hoverLift = 12.0
+    static let hoverLift = ChartPalette.hoverLift
 
     /// Text drawn on a ring fill of the given lightness: white or the scheme's ink, whichever
     /// contrasts more, falling back to pure black or white so every fill, hover-lifted ones
     /// included, reaches at least 4.5:1 (checked in `ContrastTests`).
     static func ringLabel(lightness: Double, scheme: ColorScheme) -> Color {
         color(Contrast.labelInk(on: ringRGB(lightness: lightness, scheme: scheme),
-                                preferred: [Contrast.RGB(1, 1, 1), ink(scheme)]))
-    }
-
-    /// The scheme's dark text, as RGB.
-    private static func ink(_ scheme: ColorScheme) -> Contrast.RGB {
-        scheme == .dark ? Contrast.RGB(0x1C / 255, 0x1C / 255, 0x1E / 255)
-                        : Contrast.RGB(0x1F / 255, 0x1B / 255, 0x16 / 255)
+                                preferred: [Contrast.RGB(1, 1, 1), ChartPalette.ink(paletteScheme(scheme))]))
     }
 
     private static func ringRGB(lightness: Double, scheme: ColorScheme) -> Contrast.RGB {
         scheme == .dark ? Contrast.hsl(240, 4, lightness) : Contrast.hsl(30, 10, lightness)
     }
 
-    /// Fill of a chart element and the label ink for it, in color mode `mode`. `depth` is 1 for
-    /// the innermost ring (or top-level tile) and `index` the element's position among its
-    /// siblings. Neutral is the plan-1 ring palette, unchanged. By type takes the category's
-    /// `ChartPalette` color, lightened by 6 points of lightness per level below the first. By
-    /// last use takes the age bucket's color at every level: its lightness *is* the age, so a
-    /// depth shift would make a deep recent folder read as an older one.
-    static func fill(category: FileCategory, lastUsed: UInt32, mode: ColorMode, depth: Int, index: Int,
-                     scheme: ColorScheme, now: UInt32) -> (fill: Color, label: Color) {
-        fill(category: category, lastUsed: lastUsed, mode: mode, depth: Double(depth), step: Double(index % 4),
-             scheme: scheme, now: now)
+    /// What a chart element's color depends on: its dominant category and age bucket, and
+    /// whether it is a merged "Altri N elementi" element (`node == nil`).
+    struct FillSubject {
+        var category: FileCategory
+        var ageBucket: AgeBucket
+        var isMerged: Bool
+
+        init(_ segment: ArcSegment) {
+            self.init(category: segment.category, ageBucket: segment.ageBucket, isMerged: segment.node == nil)
+        }
+
+        init(_ tile: TreemapTile) {
+            self.init(category: tile.category, ageBucket: tile.ageBucket, isMerged: tile.node == nil)
+        }
+
+        init(category: FileCategory, ageBucket: AgeBucket, isMerged: Bool) {
+            self.category = category
+            self.ageBucket = ageBucket
+            self.isMerged = isMerged
+        }
     }
 
-    /// `fill` with a continuous `depth` and `step` (`index % 4`), so animations can blend
-    /// between levels, plus `lift` points of lightness (`hoverLift` while hovered).
-    static func fill(category: FileCategory, lastUsed: UInt32, mode: ColorMode, depth: Double, step: Double,
-                     lift: Double = 0, scheme: ColorScheme, now: UInt32) -> (fill: Color, label: Color) {
-        let base: Contrast.RGB
-        var levelLift = 0.0
-        let palette: ChartPalette.Scheme = scheme == .dark ? .dark : .light
+    /// Fill of a chart element in color mode `mode`; `depth` is 1 for the innermost ring (or
+    /// top-level tile) and `index` the element's position among its siblings. Used by both charts.
+    ///
+    /// - Neutral: the plan-1 ring palette, unchanged.
+    /// - By type: the category's `ChartPalette.categoryFill`, 6 lightness points lighter per level
+    ///   below the first. Merged "altri" elements mix types, so they keep the neutral ring tone.
+    /// - By last use: the age bucket's `ChartPalette.ageFill`, the same at every depth (Ruling V:
+    ///   its lightness *is* the age, so a depth shift would make a deep recent folder read as an
+    ///   older one). Merged "altri" take the bucket holding most of their bytes, which their
+    ///   tooltip states ("Per lo più").
+    ///
+    /// The label ink is a separate call (`label`), so drawing loops pay for it only where a
+    /// label is actually placed.
+    static func fill(_ subject: FillSubject, mode: ColorMode, depth: Int, index: Int, scheme: ColorScheme) -> Color {
+        fill(subject, mode: mode, depth: Double(depth), step: Double(index % 4), scheme: scheme)
+    }
+
+    /// Label ink for text drawn on `fill(subject, …)` with the same arguments: at least 4.5:1.
+    static func label(_ subject: FillSubject, mode: ColorMode, depth: Int, index: Int, scheme: ColorScheme) -> Color {
+        label(subject, mode: mode, depth: Double(depth), step: Double(index % 4), scheme: scheme)
+    }
+
+    /// `fill` with a continuous `depth` and `step` (`index % 4`), so animations can blend between
+    /// levels, plus `lift` points of lightness (`hoverLift` while hovered).
+    static func fill(_ subject: FillSubject, mode: ColorMode, depth: Double, step: Double, lift: Double = 0,
+                     scheme: ColorScheme) -> Color {
+        if let rgb = coloredRGB(subject, mode: mode, depth: depth, lift: lift, scheme: scheme) { return color(rgb) }
+        return ring(lightness: ringLightness(depth: depth, step: step, scheme: scheme) + lift, scheme: scheme)
+    }
+
+    /// `label` with a continuous `depth` and `step`, plus `lift`.
+    static func label(_ subject: FillSubject, mode: ColorMode, depth: Double, step: Double, lift: Double = 0,
+                      scheme: ColorScheme) -> Color {
+        if let rgb = coloredRGB(subject, mode: mode, depth: depth, lift: lift, scheme: scheme) {
+            return color(ChartPalette.labelInk(on: rgb, scheme: paletteScheme(scheme)))
+        }
+        return ringLabel(lightness: ringLightness(depth: depth, step: step, scheme: scheme) + lift, scheme: scheme)
+    }
+
+    /// The fill in a colored mode; nil when the element takes the neutral ring tone.
+    private static func coloredRGB(_ subject: FillSubject, mode: ColorMode, depth: Double, lift: Double,
+                                   scheme: ColorScheme) -> Contrast.RGB? {
         switch mode {
         case .neutral:
-            let lightness = ringLightness(depth: depth, step: step, scheme: scheme) + lift
-            return (ring(lightness: lightness, scheme: scheme), ringLabel(lightness: lightness, scheme: scheme))
+            nil
         case .category:
-            base = ChartPalette.category(category, scheme: palette)
-            levelLift = 6 * (max(depth, 1) - 1)
+            subject.isMerged ? nil
+                : ChartPalette.categoryFill(subject.category, scheme: paletteScheme(scheme), depth: depth, lift: lift)
         case .lastUse:
-            base = ChartPalette.age(AgeBucket(lastUsed: lastUsed, now: now), scheme: palette)
+            ChartPalette.ageFill(subject.ageBucket, scheme: paletteScheme(scheme), lift: lift)
         }
-        let (h, s, l) = Contrast.hslComponents(base)
-        // Capped so the outer levels of the lightest colors stay off the background.
-        let lighter = min(l + levelLift, max(l, scheme == .dark ? 78 : 86))
-        let rgb = Contrast.hsl(h, s, min(lighter + lift, 100))
-        return (color(rgb), color(Contrast.labelInk(on: rgb, preferred: [Contrast.RGB(1, 1, 1), ink(scheme)])))
+    }
+
+    private static func paletteScheme(_ scheme: ColorScheme) -> ChartPalette.Scheme {
+        scheme == .dark ? .dark : .light
     }
 
     /// The base color of a category or age bucket (its first-level fill), for legend and list dots.
     static func swatch(_ category: FileCategory, scheme: ColorScheme) -> Color {
-        color(ChartPalette.category(category, scheme: scheme == .dark ? .dark : .light))
+        color(ChartPalette.categoryFill(category, scheme: paletteScheme(scheme)))
     }
 
     static func swatch(_ bucket: AgeBucket, scheme: ColorScheme) -> Color {
-        color(ChartPalette.age(bucket, scheme: scheme == .dark ? .dark : .light))
+        color(ChartPalette.ageFill(bucket, scheme: paletteScheme(scheme)))
     }
 
     /// Hairline around a swatch dot, so pale or dark swatches still show against the window.

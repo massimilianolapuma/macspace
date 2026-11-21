@@ -28,13 +28,18 @@ enum Formatters {
     }
 
     /// An estimated last use relative to now ("3 mesi fa"); "Sconosciuto" for 0.
+    @MainActor
     static func lastUsedAge(_ timestamp: UInt32, now: Date = .now) -> String {
         guard timestamp != 0 else { return String(localized: "Sconosciuto") }
+        return relative.localizedString(for: min(Date(timeIntervalSince1970: TimeInterval(timestamp)), now),
+                                        relativeTo: now)
+    }
+
+    @MainActor private static let relative: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
         formatter.locale = locale
         formatter.dateTimeStyle = .named
         formatter.unitsStyle = .full
-        return formatter.localizedString(for: min(Date(timeIntervalSince1970: TimeInterval(timestamp)), now),
-                                         relativeTo: now)
-    }
+        return formatter
+    }()
 }

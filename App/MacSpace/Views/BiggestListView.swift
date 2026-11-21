@@ -38,7 +38,8 @@ struct BiggestListView: View {
         ScrollView {
             VStack(spacing: 0) {  // at most `ScanModel.biggestLimit` rows: no need for lazy loading
                 ForEach(model.biggest) { row in
-                    BiggestRow(model: model, row: row, total: model.breadcrumb.last?.size ?? 0, colorMode: colorMode,
+                    BiggestRow(model: model, row: row, total: model.breadcrumb.last?.size ?? 0,
+                               colorMode: colorMode,
                                hover: { hover(row, $0) },
                                open: { model.drill(into: row.id) })
                 }
@@ -125,8 +126,8 @@ private struct BiggestRow: View {
         .contentShape(Rectangle())
     }
 
-    /// The row's file type (by type) or estimated last use (by last use), with its chart color;
-    /// nothing in neutral mode.
+    /// The row's file type (by type), or by last use a folder's dominant age bucket and a file's
+    /// relative last use, with its chart color; nothing in neutral mode.
     @ViewBuilder
     private var detail: some View {
         switch colorMode {
@@ -135,11 +136,14 @@ private struct BiggestRow: View {
         case .category:
             RowDetail(color: FusionPalette.swatch(row.category, scheme: scheme),
                       text: String(localized: row.category.title))
+        case .lastUse where row.kind == .directory:
+            // A folder: the age of most of its bytes, not of its latest touch.
+            RowDetail(color: FusionPalette.swatch(row.ageBucket, scheme: scheme),
+                      text: String(localized: row.ageBucket.title))
+                .accessibilityLabel(Text("Per lo più: \(String(localized: row.ageBucket.title))"))
         case .lastUse:
             let age = Formatters.lastUsedAge(row.lastUsed)
-            RowDetail(color: FusionPalette.swatch(AgeBucket(lastUsed: row.lastUsed, now: Date.now.timestamp),
-                                                  scheme: scheme),
-                      text: age)
+            RowDetail(color: FusionPalette.swatch(row.ageBucket, scheme: scheme), text: age)
                 .accessibilityLabel(Text("Ultimo uso (stimato): \(age)"))
         }
     }

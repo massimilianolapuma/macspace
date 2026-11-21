@@ -64,6 +64,9 @@
     "Oltre 2 anni" : {
 
     },
+    "Per lo più: %@" : {
+
+    },
     "Per tipo di file" : {
 
     },
@@ -110,6 +113,9 @@
 
     },
     "Ultimo uso (stimato): %@" : {
+
+    },
+    "Uso più recente (stimato): %@" : {
 
     },
     "Video" : {

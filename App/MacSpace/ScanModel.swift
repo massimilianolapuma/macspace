@@ -35,6 +35,8 @@ final class ScanModel {
     var breadcrumb: [NodeRow] = []
     /// Bytes per file category below `center`, non-zero entries only (for the legend).
     var categoryTotals: [FileCategory: UInt64] = [:]
+    /// Bytes per age bucket below `center`, non-zero entries only (for the legend).
+    var ageTotals: [AgeBucket: UInt64] = [:]
     var hovered: ArcSegment?
     /// Total capacity of the scanned volume; set only when scanning the startup disk.
     var capacity: UInt64?
@@ -82,7 +84,7 @@ final class ScanModel {
         }
     }
 
-    /// Reloads `segments`, `biggest`, `breadcrumb` and `categoryTotals` for the current `center`, from one
+    /// Reloads `segments`, `biggest`, `breadcrumb`, `categoryTotals` and `ageTotals` for the current `center`, from one
     /// consistent store snapshot.
     func refreshViews() async {
         guard let store else { return }
@@ -96,6 +98,7 @@ final class ScanModel {
             biggest = snapshot.biggest
             breadcrumb = snapshot.breadcrumb
             if categoryTotals != snapshot.categoryTotals { categoryTotals = snapshot.categoryTotals }
+            if ageTotals != snapshot.ageTotals { ageTotals = snapshot.ageTotals }
             if let hovered {
                 let fresh = snapshot.segments.first { $0.id == hovered.id }
                 if fresh != hovered { self.hovered = fresh }
@@ -125,6 +128,7 @@ final class ScanModel {
         biggest = []
         breadcrumb = []
         categoryTotals = [:]
+        ageTotals = [:]
         phase = .scanning(ScanProgress(filesSeen: 0, bytesSeen: 0, directoriesPending: 1))
 
         let latest = LatestProgress()

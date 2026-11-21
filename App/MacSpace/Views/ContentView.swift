@@ -22,7 +22,7 @@ struct ContentView: View {
                     .opacity(model.breadcrumb.isEmpty ? 0 : 1)
                 SunburstView(model: model, colorMode: colorMode)
                     .padding(.horizontal, 8)
-                    .padding(.bottom, colorMode == .neutral ? 8 : 4)
+                    .padding(.bottom, 4)
                 ChartLegend(model: model, mode: colorMode)
                     .padding(.horizontal, 16)
                     .padding(.bottom, 12)

@@ -1,34 +1,53 @@
 import MacSpaceCore
 import SwiftUI
 
-/// What the chart colors mean, under the chart. By file type: one chip per category present in
-/// the current folder, largest first, with how much it takes. By last use: the six age buckets
-/// in order. Hidden in neutral mode and before a scan.
+/// What the chart colors mean, under the chart: one chip per category (by file type) or age
+/// bucket (by last use) present in the current folder, with how much it takes. Categories run
+/// largest first, buckets in age order. Empty in neutral mode and before a scan.
+///
+/// The legend always keeps room for two rows, whatever the mode, so switching mode never
+/// resizes the chart (it would jump, and every ring label would be refitted).
 struct ChartLegend: View {
     let model: ScanModel
     let mode: ColorMode
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        if mode != .neutral, !model.breadcrumb.isEmpty {
-            LegendFlow(horizontalSpacing: 16, verticalSpacing: 6) {
-                switch mode {
-                case .category:
-                    ForEach(categories, id: \.category) { entry in
-                        LegendChip(color: FusionPalette.swatch(entry.category, scheme: scheme),
-                                   title: entry.category.title, detail: Formatters.bytes(entry.bytes))
+        ZStack(alignment: .top) {
+            reservedHeight
+            if mode != .neutral, !model.breadcrumb.isEmpty {
+                LegendFlow(horizontalSpacing: 16, verticalSpacing: Self.rowSpacing) {
+                    switch mode {
+                    case .category:
+                        ForEach(categories, id: \.category) { entry in
+                            LegendChip(color: FusionPalette.swatch(entry.category, scheme: scheme),
+                                       title: entry.category.title, detail: Formatters.bytes(entry.bytes))
+                        }
+                    case .lastUse:
+                        ForEach(ages, id: \.bucket) { entry in
+                            LegendChip(color: FusionPalette.swatch(entry.bucket, scheme: scheme),
+                                       title: entry.bucket.title, detail: Formatters.bytes(entry.bytes))
+                        }
+                    case .neutral:
+                        EmptyView()
                     }
-                case .lastUse:
-                    ForEach(AgeBucket.allCases, id: \.self) { bucket in
-                        LegendChip(color: FusionPalette.swatch(bucket, scheme: scheme), title: bucket.title,
-                                   detail: nil)
-                    }
-                case .neutral:
-                    EmptyView()
                 }
+                .accessibilityElement(children: .contain)
             }
-            .accessibilityElement(children: .contain)
         }
+    }
+
+    private static let rowSpacing = 6.0
+
+    /// Two rows of chip text, invisible: the room the legend keeps in every mode.
+    private var reservedHeight: some View {
+        VStack(spacing: Self.rowSpacing) {
+            Text(verbatim: "Ag")
+            Text(verbatim: "Ag")
+        }
+        .font(LegendChip.font)
+        .hidden()
+        .accessibilityHidden(true)
     }
 
     /// Categories below the current folder by size, descending (ties in a fixed order).
@@ -36,10 +55,17 @@ struct ChartLegend: View {
         model.categoryTotals.map { ($0.key, $0.value) }
             .sorted { $0.1 != $1.1 ? $0.1 > $1.1 : $0.0.rawValue < $1.0.rawValue }
     }
+
+    /// Age buckets below the current folder, most recent first, unknown last.
+    private var ages: [(bucket: AgeBucket, bytes: UInt64)] {
+        AgeBucket.allCases.compactMap { bucket in model.ageTotals[bucket].map { (bucket, $0) } }
+    }
 }
 
 /// A color dot, its meaning and an optional figure.
 private struct LegendChip: View {
+    static let font = Font.callout
+
     let color: Color
     let title: LocalizedStringResource
     let detail: String?
@@ -60,7 +86,7 @@ private struct LegendChip: View {
                     .foregroundStyle(FusionPalette.secondaryText(scheme))
             }
         }
-        .font(.callout)
+        .font(Self.font)
         .lineLimit(1)
         .fixedSize()
         .accessibilityElement(children: .combine)

@@ -60,8 +60,3 @@ extension AgeBucket {
         }
     }
 }
-
-extension Date {
-    /// Seconds since 1970 in the tree's `lastUsed` format.
-    var timestamp: UInt32 { UInt32(clamping: Int64(timeIntervalSince1970)) }
-}

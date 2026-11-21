@@ -157,14 +157,14 @@ struct SunburstView: View {
             drawPlaceholder(in: &rings, band: geometry.band, geometry: geometry, date: date)
         }
 
-        let now = Date.now.timestamp
         var drawn: [(path: Path, pose: ArcPose, inner: Double)] = []
         drawn.reserveCapacity(poses.count)
         for (arc, pose) in poses {
             guard let inner = geometry.drawableInner(pose) else { continue }
             let path = Self.sector(center: geometry.center, inner: inner, outer: inner + geometry.ringWidth,
                                    start: pose.start, end: pose.end)
-            let fill = Self.fill(arc.segment, pose: pose, mode: colorMode, scheme: scheme, now: now).fill
+            let fill = FusionPalette.fill(.init(arc.segment), mode: colorMode, depth: pose.shadeDepth,
+                                          step: pose.shadeStep, scheme: scheme)
             rings.fill(path, with: .color(fill.opacity(pose.alpha)))
             drawn.append((path, pose, inner))
         }
@@ -173,7 +173,8 @@ struct SunburstView: View {
         }
         labels.prepare(generation: generation, size: geometry.size)
         for label in RingLabel.place(poses, geometry: geometry, planner: labels, in: rings) {
-            let ink = Self.fill(label.segment, pose: label.pose, mode: colorMode, scheme: scheme, now: now).label
+            let ink = FusionPalette.label(.init(label.segment), mode: colorMode, depth: label.pose.shadeDepth,
+                                          step: label.pose.shadeStep, scheme: scheme)
             RingLabel.draw(label, ink: ink, in: rings)
         }
 
@@ -209,13 +210,6 @@ struct SunburstView: View {
             context.stroke(Path(ellipseIn: geometry.rect(radius: r)),
                            with: .color(FusionPalette.background(scheme)), lineWidth: 1.5)
         }
-    }
-
-    /// Fill and label ink of `segment` drawn at `pose`, lifted by `lift` lightness points.
-    static func fill(_ segment: ArcSegment, pose: ArcPose, mode: ColorMode, lift: Double = 0, scheme: ColorScheme,
-                     now: UInt32) -> (fill: Color, label: Color) {
-        FusionPalette.fill(category: segment.category, lastUsed: segment.lastUsed, mode: mode,
-                           depth: pose.shadeDepth, step: pose.shadeStep, lift: lift, scheme: scheme, now: now)
     }
 
     static func title(of segment: ArcSegment) -> String {
@@ -273,9 +267,10 @@ private struct SunburstHoverLayer: View {
             ring.clip(to: geometry.band, style: FillStyle(eoFill: true))
             let path = SunburstView.sector(center: geometry.center, inner: inner, outer: inner + geometry.ringWidth,
                                            start: pose.start, end: pose.end)
-            let lifted = SunburstView.fill(current.arc.segment, pose: pose, mode: colorMode,
-                                           lift: FusionPalette.hoverLift, scheme: scheme, now: Date.now.timestamp)
-            ring.fill(path, with: .color(lifted.fill.opacity(pose.alpha)))
+            let subject = FusionPalette.FillSubject(current.arc.segment)
+            let fill = FusionPalette.fill(subject, mode: colorMode, depth: pose.shadeDepth, step: pose.shadeStep,
+                                          lift: FusionPalette.hoverLift, scheme: scheme)
+            ring.fill(path, with: .color(fill.opacity(pose.alpha)))
             if geometry.hasSeparator(pose, inner: inner) {
                 ring.stroke(path, with: .color(FusionPalette.background(scheme).opacity(pose.alpha)), lineWidth: 1)
             }
@@ -283,7 +278,9 @@ private struct SunburstHoverLayer: View {
             labels.prepare(generation: generation, size: geometry.size)
             if let label = RingLabel.place(motion.poses(at: date), geometry: geometry, planner: labels, in: ring,
                                            through: hoveredID).last, label.id == hoveredID {
-                RingLabel.draw(label, ink: lifted.label, in: ring)
+                let ink = FusionPalette.label(subject, mode: colorMode, depth: pose.shadeDepth, step: pose.shadeStep,
+                                              lift: FusionPalette.hoverLift, scheme: scheme)
+                RingLabel.draw(label, ink: ink, in: ring)
             }
         }
         if overCenter {
@@ -724,7 +721,9 @@ final class LabelPlanner {
 }
 
 /// Hover card: name, size and share of the current folder, file type, estimated last use, and
-/// whether it could be read. Type and last use are always in words, whatever the color mode.
+/// whether it could be read. Type and age are always in words, whatever the color mode. A folder
+/// (or merged "altri") states the age bucket holding most of its bytes and its most recent use;
+/// a file, its own last use.
 private struct SegmentTooltip: View {
     let segment: ArcSegment
     let total: UInt64
@@ -742,11 +741,16 @@ private struct SegmentTooltip: View {
                 .monospacedDigit()
                 .foregroundStyle(FusionPalette.secondaryText(scheme))
             Group {
-                // A merged "altri" segment mixes types: only its latest use is meaningful.
+                // A merged "altri" segment mixes types: it states no type.
                 if segment.node != nil {
                     Text("Tipo: \(String(localized: segment.category.title))")
                 }
-                Text("Ultimo uso (stimato): \(Formatters.lastUsedDate(segment.lastUsed))")
+                if segment.node == nil || segment.hasChildren {
+                    Text("Per lo più: \(String(localized: segment.ageBucket.title))")
+                    Text("Uso più recente (stimato): \(Formatters.lastUsedDate(segment.lastUsed))")
+                } else {
+                    Text("Ultimo uso (stimato): \(Formatters.lastUsedDate(segment.lastUsed))")
+                }
             }
             .font(.callout)
             .foregroundStyle(FusionPalette.secondaryText(scheme))
