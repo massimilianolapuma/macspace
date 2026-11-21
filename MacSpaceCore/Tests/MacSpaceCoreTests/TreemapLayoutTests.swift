@@ -147,8 +147,49 @@ func randomTreeTilesAreFiniteNonNegativeAndNested(width: Double, height: Double)
     let t = FileTree(rootName: "r", rootPath: "/r")
     for i in 0..<200_000 { t.addChild(of: 0, name: "f\(i)", kind: .file, allocatedSize: UInt64(i % 1000 + 1)) }
     let tiles = TreemapLayout.compute(tree: t, center: 0, width: 800, height: 600)
-    // Every drawn tile but "altri" covers at least minTileArea.
-    #expect(tiles.count <= 800 * 600 / 36 + 1)
+    // Every drawn tile but "altri" covers at least minTileArea, and the budget caps the rest.
+    #expect(tiles.count <= 800 * 600 / 36 + 1 && tiles.count <= 3000)
     #expect(tiles.last?.node == nil && tiles.last!.otherCount > 0)
     #expect(tiles.reduce(0) { $0 + $1.size } == t.size(0))
+}
+
+@Test func familyBudgetMergesTheRestIntoOther() {
+    // Every one of these would cover > 36 pt², but only 1 200 siblings get tiles of their own.
+    let equal = TreemapLayout.compute(tree: flat(Array(repeating: 10, count: 100_000)), center: 0, width: 2560, height: 1600)
+    #expect(equal.count <= 1201 && equal.allSatisfy { $0.depth == 1 })
+    let tiles = TreemapLayout.compute(tree: flat((1...100_000).map { UInt64($0) }), center: 0, width: 2560, height: 1600)
+    #expect(tiles.count == 1201 && tiles.last!.node == nil && tiles.last!.otherCount == 100_000 - 1200)
+    #expect(tiles.dropLast().allSatisfy { $0.size > 100_000 - 1200 })
+    #expect(tiles.reduce(0) { $0 + $1.size } == 100_000 * 100_001 / 2)
+}
+
+@Test func largeOtherIsSquarifiedInSizeOrder() {
+    // 2 000 small siblings exceed the family budget and merge into an "altri" (320 000 pt²)
+    // far larger than the four big ones (40 000 pt² each).
+    let tiles = TreemapLayout.compute(tree: flat(Array(repeating: 40_000, count: 4) + Array(repeating: 160, count: 2_000)),
+                                      center: 0, width: 800, height: 600)
+    #expect(tiles.count == 5 && tiles[4].node == nil && tiles[4].otherCount == 2_000)
+    #expect(abs(tiles[4].width * tiles[4].height - 320_000) < 1)
+    #expect(tiles.allSatisfy { max($0.width / $0.height, $0.height / $0.width) <= 3 })
+    #expect(tiles.allSatisfy { $0.x >= 0 && $0.y >= 0 && $0.x + $0.width <= 800.001 && $0.y + $0.height <= 600.001 })
+}
+
+@Test func totalBudgetStopsSubdividingBreadthFirst() {
+    let t = FileTree(rootName: "r", rootPath: "/r")
+    for d in 0..<10 {
+        let dir = t.addChild(of: 0, name: "d\(d)", kind: .directory, allocatedSize: 0)
+        for f in 0..<1_000 { t.addChild(of: dir, name: "f\(f)", kind: .file, allocatedSize: UInt64(1_000 + f)) }
+    }
+    let tiles = TreemapLayout.compute(tree: t, center: 0, width: 4000, height: 4000, depth: 2)
+    #expect(tiles.count <= 3000)
+    let parents = tiles.filter { $0.depth == 1 }
+    let subdivided = Set(tiles.filter { $0.depth == 2 }.map(\.parent))
+    #expect(parents.count == 10 && subdivided.count == 2)
+    // Only the parents actually subdivided keep a header; the largest ones go first.
+    #expect(parents.allSatisfy { $0.hasHeader == subdivided.contains($0.node!) })
+    #expect(subdivided == Set(parents.prefix(2).map { $0.node! }))
+    // Without the total budget every folder would be subdivided.
+    let unlimited = TreemapLayout.compute(tree: t, center: 0, width: 4000, height: 4000, depth: 2,
+                                          style: .init(maxTiles: .max))
+    #expect(Set(unlimited.filter { $0.depth == 2 }.map(\.parent)).count == 10)
 }
