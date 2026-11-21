@@ -31,7 +31,7 @@ public struct Scanner: Sendable {
     static let progressInterval: Duration = .milliseconds(100)
 
     public init(rootPath: String, boundary: ScanBoundary,
-                maxConcurrency: Int = ProcessInfo.processInfo.activeProcessorCount * 2) {
+                maxConcurrency: Int = ProcessInfo.processInfo.activeProcessorCount) {
         self.rootPath = rootPath
         self.boundary = boundary
         self.maxConcurrency = max(1, maxConcurrency)
@@ -40,6 +40,11 @@ public struct Scanner: Sendable {
     /// Scans from `rootPath` into `store`, whose root node represents `rootPath`.
     /// On cancellation, reads already in flight are drained and the summary reports
     /// `wasCancelled`; the store keeps whatever was inserted.
+    ///
+    /// Directory reads (and their `ScanStore` inserts) run in child tasks at `.utility`
+    /// priority, whatever the caller's priority, so higher-priority work, such as UI queries
+    /// to the same store, is scheduled ahead of them. Together with the default limit of one
+    /// read per active core, this keeps store queries responsive while a scan is running.
     public func scan(into store: ScanStore,
                      progress: (@Sendable (ScanProgress) -> Void)? = nil) async -> ScanSummary {
         let clock = ContinuousClock()
@@ -60,7 +65,7 @@ public struct Scanner: Sendable {
                         break
                     }
                     let next = pending.removeLast()
-                    group.addTask {
+                    group.addTask(priority: .utility) {
                         await Self.process(next.id, path: next.path, store: store, boundary: boundary)
                     }
                     inFlight += 1

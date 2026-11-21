@@ -21,6 +21,43 @@ func scanFixture(_ fx: Fixture) async throws -> (ScanStore, ScanSummary) {
     let f = try fx.file("x/big", bytes: 200_000); try fx.hardLink("y/big", to: f)
     let (store, _) = try await scanFixture(fx)
     #expect(await store.rootSize() < 2 * 200_000)
+    var links: [NodeRow] = []
+    for dir in await store.rows(childrenOf: FileTree.root, limit: 10) {
+        links += await store.rows(childrenOf: dir.id, limit: 10).filter { $0.name == "big" }
+    }
+    try #require(links.count == 2)
+    let counted = links.filter { $0.size > 0 }, duplicates = links.filter { $0.size == 0 }
+    #expect(counted.count == 1 && !counted[0].flags.contains(.hardLinkDuplicate))
+    #expect(duplicates.count == 1 && duplicates[0].flags.contains(.hardLinkDuplicate))
+}
+@Test func insertJoinsRootPathAndAppliesBoundary() async throws {
+    func dir(_ name: String, mountPoint: Bool = false) -> DirectoryEntry {
+        DirectoryEntry(name: name, kind: .directory, allocatedSize: 0, device: 1, inode: 0,
+                       linkCount: 1, isMountPoint: mountPoint, isDataless: false)
+    }
+    let boundary = ScanBoundary(allowedDevices: [1], excludedPaths: ["/System/Volumes/Data"])
+    let store = ScanStore(rootName: "Macintosh HD", rootPath: "/")
+    let top = await store.insert([dir("System"), dir("Users")], under: FileTree.root,
+                                 parentPath: "/", boundary: boundary)
+    #expect(Set(top.map(\.path)) == ["/System", "/Users"])
+    for child in top { #expect(await store.path(of: child.id) == child.path) }
+    let system = try #require(top.first { $0.path == "/System" })
+    let volumes = await store.insert([dir("Volumes")], under: system.id,
+                                     parentPath: "/System", boundary: boundary)
+    #expect(volumes.map(\.path) == ["/System/Volumes"])
+    let data = await store.insert([dir("Data", mountPoint: true)], under: volumes[0].id,
+                                  parentPath: "/System/Volumes", boundary: boundary)
+    #expect(data.isEmpty)
+}
+@Test func symlinkToDirectoryIsNotDescended() async throws {
+    let fx = try Fixture(); defer { fx.cleanup() }
+    let target = try Fixture(); defer { target.cleanup() }
+    try target.file("big", bytes: 1_000_000)
+    try fx.symlink("link", to: target.root)
+    let (store, s) = try await scanFixture(fx)
+    #expect(await store.rootSize() < 1_000_000 && s.files == 1 && s.unreadable == 0)
+    let link = try #require(await store.rows(childrenOf: FileTree.root, limit: 10).first { $0.name == "link" })
+    #expect(link.kind == .symlink && !link.hasChildren && link.size < 1_000_000)
 }
 @Test func unreadableDirectoryIsMarkedAndScanContinues() async throws {
     let fx = try Fixture(); defer { fx.cleanup() }
