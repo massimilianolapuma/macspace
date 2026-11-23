@@ -126,7 +126,9 @@ private struct BiggestRow: View {
     }
 
     /// The row's file type (by type), or by last use a folder's dominant age bucket and a file's
-    /// relative last use, with its chart color; nothing in neutral mode.
+    /// relative last use, with its chart color; nothing in neutral mode. Worded as the hover card
+    /// words it: a folder with contents says "Per lo più: <bucket>"; an empty folder, like a file,
+    /// its own last use.
     @ViewBuilder
     private var detail: some View {
         switch colorMode {
@@ -135,11 +137,10 @@ private struct BiggestRow: View {
         case .category:
             RowDetail(color: FusionPalette.swatch(row.category, scheme: scheme),
                       text: String(localized: row.category.title))
-        case .lastUse where row.kind == .directory:
+        case .lastUse where row.kind == .directory && row.hasChildren:
             // A folder: the age of most of its bytes, not of its latest touch.
             RowDetail(color: FusionPalette.swatch(row.ageBucket, scheme: scheme),
-                      text: String(localized: row.ageBucket.title))
-                .accessibilityLabel(Text("Per lo più: \(String(localized: row.ageBucket.title))"))
+                      text: String(localized: "Per lo più: \(String(localized: row.ageBucket.title))"))
         case .lastUse:
             let age = Formatters.lastUsedAge(row.lastUsed)
             RowDetail(color: FusionPalette.swatch(row.ageBucket, scheme: scheme), text: age)
