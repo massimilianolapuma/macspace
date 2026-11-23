@@ -15,6 +15,7 @@ struct TreemapHoverLayer: View {
     /// The map is animating, so the hovered tile follows its pose frame by frame.
     let moving: Bool
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.displayScale) private var displayScale
 
     var body: some View {
         // Nothing hovered: no view, so no canvas and no timeline run while the map is only scanning.
@@ -38,7 +39,7 @@ struct TreemapHoverLayer: View {
         let lift = FusionPalette.hoverLift
         guard item.isSection, let node = item.tile.node else {
             TreemapView.drawTile(item, pose: pose, rect: rect, canvas: canvas, motion: motion, labels: labels,
-                                 mode: colorMode, lift: lift, scheme: scheme, in: context)
+                                 mode: colorMode, lift: lift, scheme: scheme, scale: displayScale, in: context)
             return
         }
         // A section: lift only what shows of it, its children keep their own fills.

@@ -68,8 +68,9 @@ struct FusionPalette {
     /// - Neutral: the plan-1 ring palette, unchanged.
     /// - By type: the category's `ChartPalette.categoryFill`, up to 6 lightness points lighter per
     ///   level below the first. Merged "altri" elements mix types, so they take
-    ///   `ChartPalette.mergedFill` instead, a warm graphite apart from every category (Ruling AF),
-    ///   which the legend names "Altri (misti)".
+    ///   `ChartPalette.mergedFill` instead (Ruling AG): a recessive tone close to the surface they
+    ///   sit on (`surface`; the background when nil), drawn with the dashed `mergedOutline`, which
+    ///   the legend names "Altri (misti)".
     /// - By last use: the age bucket's `ChartPalette.ageFill`, the same at every depth (Ruling V:
     ///   its lightness *is* the age, so a depth shift would make a deep recent folder read as an
     ///   older one). Merged "altri" take the bucket holding most of their bytes, which their
@@ -87,53 +88,44 @@ struct FusionPalette {
     }
 
     /// `fill` with a continuous `depth` and `step` (`index % 4`), so animations can blend between
-    /// levels, plus `lift` points of lightness (`hoverLift` while hovered).
+    /// levels, plus `lift` points of lightness (`hoverLift` while hovered). `surface` is what the
+    /// element sits on (the treemap's parent section surface; nil for the background).
     static func fill(_ subject: FillSubject, mode: ColorMode, depth: Double, step: Double, lift: Double = 0,
-                     scheme: ColorScheme) -> Color {
-        color(fillRGB(subject, mode: mode, depth: depth, step: step, lift: lift, scheme: scheme))
+                     on surface: Contrast.RGB? = nil, scheme: ColorScheme) -> Color {
+        color(fillRGB(subject, mode: mode, depth: depth, step: step, lift: lift, on: surface, scheme: scheme))
     }
 
     /// `fill` as RGB, for surfaces composited from it (treemap sections).
     static func fillRGB(_ subject: FillSubject, mode: ColorMode, depth: Double, step: Double, lift: Double = 0,
-                        scheme: ColorScheme) -> Contrast.RGB {
-        coloredRGB(subject, mode: mode, depth: depth, lift: lift, scheme: scheme)
+                        on surface: Contrast.RGB? = nil, scheme: ColorScheme) -> Contrast.RGB {
+        coloredRGB(subject, mode: mode, depth: depth, lift: lift, surface: surface, scheme: scheme)
             ?? ringRGB(lightness: ringLightness(depth: depth, step: step, scheme: scheme) + lift, scheme: scheme)
     }
 
-    /// Surface of a treemap section (a tile whose children are drawn inside it): `tint` laid
-    /// over `base` (the background or the enclosing section's surface) as strongly as
-    /// `sectionTint` allows while the section header, in `secondaryText`, keeps 4.5:1 on it.
-    /// Dark tints therefore stay fainter than pale ones.
-    static func sectionSurface(tint: Contrast.RGB, over base: Contrast.RGB, scheme: ColorScheme) -> Contrast.RGB {
-        let text = secondaryTextRGB(scheme)
-        func mixed(_ a: Double) -> Contrast.RGB {
-            Contrast.RGB(base.r + (tint.r - base.r) * a, base.g + (tint.g - base.g) * a, base.b + (tint.b - base.b) * a)
-        }
-        let strongest = mixed(sectionTint(scheme))
-        if Contrast.ratio(text, strongest) >= sectionContrast { return strongest }
-        guard Contrast.ratio(text, base) >= sectionContrast else { return base }
-        var low = 0.0, high = sectionTint(scheme)  // contrast falls as the tint grows
-        for _ in 0..<10 {
-            let mid = (low + high) / 2
-            if Contrast.ratio(text, mixed(mid)) >= sectionContrast { low = mid } else { high = mid }
-        }
-        return mixed(low)
+    /// The dashed outline of a merged "altri" element in "by file type" mode, on `surface` (nil:
+    /// the background), hovered when `lift` > 0; nil for every other element and mode. At least
+    /// 3:1 against the surface and the merged fill (`ChartPalette.mergedOutline`).
+    static func mergedOutline(_ subject: FillSubject, mode: ColorMode, lift: Double = 0,
+                              on surface: Contrast.RGB? = nil, scheme: ColorScheme) -> Color? {
+        guard subject.isMerged, mode == .category else { return nil }
+        return color(ChartPalette.mergedOutline(on: surface ?? backgroundRGB(scheme), scheme: paletteScheme(scheme),
+                                                lift: lift))
     }
 
-    /// Strongest tint of a section surface, before the header's contrast limits it.
-    static func sectionTint(_ scheme: ColorScheme) -> Double { scheme == .dark ? 0.22 : 0.18 }
-    /// Contrast kept for section headers: AA plus a little margin for rounding.
-    private static let sectionContrast = 4.55
+    /// Surface of a treemap section over `base` (`ChartPalette.sectionSurface`).
+    static func sectionSurface(tint: Contrast.RGB, over base: Contrast.RGB, scheme: ColorScheme) -> Contrast.RGB {
+        ChartPalette.sectionSurface(tint: tint, over: base, scheme: paletteScheme(scheme))
+    }
 
     static func backgroundRGB(_ scheme: ColorScheme) -> Contrast.RGB { ChartPalette.surface(paletteScheme(scheme)) }
     static func secondaryTextRGB(_ scheme: ColorScheme) -> Contrast.RGB {
-        scheme == .dark ? hexRGB(0x98989D) : hexRGB(0x6E665C)
+        ChartPalette.secondaryText(paletteScheme(scheme))
     }
 
     /// `label` with a continuous `depth` and `step`, plus `lift`.
     static func label(_ subject: FillSubject, mode: ColorMode, depth: Double, step: Double, lift: Double = 0,
-                      scheme: ColorScheme) -> Color {
-        if let rgb = coloredRGB(subject, mode: mode, depth: depth, lift: lift, scheme: scheme) {
+                      on surface: Contrast.RGB? = nil, scheme: ColorScheme) -> Color {
+        if let rgb = coloredRGB(subject, mode: mode, depth: depth, lift: lift, surface: surface, scheme: scheme) {
             return color(ChartPalette.labelInk(on: rgb, scheme: paletteScheme(scheme)))
         }
         return ringLabel(lightness: ringLightness(depth: depth, step: step, scheme: scheme) + lift, scheme: scheme)
@@ -141,12 +133,13 @@ struct FusionPalette {
 
     /// The fill in a colored mode; nil when the element takes the neutral ring tone.
     private static func coloredRGB(_ subject: FillSubject, mode: ColorMode, depth: Double, lift: Double,
-                                   scheme: ColorScheme) -> Contrast.RGB? {
+                                   surface: Contrast.RGB?, scheme: ColorScheme) -> Contrast.RGB? {
         switch mode {
         case .neutral:
             nil
         case .category:
-            subject.isMerged ? ChartPalette.mergedFill(scheme: paletteScheme(scheme), lift: lift)
+            subject.isMerged
+                ? ChartPalette.mergedFill(on: surface ?? backgroundRGB(scheme), scheme: paletteScheme(scheme), lift: lift)
                 : ChartPalette.categoryFill(subject.category, scheme: paletteScheme(scheme), depth: depth, lift: lift)
         case .lastUse:
             ChartPalette.ageFill(subject.ageBucket, scheme: paletteScheme(scheme), lift: lift)
@@ -166,9 +159,12 @@ struct FusionPalette {
         color(ChartPalette.ageFill(bucket, scheme: paletteScheme(scheme)))
     }
 
-    /// The merged "altri" fill in "by file type" mode, for its legend chip.
-    static func mergedSwatch(scheme: ColorScheme) -> Color {
-        color(ChartPalette.mergedFill(scheme: paletteScheme(scheme)))
+    /// The merged "altri" fill and dashed outline in "by file type" mode, on the background, for
+    /// its legend chip.
+    static func mergedSwatch(scheme: ColorScheme) -> (fill: Color, outline: Color) {
+        let background = backgroundRGB(scheme)
+        return (color(ChartPalette.mergedFill(on: background, scheme: paletteScheme(scheme))),
+                color(ChartPalette.mergedOutline(on: background, scheme: paletteScheme(scheme))))
     }
 
     /// Hairline around a swatch dot, so pale or dark swatches still show against the window.
@@ -192,10 +188,6 @@ struct FusionPalette {
     static func hsl(_ h: Double, _ s: Double, _ l: Double) -> Color { color(Contrast.hsl(h, s, l)) }
 
     static func color(_ c: Contrast.RGB) -> Color { Color(.sRGB, red: c.r, green: c.g, blue: c.b) }
-
-    private static func hexRGB(_ hex: UInt32) -> Contrast.RGB {
-        Contrast.RGB(Double((hex >> 16) & 0xFF) / 255, Double((hex >> 8) & 0xFF) / 255, Double(hex & 0xFF) / 255)
-    }
 
     private static func rgb(_ hex: UInt32) -> Color {
         Color(.sRGB,

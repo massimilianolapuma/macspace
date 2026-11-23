@@ -48,6 +48,11 @@ struct SunburstHoverLayer: View {
             if geometry.hasSeparator(pose, inner: inner) {
                 ring.stroke(path, with: .color(FusionPalette.background(scheme).opacity(pose.alpha)), lineWidth: 1)
             }
+            if let outline = FusionPalette.mergedOutline(subject, mode: colorMode, lift: FusionPalette.hoverLift,
+                                                         scheme: scheme) {
+                MergedOutline.strokeArc(center: geometry.center, inner: inner, outer: inner + geometry.ringWidth,
+                                        start: pose.start, end: pose.end, color: outline.opacity(pose.alpha), in: ring)
+            }
             // The label as the rings canvas placed it: replay placement up to this arc.
             labels.prepare(generation: generation, size: geometry.size)
             if let label = RingLabel.place(motion.poses(at: date), geometry: geometry, planner: labels, in: ring,

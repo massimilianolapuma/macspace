@@ -29,7 +29,9 @@ struct ChartLegend: View {
                                    title: entry.category.title, detail: Formatters.bytes(entry.bytes))
                     }
                     if model.showsMerged {
-                        LegendChip(color: FusionPalette.mergedSwatch(scheme: scheme), title: "Altri (misti)", detail: nil)
+                        let swatch = FusionPalette.mergedSwatch(scheme: scheme)
+                        LegendChip(color: swatch.fill, dashedOutline: swatch.outline, title: "Altri (misti)",
+                                   detail: nil)
                     }
                 case .lastUse:
                     ForEach(ages, id: \.bucket) { entry in
@@ -73,11 +75,14 @@ struct ChartLegend: View {
     }
 }
 
-/// A color dot, its meaning and an optional figure.
+/// A color dot, its meaning and an optional figure. The merged "Altri (misti)" dot is drawn as
+/// merged elements are: its recessive fill inside a dashed outline.
 private struct LegendChip: View {
     static let font = Font.callout
+    private static let dot = 9.0
 
     let color: Color
+    var dashedOutline: Color?
     let title: LocalizedStringResource
     let detail: String?
     @Environment(\.colorScheme) private var scheme
@@ -86,8 +91,16 @@ private struct LegendChip: View {
         HStack(spacing: 6) {
             Circle()
                 .fill(color)
-                .overlay(Circle().strokeBorder(FusionPalette.swatchRing(scheme), lineWidth: 0.5))
-                .frame(width: 9, height: 9)
+                .overlay {
+                    if let dashedOutline {
+                        // The line's center runs 0.5 pt inside the dot's edge.
+                        Circle().strokeBorder(dashedOutline,
+                                              style: MergedOutline.style(perimeter: .pi * (Self.dot - 1)))
+                    } else {
+                        Circle().strokeBorder(FusionPalette.swatchRing(scheme), lineWidth: 0.5)
+                    }
+                }
+                .frame(width: Self.dot, height: Self.dot)
                 .accessibilityHidden(true)
             Text(title)
                 .foregroundStyle(FusionPalette.primaryText(scheme))

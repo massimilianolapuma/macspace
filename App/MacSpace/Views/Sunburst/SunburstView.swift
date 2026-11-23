@@ -191,6 +191,12 @@ struct SunburstView: View {
         for item in drawn where geometry.hasSeparator(item.pose, inner: item.inner) {
             rings.stroke(item.path, with: .color(background.opacity(item.pose.alpha)), lineWidth: 1)
         }
+        for (arc, pose) in poses {
+            guard let outline = FusionPalette.mergedOutline(.init(arc.segment), mode: colorMode, scheme: scheme),
+                  let inner = geometry.drawableInner(pose) else { continue }
+            MergedOutline.strokeArc(center: geometry.center, inner: inner, outer: inner + geometry.ringWidth,
+                                    start: pose.start, end: pose.end, color: outline.opacity(pose.alpha), in: rings)
+        }
         labels.prepare(generation: generation, size: geometry.size)
         for label in RingLabel.place(poses, geometry: geometry, planner: labels, in: rings) {
             let ink = FusionPalette.label(.init(label.segment), mode: colorMode, depth: label.pose.shadeDepth,

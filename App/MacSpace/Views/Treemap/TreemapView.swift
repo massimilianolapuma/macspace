@@ -22,6 +22,7 @@ struct TreemapView: View {
     @State private var motionGeneration = 0
     @State private var labels = TileLabelPlanner()
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.displayScale) private var displayScale
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -132,15 +133,16 @@ struct TreemapView: View {
         for (item, pose) in poses where item.isVisible {
             guard pose.alpha > 0.01, let rect = canvas.drawn(pose.rect) else { continue }
             Self.drawTile(item, pose: pose, rect: rect, canvas: canvas, motion: motion, labels: labels,
-                          mode: colorMode, lift: 0, scheme: scheme, in: context)
+                          mode: colorMode, lift: 0, scheme: scheme, scale: displayScale, in: context)
         }
     }
 
     /// One tile at `rect` (its drawn rect): a section's surface and header, or a block's fill and
-    /// label. The hover layer draws the hovered tile again with `lift`.
+    /// label; a merged "altri" block in "by file type" mode also gets its dashed outline. The hover
+    /// layer draws the hovered tile again with `lift`. `scale` is the display's pixels per point.
     static func drawTile(_ item: TreemapMotion.Item, pose: TilePose, rect: CGRect, canvas: TreemapCanvas,
                          motion: TreemapMotion, labels: TileLabelPlanner, mode: ColorMode, lift: Double,
-                         scheme: ColorScheme, in context: GraphicsContext) {
+                         scheme: ColorScheme, scale: Double, in context: GraphicsContext) {
         let tile = item.tile
         let subject = FusionPalette.FillSubject(tile)
         let shape = Self.shape(rect, depth: tile.depth)
@@ -152,13 +154,19 @@ struct TreemapView: View {
                 drawHeader(header, in: rect, canvas: canvas, alpha: alpha, scheme: scheme, context: context)
             }
         } else {
+            // A merged block takes a tone close to what it sits on; no other block needs that.
+            let base = subject.isMerged && mode == .category ? labels.base(for: item, motion: motion) : nil
             let fill = FusionPalette.fill(subject, mode: mode, depth: pose.shadeDepth, step: pose.shadeStep,
-                                          lift: lift, scheme: scheme)
+                                          lift: lift, on: base, scheme: scheme)
             context.fill(shape, with: .color(fill.opacity(alpha)))
+            if let outline = FusionPalette.mergedOutline(subject, mode: mode, lift: lift, on: base, scheme: scheme) {
+                MergedOutline.strokeTile(rect, radius: cornerRadius(rect, depth: tile.depth),
+                                         color: outline.opacity(alpha), scale: scale, in: context)
+            }
             if rect.width >= TileLabelPlanner.minLabelWidth, rect.height >= TileLabelPlanner.minLabelHeight,
                let label = labels.leaf(for: item, canvas: canvas, in: context), label.fits(rect.width) {
                 let ink = FusionPalette.label(subject, mode: mode, depth: pose.shadeDepth, step: pose.shadeStep,
-                                              lift: lift, scheme: scheme)
+                                              lift: lift, on: base, scheme: scheme)
                 drawLabel(label, in: rect, ink: ink, alpha: alpha, context: context)
             }
         }
@@ -167,8 +175,11 @@ struct TreemapView: View {
     /// Rounded tile outline: 6 pt corners on the first level, 4 pt deeper; small tiles get
     /// proportionally smaller corners, so they stay tiles instead of turning into dots.
     static func shape(_ rect: CGRect, depth: Int) -> Path {
-        let radius = min(depth <= 1 ? 6.0 : 4.0, min(rect.width, rect.height) / 4)
-        return Path(roundedRect: rect, cornerRadius: radius, style: .continuous)
+        Path(roundedRect: rect, cornerRadius: cornerRadius(rect, depth: depth), style: .continuous)
+    }
+
+    static func cornerRadius(_ rect: CGRect, depth: Int) -> Double {
+        min(depth <= 1 ? 6.0 : 4.0, min(rect.width, rect.height) / 4)
     }
 
     private static func drawLabel(_ label: TileLabelPlanner.Leaf, in rect: CGRect, ink: Color, alpha: Double,

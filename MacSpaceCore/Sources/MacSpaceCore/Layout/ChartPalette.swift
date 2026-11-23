@@ -97,14 +97,80 @@ public enum ChartPalette {
         return tone.shade(levels: tone.depthStep * (max(depth, 1) - 1), lift: lift)
     }
 
-    /// The fill of a merged "Altri N elementi" element in "by file type" mode: it mixes types, so it
-    /// takes none of theirs but a warm graphite, the Fusion neutral (`hsl(30, 10%, 34%)` is the
-    /// first neutral ring in light mode), the same at every depth and darker than every category so
-    /// it reads as "not a type" (Ruling AF: CIEDE2000 >= 10 from every category fill at every depth,
-    /// hovered or not, both themes). Lifted by `lift` while hovered.
-    public static func mergedFill(scheme: Scheme, lift: Double = 0) -> Contrast.RGB {
-        Contrast.hsl(30, 10, (scheme == .dark ? 24 : 34) + lift)
+    // MARK: Section surfaces
+
+    /// The scheme's secondary text color (section headers, captions).
+    public static func secondaryText(_ scheme: Scheme) -> Contrast.RGB {
+        scheme == .dark ? rgb(0x98989D) : rgb(0x6E665C)
     }
+
+    /// Strongest tint of a treemap section surface, before the header's contrast limits it.
+    private static func sectionTint(_ scheme: Scheme) -> Double { scheme == .dark ? 0.22 : 0.18 }
+    /// Contrast kept for section headers: AA plus a little margin for rounding.
+    private static let sectionContrast = 4.55
+
+    /// Surface of a treemap section (a tile whose children are drawn inside it): `tint` laid
+    /// over `base` (the background or the enclosing section's surface) as strongly as
+    /// `sectionTint` allows while the section header, in `secondaryText`, keeps 4.5:1 on it.
+    /// Dark tints therefore stay fainter than pale ones.
+    public static func sectionSurface(tint: Contrast.RGB, over base: Contrast.RGB, scheme: Scheme) -> Contrast.RGB {
+        let text = secondaryText(scheme)
+        func mixed(_ a: Double) -> Contrast.RGB {
+            Contrast.RGB(base.r + (tint.r - base.r) * a, base.g + (tint.g - base.g) * a, base.b + (tint.b - base.b) * a)
+        }
+        let strongest = mixed(sectionTint(scheme))
+        if Contrast.ratio(text, strongest) >= sectionContrast { return strongest }
+        guard Contrast.ratio(text, base) >= sectionContrast else { return base }
+        var low = 0.0, high = sectionTint(scheme)  // contrast falls as the tint grows
+        for _ in 0..<10 {
+            let mid = (low + high) / 2
+            if Contrast.ratio(text, mixed(mid)) >= sectionContrast { low = mid } else { high = mid }
+        }
+        return mixed(low)
+    }
+
+    // MARK: Merged "Altri"
+
+    /// The fill of a merged "Altri N elementi" element in "by file type" mode, sitting on `surface`
+    /// (its parent section's surface in the treemap, the background in the sunburst). It mixes
+    /// types, so it takes none of theirs (Ruling AG): it stays close to its surface, a little darker
+    /// in light mode and a little lighter in dark mode (so it never reads as a hole), and the dashed
+    /// `mergedOutline` around it says "many small items". Lifted by `lift` while hovered.
+    public static func mergedFill(on surface: Contrast.RGB, scheme: Scheme, lift: Double = 0) -> Contrast.RGB {
+        let (h, s, l) = Contrast.hslComponents(surface)
+        let offset = scheme == .dark ? 5.0 : -4.0
+        return Contrast.hsl(h, s, min(max(l + offset + lift, 0), 100))
+    }
+
+    /// The dashed outline of a merged element on `surface`, hovered when `lift` > 0: a Fusion neutral
+    /// (`hsl(30, 10%, …)` light, `hsl(240, 4%, …)` dark), as close to the surface as it can be while
+    /// it keeps 3:1 (WCAG 1.4.11, plus a little margin for rounding) against the surface and against
+    /// the merged fill, resting and, while hovered, lifted. So it is as quiet as the rule allows: in
+    /// light mode it stays the same on hover (the lifted fill is lighter, never the binding side); in
+    /// dark mode it brightens with the lifted fill.
+    public static func mergedOutline(on surface: Contrast.RGB, scheme: Scheme, lift: Double = 0) -> Contrast.RGB {
+        var references = [surface, mergedFill(on: surface, scheme: scheme)]
+        if lift > 0 { references.append(mergedFill(on: surface, scheme: scheme, lift: lift)) }
+        let (hue, saturation) = scheme == .dark ? (240.0, 4.0) : (30.0, 10.0)
+        func outline(_ l: Double) -> Contrast.RGB { Contrast.hsl(hue, saturation, l) }
+        func clears(_ l: Double) -> Bool {
+            references.allSatisfy { Contrast.ratio(outline(l), $0) >= mergedOutlineContrast }
+        }
+        // Light: darker than every reference, so contrast grows as the lightness falls; dark: lighter
+        // than every reference, so it grows as the lightness rises.
+        let lightness = references.map(Contrast.lightness)
+        var near = (scheme == .dark ? lightness.max() : lightness.min()) ?? 50
+        var far = scheme == .dark ? 100.0 : 0
+        guard clears(far) else { return outline(far) }
+        for _ in 0..<24 {
+            let mid = (near + far) / 2
+            if clears(mid) { far = mid } else { near = mid }
+        }
+        return outline(far)
+    }
+
+    /// Contrast the merged outline keeps: the 3:1 of WCAG 1.4.11 plus a little margin.
+    private static let mergedOutlineContrast = 3.1
 
     /// An age fill, lifted by `lift` while hovered. The same at every depth: its lightness is the
     /// age, so a depth shift would make a deep recent folder read as an older one.

@@ -102,13 +102,17 @@ final class TileLabelPlanner {
         item.isCurrent ? item.to.rect : item.from.rect
     }
 
-    /// The surface of section `item` (`lift` > 0 while hovered), over its parent section's
-    /// resting surface (resolved through `motion`, whatever was drawn first) or the background.
+    /// What `item` sits on: its parent section's resting surface (resolved through `motion`,
+    /// whatever was drawn first) or the background.
+    func base(for item: TreemapMotion.Item, motion: TreemapMotion) -> Contrast.RGB {
+        motion.parent(of: item).map { surface(for: $0, lift: 0, motion: motion) } ?? FusionPalette.backgroundRGB(scheme)
+    }
+
+    /// The surface of section `item` (`lift` > 0 while hovered), over `base(for: item)`.
     func surface(for item: TreemapMotion.Item, lift: Double, motion: TreemapMotion) -> Contrast.RGB {
         let key = SurfaceKey(plan: Self.key(item), lifted: lift > 0)
         if let hit = surfaces[key] { return hit }
-        let base = motion.parent(of: item).map { surface(for: $0, lift: 0, motion: motion) }
-            ?? FusionPalette.backgroundRGB(scheme)
+        let base = base(for: item, motion: motion)
         let shade = item.isCurrent ? item.to : item.from
         let tint = FusionPalette.fillRGB(.init(item.tile), mode: mode, depth: shade.shadeDepth,
                                          step: shade.shadeStep, lift: lift, scheme: scheme)
