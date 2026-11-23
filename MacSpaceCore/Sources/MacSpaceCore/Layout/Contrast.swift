@@ -84,6 +84,53 @@ public enum Contrast {
         return ((l1 - l2) * (l1 - l2) + (a1 - a2) * (a1 - a2) + (b1 - b2) * (b1 - b2)).squareRoot()
     }
 
+    /// CIEDE2000 colour difference between `a` and `b` (kL = kC = kH = 1): closer to perceived
+    /// difference than CIE76, especially for pale and dark tones.
+    public static func deltaE2000(_ a: RGB, _ b: RGB) -> Double { deltaE2000(lab: lab(a), lab(b)) }
+
+    /// CIEDE2000 between two CIELAB colours (Sharma, Wu & Dalal 2005).
+    static func deltaE2000(lab first: (Double, Double, Double), _ second: (Double, Double, Double)) -> Double {
+        let (l1, a1, b1) = first, (l2, a2, b2) = second
+        func rad(_ d: Double) -> Double { d * .pi / 180 }
+        func deg(_ r: Double) -> Double { r * 180 / .pi }
+        let pow25to7 = 6_103_515_625.0  // 25^7
+        let cBar = ((a1 * a1 + b1 * b1).squareRoot() + (a2 * a2 + b2 * b2).squareRoot()) / 2
+        let g = 0.5 * (1 - (pow(cBar, 7) / (pow(cBar, 7) + pow25to7)).squareRoot())
+        let a1p = (1 + g) * a1, a2p = (1 + g) * a2
+        let c1p = (a1p * a1p + b1 * b1).squareRoot(), c2p = (a2p * a2p + b2 * b2).squareRoot()
+        func hue(_ b: Double, _ a: Double) -> Double {
+            guard b != 0 || a != 0 else { return 0 }
+            let h = deg(atan2(b, a))
+            return h < 0 ? h + 360 : h
+        }
+        let h1p = hue(b1, a1p), h2p = hue(b2, a2p)
+        let dLp = l2 - l1, dCp = c2p - c1p
+        var dhp = 0.0
+        if c1p * c2p != 0 {
+            dhp = h2p - h1p
+            if dhp > 180 { dhp -= 360 } else if dhp < -180 { dhp += 360 }
+        }
+        let dHp = 2 * (c1p * c2p).squareRoot() * sin(rad(dhp / 2))
+        let lBarP = (l1 + l2) / 2, cBarP = (c1p + c2p) / 2
+        var hBarP = h1p + h2p
+        if c1p * c2p != 0 {
+            if abs(h1p - h2p) <= 180 { hBarP = (h1p + h2p) / 2 }
+            else if h1p + h2p < 360 { hBarP = (h1p + h2p + 360) / 2 }
+            else { hBarP = (h1p + h2p - 360) / 2 }
+        }
+        let t = 1 - 0.17 * cos(rad(hBarP - 30)) + 0.24 * cos(rad(2 * hBarP)) + 0.32 * cos(rad(3 * hBarP + 6))
+            - 0.20 * cos(rad(4 * hBarP - 63))
+        let dTheta = 30 * exp(-pow((hBarP - 275) / 25, 2))
+        let rc = 2 * (pow(cBarP, 7) / (pow(cBarP, 7) + pow25to7)).squareRoot()
+        let lOffset = (lBarP - 50) * (lBarP - 50)
+        let sl = 1 + 0.015 * lOffset / (20 + lOffset).squareRoot()
+        let sc = 1 + 0.045 * cBarP
+        let sh = 1 + 0.015 * cBarP * t
+        let rt = -sin(rad(2 * dTheta)) * rc
+        let l = dLp / sl, c = dCp / sc, h = dHp / sh
+        return (l * l + c * c + h * h + rt * c * h).squareRoot()
+    }
+
     /// CIELAB (D65) of `c`: L 0…100, a and b roughly −128…127.
     static func lab(_ c: RGB) -> (Double, Double, Double) {
         func linear(_ v: Double) -> Double { v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }

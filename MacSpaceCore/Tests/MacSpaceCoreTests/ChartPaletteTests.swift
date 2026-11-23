@@ -32,6 +32,20 @@ private func drawnFills(_ s: ChartPalette.Scheme) -> [Contrast.RGB] {
     }
 }
 
+/// Ruling Z: the age fills as drawn (resting) are clearly distinct where the legend and the
+/// charts put them side by side: CIEDE2000 >= 10 between adjacent buckets, and "Sconosciuto"
+/// apart from every bucket, in both themes.
+@Test func drawnAgeFillsAreDistinctBetweenNeighbours() {
+    for s in [ChartPalette.Scheme.light, .dark] {
+        let known = AgeBucket.allCases.filter { $0 != .unknown }.map { ChartPalette.ageFill($0, scheme: s) }
+        for (a, b) in zip(known, known.dropFirst()) {
+            #expect(Contrast.deltaE2000(a, b) >= 10, "\(s) \(a) \(b): \(Contrast.deltaE2000(a, b))")
+        }
+        let unknown = ChartPalette.ageFill(.unknown, scheme: s)
+        for fill in known { #expect(Contrast.deltaE2000(unknown, fill) >= 10, "\(s) unknown vs \(fill)") }
+    }
+}
+
 /// Pale outer fills, hovered or not, never fade into the window background.
 @Test func drawnFillsStayVisibleOnTheBackground() {
     for s in [ChartPalette.Scheme.light, .dark] {

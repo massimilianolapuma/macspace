@@ -40,23 +40,25 @@ public enum ChartPalette {
         return rgb(hex)
     }
 
-    /// One indigo ramp from a near-neutral grey (used this month) to deep indigo (over two
-    /// years): darker with age in light mode, brighter with age in dark mode, so old files
-    /// stand out against the background either way. Unknown is a warm neutral off the ramp.
+    /// One steel-blue ramp (hue spread about 30°), from a pale blue-grey (used this month) to deep
+    /// navy (over two years): darker with age in light mode, brighter with age in dark mode, so
+    /// old files stand out against the background either way. Adjacent buckets are at least 10
+    /// apart in CIEDE2000 and the recent end clears 2:1 against the background, so large areas of
+    /// neighbouring buckets stay tellable apart (Ruling Z). Unknown is a warm neutral off the ramp.
     public static func age(_ b: AgeBucket, scheme: Scheme) -> Contrast.RGB {
         let hex: UInt32 = switch (b, scheme) {
-        case (.lastMonth, .light): 0xA6ABB5
-        case (.lastSixMonths, .light): 0x8790AA
-        case (.lastYear, .light): 0x6A759E
-        case (.oneToTwoYears, .light): 0x505B91
-        case (.older, .light): 0x393F82
-        case (.unknown, .light): 0xCFCAC2
-        case (.lastMonth, .dark): 0x52555D
-        case (.lastSixMonths, .dark): 0x636B81
-        case (.lastYear, .dark): 0x7782A7
-        case (.oneToTwoYears, .dark): 0x8C98CD
-        case (.older, .dark): 0xA1ADE9
-        case (.unknown, .dark): 0x403D39
+        case (.lastMonth, .light): 0x96B2C0
+        case (.lastSixMonths, .light): 0x6893B0
+        case (.lastYear, .light): 0x3F749F
+        case (.oneToTwoYears, .light): 0x235488
+        case (.older, .light): 0x173668
+        case (.unknown, .light): 0xD2C8BD
+        case (.lastMonth, .dark): 0x445863
+        case (.lastSixMonths, .dark): 0x507790
+        case (.lastYear, .dark): 0x6396BF
+        case (.oneToTwoYears, .dark): 0x87B4EA
+        case (.older, .dark): 0xBFD2FA
+        case (.unknown, .dark): 0x463E37
         }
         return rgb(hex)
     }

@@ -48,3 +48,19 @@ import Testing
     #expect(!Contrast.isReservedOrange(Contrast.hsl(16, 40, 57)))
     #expect(!Contrast.isReservedOrange(Contrast.hsl(45, 88, 57)))
 }
+
+/// CIEDE2000 against Sharma, Wu & Dalal (2005) reference pairs.
+@Test func deltaE2000MatchesReferencePairs() {
+    let pairs: [((Double, Double, Double), (Double, Double, Double), Double)] = [
+        ((50, 2.6772, -79.7751), (50, 0, -82.7485), 2.0425),
+        ((50, 0, 0), (50, -1, 2), 2.3669),
+        ((50, 2.5, 0), (73, 25, -18), 27.1492),
+        ((60.2574, -34.0099, 36.2677), (60.4626, -34.1751, 39.4387), 1.2644),
+        ((22.7233, 20.0904, -46.6940), (23.0331, 14.9730, -42.5619), 2.0373),
+    ]
+    for (a, b, expected) in pairs {
+        #expect(abs(Contrast.deltaE2000(lab: a, b) - expected) < 0.0005, "\(a) \(b)")
+        #expect(abs(Contrast.deltaE2000(lab: b, a) - expected) < 0.0005)
+    }
+    #expect(Contrast.deltaE2000(Contrast.RGB(1, 1, 1), Contrast.RGB(1, 1, 1)) == 0)
+}
