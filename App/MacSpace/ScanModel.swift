@@ -49,7 +49,8 @@ final class ScanModel {
     var chart: ChartKind = .sunburst {
         didSet { if chart != oldValue { Task { await refreshViews() } } }
     }
-    /// The treemap canvas size, set by the treemap view (debounced while the window resizes).
+    /// The chart area's size, reported by the content view whichever chart shows (debounced while
+    /// the window resizes); the treemap is laid out for it.
     var chartSize: CGSize = .zero {
         didSet { if chartSize != oldValue, chart == .treemap { Task { await refreshViews() } } }
     }

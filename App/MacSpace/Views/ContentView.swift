@@ -32,6 +32,7 @@ struct ContentView: View {
                     case .treemap: TreemapView(model: model, colorMode: colorMode)
                     }
                 }
+                .reportsChartSize(to: model)
                 .padding(.horizontal, 8)
                 .padding(.bottom, 4)
                 ChartLegend(model: model, mode: colorMode)
@@ -193,6 +194,35 @@ struct ContentView: View {
         case .folder: chosenFolder?.name ?? ""
         }
     }
+}
+
+/// Tells the model the chart area's size, whichever chart is on screen, so the treemap is laid out
+/// for the current size even when the window was resized while the sunburst showed. Resizing
+/// relays out only once the size has held for `resizeDebounce`; the first report is immediate.
+private struct ChartSizeReporter: ViewModifier {
+    let model: ScanModel
+    @State private var size: CGSize?
+    @State private var reported = false
+
+    static let resizeDebounce: Duration = .milliseconds(100)
+
+    func body(content: Content) -> some View {
+        content
+            .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
+            .task(id: size) {
+                guard let size else { return }
+                if reported {
+                    try? await Task.sleep(for: Self.resizeDebounce)
+                    guard !Task.isCancelled else { return }
+                }
+                reported = true
+                if model.chartSize != size { model.chartSize = size }
+            }
+    }
+}
+
+private extension View {
+    func reportsChartSize(to model: ScanModel) -> some View { modifier(ChartSizeReporter(model: model)) }
 }
 
 private struct OnboardingView: View {

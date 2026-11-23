@@ -21,13 +21,8 @@ struct TreemapView: View {
     @State private var animating = false
     @State private var motionGeneration = 0
     @State private var labels = TileLabelPlanner()
-    /// Whether this view has told the model its size yet: the first report is not debounced.
-    @State private var reportedSize = false
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-
-    /// Resizing the window relays out the map only once the size has held this long.
-    static let resizeDebounce: Duration = .milliseconds(100)
 
     var body: some View {
         GeometryReader { proxy in
@@ -55,15 +50,6 @@ struct TreemapView: View {
                 }
                 TreemapPointerLayer(model: model, motion: motion, motionGeneration: motionGeneration,
                                     canvas: canvas, total: model.breadcrumb.last?.size ?? 0)
-            }
-            .task(id: proxy.size) {
-                let size = proxy.size
-                if reportedSize {
-                    try? await Task.sleep(for: Self.resizeDebounce)
-                    guard !Task.isCancelled else { return }
-                }
-                reportedSize = true
-                if model.chartSize != size { model.chartSize = size }
             }
         }
         .accessibilityElement(children: .ignore)
