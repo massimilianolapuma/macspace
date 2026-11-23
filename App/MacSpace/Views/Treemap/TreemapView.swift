@@ -90,7 +90,7 @@ struct TreemapView: View {
     private var accessibleTiles: some View {
         GeometryReader { proxy in
             let canvas = TreemapCanvas(size: proxy.size, layoutSize: motion.size)
-            ForEach(ChartAccessibility.largest(model.tiles) { $0.size }) { tile in
+            ForEach(LargestElements.of(model.tiles) { $0.size }) { tile in
                 let subject = SegmentTooltip.Subject(tile: tile)
                 let slot = canvas.slot(tile.slot)
                 Color.clear
@@ -99,9 +99,7 @@ struct TreemapView: View {
                     .accessibilityElement()
                     .accessibilityLabel(Text(verbatim: subject.title))
                     .accessibilityValue(Text(verbatim: subject.spokenValue))
-                    .accessibilityAction(named: Text("Apri")) {
-                        if let node = tile.node, tile.hasChildren { model.drill(into: node) }
-                    }
+                    .chartOpenAction(node: tile.node, hasChildren: tile.hasChildren) { model.drill(into: $0) }
             }
         }
     }

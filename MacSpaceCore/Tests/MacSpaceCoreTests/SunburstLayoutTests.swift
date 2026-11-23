@@ -14,14 +14,14 @@ private func tree(_ sizes: [UInt64]) -> FileTree {
     #expect(abs(try #require(segs.last).endAngle - 2 * .pi) < 1e-9)
 }
 
-@Test func childrenNestInsideParentSpan() {
+@Test func childrenNestInsideParentSpan() throws {
     let t = FileTree(rootName: "r", rootPath: "/r")
     let d = t.addChild(of: 0, name: "d", kind: .directory, allocatedSize: 0)
     t.addChild(of: d, name: "a", kind: .file, allocatedSize: 50)
     t.addChild(of: d, name: "b", kind: .file, allocatedSize: 50)
     t.addChild(of: 0, name: "c", kind: .file, allocatedSize: 100)
     let segs = SunburstLayout.compute(tree: t, center: 0)
-    let parent = segs.first { $0.node == d }!
+    let parent = try #require(segs.first { $0.node == d })
     let kids = segs.filter { $0.depth == 2 }
     #expect(kids.count == 2 && kids.allSatisfy { $0.startAngle >= parent.startAngle && $0.endAngle <= parent.endAngle + 1e-9 })
 }
@@ -62,15 +62,15 @@ private func tree(_ sizes: [UInt64]) -> FileTree {
     #expect(!segs.contains { $0.parent == tiny })
 }
 
-@Test func segmentsCarryFlagsAndWhetherTheyHaveChildren() {
+@Test func segmentsCarryFlagsAndWhetherTheyHaveChildren() throws {
     let t = FileTree(rootName: "r", rootPath: "/r")
     let full = t.addChild(of: 0, name: "full", kind: .directory, allocatedSize: 0)
     t.addChild(of: full, name: "a", kind: .file, allocatedSize: 100)
     let locked = t.addChild(of: 0, name: "locked", kind: .directory, allocatedSize: 50)
     t.insertFlags(.unreadable, for: locked)
     let segs = SunburstLayout.compute(tree: t, center: 0)
-    let fullSeg = segs.first { $0.node == full }!
-    let lockedSeg = segs.first { $0.node == locked }!
+    let fullSeg = try #require(segs.first { $0.node == full })
+    let lockedSeg = try #require(segs.first { $0.node == locked })
     #expect(fullSeg.hasChildren && fullSeg.flags.isEmpty)
     #expect(!lockedSeg.hasChildren && lockedSeg.flags.contains(.unreadable))
     #expect(segs.first { $0.depth == 2 }?.hasChildren == false)

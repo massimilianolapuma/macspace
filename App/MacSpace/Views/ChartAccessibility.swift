@@ -4,9 +4,6 @@ import SwiftUI
 /// What VoiceOver gets from a chart: one element for the whole chart plus its biggest
 /// segments or tiles as children. Both charts are `Canvas`es, so nothing in them is a view.
 enum ChartAccessibility {
-    /// VoiceOver stays usable only with a short list: the largest elements get a child each.
-    static let childLimit = 50
-
     /// "Scegli cosa analizzare e premi Analizza" before a scan, "<cartella>, <totale>" after.
     @MainActor
     static func label(for model: ScanModel) -> String {
@@ -15,11 +12,6 @@ enum ChartAccessibility {
                                     : String(localized: "Scegli cosa analizzare e premi Analizza")
         }
         return "\(folder.name), \(Formatters.bytes(folder.size))"
-    }
-
-    /// The `limit` largest of `items`, biggest first.
-    static func largest<T>(_ items: [T], limit: Int = childLimit, size: (T) -> UInt64) -> [T] {
-        Array(items.sorted { size($0) > size($1) }.prefix(limit))
     }
 }
 
@@ -52,8 +44,15 @@ extension SegmentTooltip.Subject {
 }
 
 extension View {
-    /// "Torna su" on the chart itself, when there is a level above.
+    /// "Torna su" on the chart itself; registered only while there is a level above.
+    @ViewBuilder
     func chartUpAction(enabled: Bool, _ goUp: @escaping () -> Void) -> some View {
-        accessibilityAction(named: Text("Torna su")) { if enabled { goUp() } }
+        if enabled { accessibilityAction(named: Text("Torna su"), goUp) } else { self }
+    }
+
+    /// "Apri" on a segment or tile: drills into `node` when it has children to show.
+    @ViewBuilder
+    func chartOpenAction(node: NodeID?, hasChildren: Bool, _ open: @escaping (NodeID) -> Void) -> some View {
+        if let node, hasChildren { accessibilityAction(named: Text("Apri")) { open(node) } } else { self }
     }
 }

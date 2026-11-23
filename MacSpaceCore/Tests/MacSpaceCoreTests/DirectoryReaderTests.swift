@@ -9,7 +9,7 @@ import Testing
     try fx.dir("sub")
     let entries = try DirectoryReader.read(path: fx.root.path)
     let a = try #require(entries.first { $0.name == "a.bin" })
-    let expected = try f.resourceValues(forKeys: [.totalFileAllocatedSizeKey]).totalFileAllocatedSize!
+    let expected = try #require(try f.resourceValues(forKeys: [.totalFileAllocatedSizeKey]).totalFileAllocatedSize)
     #expect(a.kind == .file && a.allocatedSize == UInt64(expected))
     #expect(entries.first { $0.name == "sub" }?.kind == .directory)
 }
@@ -24,7 +24,7 @@ import Testing
     let fx = try Fixture(); defer { fx.cleanup() }
     let f = try fx.file("x", bytes: 5000); try fx.hardLink("y", to: f)
     let e = try DirectoryReader.read(path: fx.root.path)
-    let x = e.first { $0.name == "x" }!, y = e.first { $0.name == "y" }!
+    let x = try #require(e.first { $0.name == "x" }), y = try #require(e.first { $0.name == "y" })
     #expect(x.inode == y.inode && x.linkCount == 2)
 }
 @Test func permissionDeniedThrows() throws {

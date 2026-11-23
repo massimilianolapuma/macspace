@@ -20,12 +20,12 @@ private func flat(_ sizes: [UInt64]) -> FileTree {
     #expect(tiles.allSatisfy { max($0.width / $0.height, $0.height / $0.width) < 2.5 })
 }
 
-@Test func nestedChildrenSitInsideParentBelowHeader() {
+@Test func nestedChildrenSitInsideParentBelowHeader() throws {
     let t = FileTree(rootName: "r", rootPath: "/r")
     let d = t.addChild(of: 0, name: "d", kind: .directory, allocatedSize: 0)
     for i in 0..<4 { t.addChild(of: d, name: "c\(i)", kind: .file, allocatedSize: 100) }
     let tiles = TreemapLayout.compute(tree: t, center: 0, width: 600, height: 400)
-    let p = tiles.first { $0.node == d }!, kids = tiles.filter { $0.depth == 2 }
+    let p = try #require(tiles.first { $0.node == d }), kids = tiles.filter { $0.depth == 2 }
     #expect(p.hasHeader && kids.count == 4)
     #expect(kids.allSatisfy { $0.y >= p.y + 18 && $0.x >= p.x && $0.x + $0.width <= p.x + p.width + 0.001 })
 }
@@ -40,12 +40,12 @@ private func flat(_ sizes: [UInt64]) -> FileTree {
     #expect(TreemapLayout.compute(tree: flat([]), center: 0, width: 300, height: 300).isEmpty)
 }
 
-@Test func hitTestReturnsDeepest() {
+@Test func hitTestReturnsDeepest() throws {
     let t = FileTree(rootName: "r", rootPath: "/r")
     let d = t.addChild(of: 0, name: "d", kind: .directory, allocatedSize: 0)
     t.addChild(of: d, name: "c", kind: .file, allocatedSize: 100)
     let tiles = TreemapLayout.compute(tree: t, center: 0, width: 600, height: 400)
-    let c = tiles.first { $0.depth == 2 }!
+    let c = try #require(tiles.first { $0.depth == 2 })
     #expect(TreemapLayout.hitTest(tiles, x: c.x + c.width / 2, y: c.y + c.height / 2)?.name == "c")
     #expect(TreemapLayout.hitTest(tiles, x: -5, y: -5) == nil)
 }
@@ -189,7 +189,7 @@ func randomTreeTilesAreFiniteNonNegativeAndNested(width: Double, height: Double)
     #expect(tiles.allSatisfy { $0.x >= 0 && $0.y >= 0 && $0.x + $0.width <= 800.001 && $0.y + $0.height <= 600.001 })
 }
 
-@Test func totalBudgetStopsSubdividingBreadthFirst() {
+@Test func totalBudgetStopsSubdividingBreadthFirst() throws {
     let t = FileTree(rootName: "r", rootPath: "/r")
     for d in 0..<10 {
         let dir = t.addChild(of: 0, name: "d\(d)", kind: .directory, allocatedSize: 0)
@@ -201,8 +201,8 @@ func randomTreeTilesAreFiniteNonNegativeAndNested(width: Double, height: Double)
     let subdivided = Set(tiles.filter { $0.depth == 2 }.map(\.parent))
     #expect(parents.count == 10 && subdivided.count == 2)
     // Only the parents actually subdivided keep a header; the largest ones go first.
-    #expect(parents.allSatisfy { $0.hasHeader == subdivided.contains($0.node!) })
-    #expect(subdivided == Set(parents.prefix(2).map { $0.node! }))
+    #expect(parents.allSatisfy { $0.hasHeader == $0.node.map(subdivided.contains) })
+    #expect(subdivided == Set(parents.prefix(2).compactMap(\.node)))
     // Without the total budget every folder would be subdivided.
     let unlimited = TreemapLayout.compute(tree: t, center: 0, width: 4000, height: 4000, depth: 2,
                                           style: .init(maxTiles: .max))
