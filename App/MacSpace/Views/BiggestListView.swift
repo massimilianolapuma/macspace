@@ -2,7 +2,7 @@ import MacSpaceCore
 import SwiftUI
 
 /// The largest items in the current folder, in ring-1 order. Hovering a row lights up its
-/// segment; clicking a folder drills into it.
+/// segment or tile; clicking a folder drills into it.
 struct BiggestListView: View {
     let model: ScanModel
     let colorMode: ColorMode
@@ -55,11 +55,21 @@ struct BiggestListView: View {
     }
 
     private func hover(_ row: NodeRow, _ inside: Bool) {
-        if inside {
-            let segment = model.segments.first { $0.depth == 1 && $0.node == row.id }
-            if model.hovered != segment { model.hovered = segment }
-        } else if model.hovered?.node == row.id {
-            model.hovered = nil
+        switch model.chart {
+        case .sunburst:
+            if inside {
+                let segment = model.segments.first { $0.depth == 1 && $0.node == row.id }
+                if model.hovered != segment { model.hovered = segment }
+            } else if model.hovered?.node == row.id {
+                model.hovered = nil
+            }
+        case .treemap:
+            if inside {
+                let tile = model.tiles.first { $0.depth == 1 && $0.node == row.id }
+                if model.hoveredTile != tile { model.hoveredTile = tile }
+            } else if model.hoveredTile?.node == row.id {
+                model.hoveredTile = nil
+            }
         }
     }
 }
@@ -76,7 +86,7 @@ private struct BiggestRow: View {
     private var canOpen: Bool { row.kind == .directory && row.hasChildren }
 
     /// Read here, per row, so a hover change re-evaluates the rows only, not the list.
-    private var highlighted: Bool { model.hovered?.node == row.id }
+    private var highlighted: Bool { model.hoveredNode == row.id }
 
     var body: some View {
         // Folders are buttons, so they take keyboard focus and VoiceOver can open them.

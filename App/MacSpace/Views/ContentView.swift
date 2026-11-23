@@ -10,19 +10,30 @@ struct ContentView: View {
     @State private var choosingFolder = false
     @State private var showOnboarding = false
     @AppStorage(ColorMode.storageKey) private var colorMode: ColorMode = .neutral
+    @AppStorage(ChartKind.storageKey) private var chart: ChartKind = .sunburst
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(spacing: 0) {
             VStack(spacing: 0) {
-                BreadcrumbView(model: model)
-                    .padding(.horizontal, 12)
-                    .frame(height: 40)
-                    .opacity(model.breadcrumb.isEmpty ? 0 : 1)
-                SunburstView(model: model, colorMode: colorMode)
-                    .padding(.horizontal, 8)
-                    .padding(.bottom, 4)
+                HStack(spacing: 12) {
+                    BreadcrumbView(model: model)
+                    if chart == .treemap {
+                        folderTotal
+                    }
+                }
+                .padding(.horizontal, 12)
+                .frame(height: 40)
+                .opacity(model.breadcrumb.isEmpty ? 0 : 1)
+                Group {
+                    switch chart {
+                    case .sunburst: SunburstView(model: model, colorMode: colorMode)
+                    case .treemap: TreemapView(model: model, colorMode: colorMode)
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.bottom, 4)
                 ChartLegend(model: model, mode: colorMode)
                     .padding(.horizontal, 16)
                     .padding(.bottom, 12)
@@ -42,6 +53,10 @@ struct ContentView: View {
                 .disabled(model.breadcrumb.count < 2)
                 .opacity(0)
                 .accessibilityHidden(true)
+        }
+        .onChange(of: chart, initial: true) {
+            // Only relays out the current folder: a running scan carries on.
+            model.chart = chart
         }
         .navigationTitle(Text(verbatim: model.breadcrumb.last?.name ?? "MacSpace"))
         .toolbar(removing: .title)
@@ -87,9 +102,11 @@ struct ContentView: View {
             }
         }
         ToolbarItem(placement: .status) {
-            status
+            ChartKindPicker(selection: $chart)
+                .fixedSize()
+                .help(Text("Vista"))
         }
-        ToolbarItem(placement: .primaryAction) {
+        ToolbarItem(placement: .status) {
             Menu {
                 Picker("Colori", selection: $colorMode) {
                     ForEach(ColorMode.allCases) { mode in
@@ -101,6 +118,9 @@ struct ContentView: View {
                 Label("Colori", systemImage: "paintpalette")
             }
             .help(Text("Colori"))
+        }
+        ToolbarItem(placement: .status) {
+            status
         }
         ToolbarItem(placement: .primaryAction) {
             if model.isScanning {
@@ -149,6 +169,23 @@ struct ContentView: View {
         }
     }
 
+    /// The current folder's size (and the disk's capacity at its root): the treemap has no
+    /// center to show it in, as the sunburst does.
+    private var folderTotal: some View {
+        HStack(spacing: 4) {
+            Text(verbatim: Formatters.bytes(model.breadcrumb.last?.size ?? 0))
+                .fontWeight(.semibold)
+                .foregroundStyle(FusionPalette.primaryText(scheme))
+            if model.center == FileTree.root, let capacity = model.capacity {
+                Text("di \(Formatters.bytes(capacity))")
+                    .foregroundStyle(FusionPalette.secondaryText(scheme))
+            }
+        }
+        .monospacedDigit()
+        .lineLimit(1)
+        .fixedSize()
+    }
+
     /// The target's name after resolving links, as the chart root shows it.
     private var targetName: String {
         switch target {
@@ -193,5 +230,44 @@ private struct OnboardingView: View {
         }
         .padding(24)
         .frame(width: 500)
+    }
+}
+
+/// "Raggiera" | "Treemap" with their symbols. A SwiftUI segmented `Picker` drops a `Label`'s
+/// symbol in the toolbar, so this is the AppKit control, which shows both.
+private struct ChartKindPicker: NSViewRepresentable {
+    @Binding var selection: ChartKind
+
+    private static let kinds: [(kind: ChartKind, title: String, symbol: String)] = [
+        (.sunburst, String(localized: "Raggiera"), "chart.pie"),
+        (.treemap, String(localized: "Treemap"), "square.grid.2x2"),
+    ]
+
+    func makeNSView(context: Context) -> NSSegmentedControl {
+        let control = NSSegmentedControl(labels: Self.kinds.map(\.title), trackingMode: .selectOne,
+                                         target: context.coordinator, action: #selector(Coordinator.changed(_:)))
+        for (index, kind) in Self.kinds.enumerated() {
+            control.setImage(NSImage(systemSymbolName: kind.symbol, accessibilityDescription: nil), forSegment: index)
+            control.setImageScaling(.scaleProportionallyDown, forSegment: index)
+        }
+        control.setAccessibilityLabel(String(localized: "Vista"))
+        return control
+    }
+
+    func updateNSView(_ control: NSSegmentedControl, context: Context) {
+        context.coordinator.selection = $selection
+        control.selectedSegment = Self.kinds.firstIndex { $0.kind == selection } ?? 0
+    }
+
+    func makeCoordinator() -> Coordinator { Coordinator(selection: $selection) }
+
+    final class Coordinator: NSObject {
+        var selection: Binding<ChartKind>
+
+        init(selection: Binding<ChartKind>) { self.selection = selection }
+
+        @MainActor @objc func changed(_ control: NSSegmentedControl) {
+            selection.wrappedValue = ChartKindPicker.kinds[max(control.selectedSegment, 0)].kind
+        }
     }
 }

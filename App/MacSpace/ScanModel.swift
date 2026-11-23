@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import MacSpaceCore
 import Observation
@@ -37,7 +38,23 @@ final class ScanModel {
     var categoryTotals: [FileCategory: UInt64] = [:]
     /// Bytes per age bucket below `center`, non-zero entries only (for the legend).
     var ageTotals: [AgeBucket: UInt64] = [:]
+    /// The hovered sunburst segment (sunburst chart only).
     var hovered: ArcSegment?
+    /// The hovered treemap tile (treemap chart only).
+    var hoveredTile: TreemapTile?
+    /// Which chart is on screen; only that one is laid out. Mirrors `@AppStorage(ChartKind.storageKey)`.
+    /// Changing it relays out the current folder: the scan, `center` and the hovered node stay.
+    var chart: ChartKind = .sunburst {
+        didSet { if chart != oldValue { Task { await refreshViews() } } }
+    }
+    /// The treemap canvas size, set by the treemap view (debounced while the window resizes).
+    var chartSize: CGSize = .zero {
+        didSet { if chartSize != oldValue, chart == .treemap { Task { await refreshViews() } } }
+    }
+    /// Treemap tiles below `center`, laid out for `tilesSize`; empty unless `chart` is `.treemap`.
+    var tiles: [TreemapTile] = []
+    /// The canvas size `tiles` were laid out for.
+    private(set) var tilesSize: CGSize = .zero
     /// Total capacity of the scanned volume; set only when scanning the startup disk.
     var capacity: UInt64?
 
@@ -69,6 +86,7 @@ final class ScanModel {
         guard store != nil, node != center else { return }
         center = node
         hovered = nil
+        hoveredTile = nil
         Task { await refreshViews() }
     }
 
@@ -80,28 +98,51 @@ final class ScanModel {
             guard crumb.count >= 2, store === self.store, from == center else { return }
             center = crumb[crumb.count - 2].id
             hovered = nil
+            hoveredTile = nil
             await refreshViews()
         }
     }
 
-    /// Reloads `segments`, `biggest`, `breadcrumb`, `categoryTotals` and `ageTotals` for the current `center`, from one
-    /// consistent store snapshot.
+    /// The node under the pointer in whichever chart is on screen (or a hovered list row).
+    var hoveredNode: NodeID? {
+        switch chart {
+        case .sunburst: hovered?.node
+        case .treemap: hoveredTile?.node
+        }
+    }
+
+    /// Reloads the active chart (`segments` or `tiles`), `biggest`, `breadcrumb`, `categoryTotals`
+    /// and `ageTotals` for the current `center`, from one consistent store snapshot. The other
+    /// chart's data is emptied; the hovered node carries over to the active chart when it is
+    /// still laid out there.
     func refreshViews() async {
         guard let store else { return }
         let center = self.center
-        let snapshot = await store.snapshot(center: center, chart: .sunburst(depth: Self.ringDepth),
-                                            biggestLimit: Self.biggestLimit)
-        // A newer scan or navigation happened meanwhile: its own refresh wins.
-        guard store === self.store, center == self.center else { return }
+        let chart = self.chart
+        let size = chartSize
+        let request: ChartRequest = switch chart {
+        case .sunburst: .sunburst(depth: Self.ringDepth)
+        case .treemap: .treemap(width: size.width, height: size.height, depth: Self.ringDepth)
+        }
+        let snapshot = await store.snapshot(center: center, chart: request, biggestLimit: Self.biggestLimit)
+        // A newer scan, navigation, chart or canvas size happened meanwhile: its own refresh wins.
+        guard store === self.store, center == self.center, chart == self.chart,
+              chart == .sunburst || size == chartSize else { return }
         Perf.interval("refresh apply") {
+            // Segments and tiles share ids ("\(node)"), so the hover survives a chart switch.
+            let hoveredID = hovered?.id ?? hoveredTile?.id
             segments = snapshot.segments
+            tilesSize = size
+            tiles = snapshot.tiles
             biggest = snapshot.biggest
             breadcrumb = snapshot.breadcrumb
             if categoryTotals != snapshot.categoryTotals { categoryTotals = snapshot.categoryTotals }
             if ageTotals != snapshot.ageTotals { ageTotals = snapshot.ageTotals }
-            if let hovered {
-                let fresh = snapshot.segments.first { $0.id == hovered.id }
-                if fresh != hovered { self.hovered = fresh }
+            if let hoveredID {
+                let segment = snapshot.segments.first { $0.id == hoveredID }
+                if segment != hovered { hovered = segment }
+                let tile = snapshot.tiles.first { $0.id == hoveredID }
+                if tile != hoveredTile { hoveredTile = tile }
             }
         }
     }
@@ -123,8 +164,10 @@ final class ScanModel {
         self.store = store
         center = FileTree.root
         hovered = nil
+        hoveredTile = nil
         capacity = if case .startupDisk = target { Self.startupDiskCapacity() } else { nil }
         segments = []
+        tiles = []
         biggest = []
         breadcrumb = []
         categoryTotals = [:]
