@@ -55,21 +55,10 @@ struct BiggestListView: View {
     }
 
     private func hover(_ row: NodeRow, _ inside: Bool) {
-        switch model.chart {
-        case .sunburst:
-            if inside {
-                let segment = model.segments.first { $0.depth == 1 && $0.node == row.id }
-                if model.hovered != segment { model.hovered = segment }
-            } else if model.hovered?.node == row.id {
-                model.hovered = nil
-            }
-        case .treemap:
-            if inside {
-                let tile = model.tiles.first { $0.depth == 1 && $0.node == row.id }
-                if model.hoveredTile != tile { model.hoveredTile = tile }
-            } else if model.hoveredTile?.node == row.id {
-                model.hoveredTile = nil
-            }
+        if inside {
+            model.hoverFirstLevel(row.id)
+        } else if model.hoveredNode == row.id {
+            model.hoverFirstLevel(nil)
         }
     }
 }

@@ -57,6 +57,16 @@ struct TreemapCanvas {
         CGRect(x: rect.minX * scaleX, y: rect.minY * scaleY, width: rect.width * scaleX, height: rect.height * scaleY)
     }
 
+    /// Tiles whose drawn short side would be under this are never drawn (Ruling Y): 2–4 pt
+    /// slivers read as dashes and dots. Their area shows the parent's surface, and pointing at it
+    /// hovers the parent.
+    static let minDrawnSide = 6.0
+
+    /// Whether a tile settled at layout slot `rect` is drawn at all.
+    static func isVisible(slot rect: CGRect) -> Bool {
+        min(rect.width, rect.height) - gap >= minDrawnSide
+    }
+
     /// The rect drawn for a slot; nil when less than 1 pt would be left on either side.
     func drawn(_ rect: CGRect) -> CGRect? {
         let inset = slot(rect).insetBy(dx: Self.gap / 2, dy: Self.gap / 2)
@@ -80,6 +90,14 @@ struct TreemapMotion {
         var isCurrent: Bool
         /// Child tiles are drawn inside it: it is a section, not a block.
         var isSection: Bool
+        /// Drawn at all: where it settles (or, leaving, where it was) it clears `minDrawnSide`.
+        /// Decided once per transition, so a zoom never pops tiles in or out as they grow.
+        var isVisible: Bool
+    }
+
+    private struct ItemKey: Hashable {
+        let node: NodeID
+        let isCurrent: Bool
     }
 
     /// Draw order: leaving tiles first, then current ones level by level (parents before children).
@@ -88,6 +106,8 @@ struct TreemapMotion {
     private(set) var size: CGSize = .zero
     private(set) var startedAt = Date.distantPast
     private var animated = false
+    /// Index in `items` of each folder's item, current and leaving apart.
+    private var indexByNode: [ItemKey: Int] = [:]
 
     static let spring = Spring(duration: 0.35, bounce: 0)  // == Animation.smooth(duration: 0.35)
 
@@ -117,12 +137,18 @@ struct TreemapMotion {
         return (item, Self.pose(of: item, progress(at: date)))
     }
 
+    /// The item of `item`'s parent in the same transition (current with current, leaving with
+    /// leaving); nil for a child of the center.
+    func parent(of item: Item) -> Item? {
+        indexByNode[ItemKey(node: item.tile.parent, isCurrent: item.isCurrent)].map { items[$0] }
+    }
+
     /// The deepest current tile whose drawn rect contains `point` (view coordinates) at `date`.
     /// Runs on every mouse move, so it allocates nothing.
     func hitTest(_ point: CGPoint, canvas: TreemapCanvas, at date: Date) -> TreemapTile? {
         let t = progress(at: date)
         // Children are drawn after their parents: the last hit is the one on top.
-        for item in items.reversed() where item.isCurrent {
+        for item in items.reversed() where item.isCurrent && item.isVisible {
             let pose = Self.pose(of: item, t)
             if pose.alpha > 0.5, let rect = canvas.drawn(pose.rect), rect.contains(point) { return item.tile }
         }
@@ -190,21 +216,33 @@ struct TreemapMotion {
             }
             newIDs.insert(tile.id)
             next.append(Item(tile: tile, from: start(now, to), to: to, isCurrent: true,
-                             isSection: tile.node.map(sections.contains) ?? false))
+                             isSection: tile.node.map(sections.contains) ?? false,
+                             isVisible: TreemapCanvas.isVisible(slot: to.rect)))
         }
 
         var leaving: [Item] = []
         if animate {
             for (item, now) in shown where isZoom || !(item.isCurrent && newIDs.contains(item.tile.id)) {
                 var to = now
-                to.rect = Self.oldToNew(now.rect, canvas: canvas, change: change)
+                if continuing, !item.isCurrent {
+                    // Already leaving along a zoom: it keeps that path.
+                    to.rect = rescale.slot(item.to.rect)
+                } else {
+                    to.rect = Self.oldToNew(now.rect, canvas: canvas, change: change)
+                }
                 to.alpha = 0
                 leaving.append(Item(tile: item.tile, from: start(now, to), to: to, isCurrent: false,
-                                    isSection: item.isSection))
+                                    isSection: item.isSection,
+                                    isVisible: item.isCurrent ? TreemapCanvas.isVisible(slot: now.rect)
+                                                              : item.isVisible))
             }
         }
 
         items = leaving + next
+        indexByNode.removeAll(keepingCapacity: true)
+        for (index, item) in items.enumerated() {
+            if let node = item.tile.node { indexByNode[ItemKey(node: node, isCurrent: item.isCurrent)] = index }
+        }
         self.size = size
         if !continuing { startedAt = date }
         self.animated = animate

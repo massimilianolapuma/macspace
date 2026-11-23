@@ -28,11 +28,6 @@ private struct LabelBox {
     }
 }
 
-struct FittedText {
-    let string: String
-    let width: Double
-}
-
 /// A segment's label, fitted once per chart generation against its arc's target pose: the name
 /// (truncated with "…" if needed) and, when both lines fit, the size below it.
 struct LabelPlan {
@@ -172,17 +167,13 @@ enum RingLabel {
 @MainActor
 final class LabelPlanner {
     private enum Line: Hashable { case name, size }
-    private struct TextKey: Hashable {
-        let string: String
-        let bucket: Int
-        let line: Line
-    }
 
     private var generation = -1
     private var size = CGSize.zero
     private var plans: [String: LabelPlan?] = [:]
-    private var texts: [TextKey: FittedText?] = [:]
-    private var previousTexts: [TextKey: FittedText?] = [:]
+    private let fitter = TextFitter<Line>(
+        text: { string, line in Text(verbatim: string).font(line == .name ? RingLabel.nameFont : RingLabel.sizeFont) },
+        truncates: { $0 == .name })
 
     /// Starts a new generation when the arcs or the chart size changed.
     func prepare(generation: Int, size: CGSize) {
@@ -190,8 +181,7 @@ final class LabelPlanner {
         self.generation = generation
         self.size = size
         plans.removeAll(keepingCapacity: true)
-        swap(&texts, &previousTexts)
-        texts.removeAll(keepingCapacity: true)
+        fitter.newGeneration()
     }
 
     /// The label for `arc`, fitted against its target pose; nil when nothing useful fits.
@@ -217,39 +207,7 @@ final class LabelPlanner {
         return LabelPlan(name: name, size: nil, locked: locked)
     }
 
-    /// `string` (for a name, its longest "…" prefix) that fits `width`, with its width; nil when
-    /// nothing useful fits.
     private func fitted(_ string: String, width: Double, line: Line, in context: GraphicsContext) -> FittedText? {
-        guard width > 20 else { return nil }
-        let bucket = Int(width / 4)
-        let key = TextKey(string: string, bucket: bucket, line: line)
-        if let hit = texts[key] { return hit }
-        if let hit = previousTexts[key] {
-            texts[key] = hit
-            return hit
-        }
-        let font = line == .name ? RingLabel.nameFont : RingLabel.sizeFont
-        func measure(_ s: String) -> Double {
-            context.resolve(Text(verbatim: s).font(font)).measure(in: CGSize(width: 10_000, height: 40)).width
-        }
-        let limit = Double(bucket * 4)
-        var result: FittedText?
-        let full = measure(string)
-        if full <= limit {
-            result = FittedText(string: string, width: full)
-        } else if line == .name {
-            let characters = Array(string)
-            var low = 0, high = characters.count
-            while low < high {
-                let mid = (low + high + 1) / 2
-                if measure(String(characters[..<mid]) + "…") <= limit { low = mid } else { high = mid - 1 }
-            }
-            if low >= 3 {
-                let text = String(characters[..<low]).trimmingCharacters(in: .whitespaces) + "…"
-                result = FittedText(string: text, width: measure(text))
-            }
-        }
-        texts[key] = result
-        return result
+        fitter.fitted(string, width: width, line: line, in: context)
     }
 }

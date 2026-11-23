@@ -32,13 +32,13 @@ struct TreemapHoverLayer: View {
     }
 
     private func draw(in context: inout GraphicsContext, hoveredID: String, date: Date) {
-        guard let (item, pose) = motion.current(hoveredID, at: date), pose.alpha > 0.01,
+        guard let (item, pose) = motion.current(hoveredID, at: date), item.isVisible, pose.alpha > 0.01,
               let rect = canvas.drawn(pose.rect) else { return }
         labels.prepare(generation: generation, size: canvas.size, mode: colorMode, scheme: scheme)
         let lift = FusionPalette.hoverLift
         guard item.isSection, let node = item.tile.node else {
-            TreemapView.drawTile(item, pose: pose, rect: rect, canvas: canvas, labels: labels, mode: colorMode,
-                                 lift: lift, scheme: scheme, in: context)
+            TreemapView.drawTile(item, pose: pose, rect: rect, canvas: canvas, motion: motion, labels: labels,
+                                 mode: colorMode, lift: lift, scheme: scheme, in: context)
             return
         }
         // A section: lift only what shows of it, its children keep their own fills.
@@ -46,13 +46,13 @@ struct TreemapHoverLayer: View {
         let shape = TreemapView.shape(rect, depth: item.tile.depth)
         var frame = shape
         let t = motion.progress(at: date)
-        for child in motion.items where child.isCurrent && child.tile.parent == node {
+        for child in motion.items where child.isCurrent && child.isVisible && child.tile.parent == node {
             let childPose = TreemapMotion.pose(of: child, t)
             if let childRect = canvas.drawn(childPose.rect) {
                 frame.addPath(TreemapView.shape(childRect, depth: child.tile.depth))
             }
         }
-        let surface = labels.surface(for: item, lift: lift)
+        let surface = labels.surface(for: item, lift: lift, motion: motion)
         context.fill(frame, with: .color(FusionPalette.color(surface).opacity(alpha)), style: FillStyle(eoFill: true))
         let outline = FusionPalette.fill(.init(item.tile), mode: colorMode, depth: pose.shadeDepth,
                                          step: pose.shadeStep, scheme: scheme)

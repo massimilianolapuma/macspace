@@ -111,6 +111,19 @@ final class ScanModel {
         }
     }
 
+    /// Hovers the first-level element of `node` in whichever chart is on screen (nil: none), as
+    /// a hovered list row does.
+    func hoverFirstLevel(_ node: NodeID?) {
+        switch chart {
+        case .sunburst:
+            let segment = node.flatMap { node in segments.first { $0.depth == 1 && $0.node == node } }
+            if hovered != segment { hovered = segment }
+        case .treemap:
+            let tile = node.flatMap { node in tiles.first { $0.depth == 1 && $0.node == node } }
+            if hoveredTile != tile { hoveredTile = tile }
+        }
+    }
+
     /// Reloads the active chart (`segments` or `tiles`), `biggest`, `breadcrumb`, `categoryTotals`
     /// and `ageTotals` for the current `center`, from one consistent store snapshot. The other
     /// chart's data is emptied; the hovered node carries over to the active chart when it is

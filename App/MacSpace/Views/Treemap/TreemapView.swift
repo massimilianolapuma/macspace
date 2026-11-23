@@ -122,24 +122,24 @@ struct TreemapView: View {
             return
         }
         labels.prepare(generation: generation, size: canvas.size, mode: colorMode, scheme: scheme)
-        for (item, pose) in poses {
+        for (item, pose) in poses where item.isVisible {
             guard pose.alpha > 0.01, let rect = canvas.drawn(pose.rect) else { continue }
-            Self.drawTile(item, pose: pose, rect: rect, canvas: canvas, labels: labels, mode: colorMode,
-                          lift: 0, scheme: scheme, in: context)
+            Self.drawTile(item, pose: pose, rect: rect, canvas: canvas, motion: motion, labels: labels,
+                          mode: colorMode, lift: 0, scheme: scheme, in: context)
         }
     }
 
     /// One tile at `rect` (its drawn rect): a section's surface and header, or a block's fill and
     /// label. The hover layer draws the hovered tile again with `lift`.
     static func drawTile(_ item: TreemapMotion.Item, pose: TilePose, rect: CGRect, canvas: TreemapCanvas,
-                         labels: TileLabelPlanner, mode: ColorMode, lift: Double, scheme: ColorScheme,
-                         in context: GraphicsContext) {
+                         motion: TreemapMotion, labels: TileLabelPlanner, mode: ColorMode, lift: Double,
+                         scheme: ColorScheme, in context: GraphicsContext) {
         let tile = item.tile
         let subject = FusionPalette.FillSubject(tile)
         let shape = Self.shape(rect, depth: tile.depth)
         let alpha = min(max(pose.alpha, 0), 1)
         if item.isSection {
-            let surface = labels.surface(for: item, lift: lift)
+            let surface = labels.surface(for: item, lift: lift, motion: motion)
             context.fill(shape, with: .color(FusionPalette.color(surface).opacity(alpha)))
             if tile.hasHeader, let header = labels.header(for: item, canvas: canvas, in: context) {
                 drawHeader(header, in: rect, canvas: canvas, alpha: alpha, scheme: scheme, context: context)
@@ -236,9 +236,9 @@ struct TreemapView: View {
 }
 
 /// Fits tile labels and section headers once per map generation (each retarget starts one)
-/// against the tiles' target rects, so animation frames only position them; and keeps each
-/// section's surface color, which depends on the enclosing section's. Fitted strings are kept
-/// for one more generation, so a scan refresh re-measures only what changed.
+/// against the tiles' settled rects, so animation frames only position them; and keeps each
+/// section's surface color, which depends on the enclosing section's. Text fitting is the shared
+/// `TextFitter`, so a scan refresh re-measures only what changed.
 @MainActor
 final class TileLabelPlanner {
     nonisolated static let nameFont = Font.system(size: 11, weight: .semibold)
@@ -281,13 +281,14 @@ final class TileLabelPlanner {
     static let headerNameMinWidth = 72.0
 
     private enum Line: Hashable { case name, size, header, headerSize }
-    private struct TextKey: Hashable {
-        let string: String
-        let bucket: Int
-        let line: Line
+    /// Plans and surfaces are kept per tile *and* per side of a transition: during a zoom the
+    /// leaving copy of a tile has another rect, shade and parent than the current one.
+    private struct PlanKey: Hashable {
+        let id: String
+        let isCurrent: Bool
     }
     private struct SurfaceKey: Hashable {
-        let id: String
+        let plan: PlanKey
         let lifted: Bool
     }
 
@@ -295,11 +296,19 @@ final class TileLabelPlanner {
     private var size = CGSize.zero
     private var mode = ColorMode.neutral
     private var scheme = ColorScheme.light
-    private var leaves: [String: Leaf?] = [:]
-    private var headers: [String: Header?] = [:]
+    private var leaves: [PlanKey: Leaf?] = [:]
+    private var headers: [PlanKey: Header?] = [:]
     private var surfaces: [SurfaceKey: Contrast.RGB] = [:]
-    private var texts: [TextKey: FittedText?] = [:]
-    private var previousTexts: [TextKey: FittedText?] = [:]
+    private let fitter = TextFitter<Line>(
+        text: { string, line in
+            switch line {
+            case .name: Text(verbatim: string).font(TileLabelPlanner.nameFont)
+            case .size: Text(verbatim: string).font(TileLabelPlanner.sizeFont)
+            case .header: TileLabelPlanner.headerText(string)
+            case .headerSize: Text(verbatim: string).font(TileLabelPlanner.headerSizeFont)
+            }
+        },
+        truncates: { $0 == .name || $0 == .header })
 
     /// Starts a new generation when the tiles, the canvas size, the colors or the appearance changed.
     func prepare(generation: Int, size: CGSize, mode: ColorMode, scheme: ColorScheme) {
@@ -314,100 +323,73 @@ final class TileLabelPlanner {
         self.scheme = scheme
         leaves.removeAll(keepingCapacity: true)
         headers.removeAll(keepingCapacity: true)
-        swap(&texts, &previousTexts)
-        texts.removeAll(keepingCapacity: true)
+        fitter.newGeneration()
     }
 
-    /// The surface of section `item` (`lift` > 0 while hovered), over its enclosing section's
-    /// resting surface or the background.
-    func surface(for item: TreemapMotion.Item, lift: Double) -> Contrast.RGB {
-        let key = SurfaceKey(id: item.tile.id, lifted: lift > 0)
+    private static func key(_ item: TreemapMotion.Item) -> PlanKey {
+        PlanKey(id: item.tile.id, isCurrent: item.isCurrent)
+    }
+
+    /// Where `item` sits settled, which its text is fitted to: a current tile's target, a leaving
+    /// tile's start (where it was on screen).
+    private static func settledRect(_ item: TreemapMotion.Item) -> CGRect {
+        item.isCurrent ? item.to.rect : item.from.rect
+    }
+
+    /// The surface of section `item` (`lift` > 0 while hovered), over its parent section's
+    /// resting surface (resolved through `motion`, whatever was drawn first) or the background.
+    func surface(for item: TreemapMotion.Item, lift: Double, motion: TreemapMotion) -> Contrast.RGB {
+        let key = SurfaceKey(plan: Self.key(item), lifted: lift > 0)
         if let hit = surfaces[key] { return hit }
-        let base = surfaces[SurfaceKey(id: "\(item.tile.parent)", lifted: false)] ?? FusionPalette.backgroundRGB(scheme)
-        let tint = FusionPalette.fillRGB(.init(item.tile), mode: mode, depth: item.to.shadeDepth,
-                                         step: item.to.shadeStep, lift: lift, scheme: scheme)
+        let base = motion.parent(of: item).map { surface(for: $0, lift: 0, motion: motion) }
+            ?? FusionPalette.backgroundRGB(scheme)
+        let shade = item.isCurrent ? item.to : item.from
+        let tint = FusionPalette.fillRGB(.init(item.tile), mode: mode, depth: shade.shadeDepth,
+                                         step: shade.shadeStep, lift: lift, scheme: scheme)
         let surface = FusionPalette.sectionSurface(tint: tint, over: base, scheme: scheme)
         surfaces[key] = surface
         return surface
     }
 
-    /// The label of block `item`, fitted to its target rect; nil when the target is too small.
+    /// The label of block `item`, fitted to its settled rect; nil when that is too small.
     func leaf(for item: TreemapMotion.Item, canvas: TreemapCanvas, in context: GraphicsContext) -> Leaf? {
-        if let plan = leaves[item.tile.id] { return plan }
+        let key = Self.key(item)
+        if let plan = leaves[key] { return plan }
         var plan: Leaf?
-        if let rect = canvas.drawn(item.to.rect), rect.width >= Self.minLabelWidth, rect.height >= Self.minLabelHeight {
+        if let rect = canvas.drawn(Self.settledRect(item)), rect.width >= Self.minLabelWidth,
+           rect.height >= Self.minLabelHeight {
             let locked = item.tile.flags.contains(.unreadable)
             let room = rect.width - 2 * Self.padding
-            if let name = fitted(TreemapView.title(of: item.tile), width: room - (locked ? Self.lockRoom : 0),
-                                 line: .name, in: context) {
-                plan = Leaf(name: name, size: fitted(Formatters.bytes(item.tile.size), width: room, line: .size,
-                                                     in: context),
+            if let name = fitter.fitted(TreemapView.title(of: item.tile), width: room - (locked ? Self.lockRoom : 0),
+                                        line: .name, in: context) {
+                plan = Leaf(name: name, size: fitter.fitted(Formatters.bytes(item.tile.size), width: room,
+                                                            line: .size, in: context),
                             locked: locked)
             }
         }
-        leaves[item.tile.id] = plan
+        leaves[key] = plan
         return plan
     }
 
-    /// The header of section `item`, fitted to its target rect.
+    /// The header of section `item`, fitted to its settled rect.
     func header(for item: TreemapMotion.Item, canvas: TreemapCanvas, in context: GraphicsContext) -> Header? {
-        if let plan = headers[item.tile.id] { return plan }
+        let key = Self.key(item)
+        if let plan = headers[key] { return plan }
         var plan: Header?
-        if let rect = canvas.drawn(item.to.rect) {
+        if let rect = canvas.drawn(Self.settledRect(item)) {
             let room = rect.width - 2 * Self.padding
             let name = item.tile.name.uppercased(with: Locale(identifier: "it_IT"))
-            let size = fitted(Formatters.bytes(item.tile.size), width: room, line: .headerSize, in: context)
+            let size = fitter.fitted(Formatters.bytes(item.tile.size), width: room, line: .headerSize, in: context)
             // The size stays only while the name keeps a useful width beside it.
             if let size, room - size.width - Self.headerSpacing >= Self.headerNameMinWidth,
-               let fittedName = fitted(name, width: room - size.width - Self.headerSpacing, line: .header,
-                                       in: context) {
+               let fittedName = fitter.fitted(name, width: room - size.width - Self.headerSpacing, line: .header,
+                                              in: context) {
                 plan = Header(name: fittedName, size: size)
-            } else if let fittedName = fitted(name, width: room, line: .header, in: context) {
+            } else if let fittedName = fitter.fitted(name, width: room, line: .header, in: context) {
                 plan = Header(name: fittedName, size: nil)
             }
         }
-        headers[item.tile.id] = plan
+        headers[key] = plan
         return plan
-    }
-
-    /// `string` (for a name, its longest "…" prefix) that fits `width`, with its width; nil when
-    /// nothing useful fits.
-    private func fitted(_ string: String, width: Double, line: Line, in context: GraphicsContext) -> FittedText? {
-        guard width > 20 else { return nil }
-        let bucket = Int(width / 4)
-        let key = TextKey(string: string, bucket: bucket, line: line)
-        if let hit = texts[key] { return hit }
-        if let hit = previousTexts[key] {
-            texts[key] = hit
-            return hit
-        }
-        func measure(_ s: String) -> Double {
-            let text = switch line {
-            case .name: Text(verbatim: s).font(Self.nameFont)
-            case .size: Text(verbatim: s).font(Self.sizeFont)
-            case .header: Self.headerText(s)
-            case .headerSize: Text(verbatim: s).font(Self.headerSizeFont)
-            }
-            return context.resolve(text).measure(in: CGSize(width: 10_000, height: 40)).width
-        }
-        let limit = Double(bucket * 4)
-        var result: FittedText?
-        let full = measure(string)
-        if full <= limit {
-            result = FittedText(string: string, width: full)
-        } else if line == .name || line == .header {
-            let characters = Array(string)
-            var low = 0, high = characters.count
-            while low < high {
-                let mid = (low + high + 1) / 2
-                if measure(String(characters[..<mid]) + "…") <= limit { low = mid } else { high = mid - 1 }
-            }
-            if low >= 3 {
-                let text = String(characters[..<low]).trimmingCharacters(in: .whitespaces) + "…"
-                result = FittedText(string: text, width: measure(text))
-            }
-        }
-        texts[key] = result
-        return result
     }
 }
