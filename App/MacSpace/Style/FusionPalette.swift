@@ -66,8 +66,10 @@ struct FusionPalette {
     /// top-level tile) and `index` the element's position among its siblings. Used by both charts.
     ///
     /// - Neutral: the plan-1 ring palette, unchanged.
-    /// - By type: the category's `ChartPalette.categoryFill`, 6 lightness points lighter per level
-    ///   below the first. Merged "altri" elements mix types, so they keep the neutral ring tone.
+    /// - By type: the category's `ChartPalette.categoryFill`, up to 6 lightness points lighter per
+    ///   level below the first. Merged "altri" elements mix types, so they take
+    ///   `ChartPalette.mergedFill` instead, a warm graphite apart from every category (Ruling AF),
+    ///   which the legend names "Altri (misti)".
     /// - By last use: the age bucket's `ChartPalette.ageFill`, the same at every depth (Ruling V:
     ///   its lightness *is* the age, so a depth shift would make a deep recent folder read as an
     ///   older one). Merged "altri" take the bucket holding most of their bytes, which their
@@ -144,7 +146,7 @@ struct FusionPalette {
         case .neutral:
             nil
         case .category:
-            subject.isMerged ? nil
+            subject.isMerged ? ChartPalette.mergedFill(scheme: paletteScheme(scheme), lift: lift)
                 : ChartPalette.categoryFill(subject.category, scheme: paletteScheme(scheme), depth: depth, lift: lift)
         case .lastUse:
             ChartPalette.ageFill(subject.ageBucket, scheme: paletteScheme(scheme), lift: lift)
@@ -162,6 +164,11 @@ struct FusionPalette {
 
     static func swatch(_ bucket: AgeBucket, scheme: ColorScheme) -> Color {
         color(ChartPalette.ageFill(bucket, scheme: paletteScheme(scheme)))
+    }
+
+    /// The merged "altri" fill in "by file type" mode, for its legend chip.
+    static func mergedSwatch(scheme: ColorScheme) -> Color {
+        color(ChartPalette.mergedFill(scheme: paletteScheme(scheme)))
     }
 
     /// Hairline around a swatch dot, so pale or dark swatches still show against the window.

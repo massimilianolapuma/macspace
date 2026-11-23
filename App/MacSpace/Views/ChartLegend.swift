@@ -2,50 +2,61 @@ import MacSpaceCore
 import SwiftUI
 
 /// What the chart colors mean, under the chart: one chip per category (by file type) or age
-/// bucket (by last use) present in the current folder, with how much it takes. Categories run
-/// largest first, buckets in age order. Empty in neutral mode and before a scan.
+/// bucket (by last use) present in the current folder, with how much it takes, plus "Altri
+/// (misti)" when the chart shows merged elements. Categories run largest first, buckets in age
+/// order. Empty in neutral mode and before a scan.
 ///
-/// The legend always keeps room for two rows, whatever the mode, so switching mode never
-/// resizes the chart (it would jump, and every ring label would be refitted).
+/// Ruling AE: the legend always keeps the room the fullest legend could need at the current
+/// width (every category, "Altri (misti)" and every bucket, each with the widest figure, in the
+/// order that wraps worst), so a scan, a drill, a mode or chart switch never resizes the chart.
 struct ChartLegend: View {
     let model: ScanModel
     let mode: ColorMode
     @Environment(\.colorScheme) private var scheme
 
+    /// Wider than any figure `Formatters.bytes` writes (digits are monospaced).
+    private static let widestFigure = "888,88 GB"
+
     var body: some View {
-        ZStack(alignment: .top) {
-            reservedHeight
+        LegendFlow(horizontalSpacing: 16, verticalSpacing: 6,
+                   reservedGroups: [FileCategory.allCases.count + 1, AgeBucket.allCases.count]) {
+            reserve
             if mode != .neutral, !model.breadcrumb.isEmpty {
-                LegendFlow(horizontalSpacing: 16, verticalSpacing: Self.rowSpacing) {
-                    switch mode {
-                    case .category:
-                        ForEach(categories, id: \.category) { entry in
-                            LegendChip(color: FusionPalette.swatch(entry.category, scheme: scheme),
-                                       title: entry.category.title, detail: Formatters.bytes(entry.bytes))
-                        }
-                    case .lastUse:
-                        ForEach(ages, id: \.bucket) { entry in
-                            LegendChip(color: FusionPalette.swatch(entry.bucket, scheme: scheme),
-                                       title: entry.bucket.title, detail: Formatters.bytes(entry.bytes))
-                        }
-                    case .neutral:
-                        EmptyView()
+                switch mode {
+                case .category:
+                    ForEach(categories, id: \.category) { entry in
+                        LegendChip(color: FusionPalette.swatch(entry.category, scheme: scheme),
+                                   title: entry.category.title, detail: Formatters.bytes(entry.bytes))
                     }
+                    if model.showsMerged {
+                        LegendChip(color: FusionPalette.mergedSwatch(scheme: scheme), title: "Altri (misti)", detail: nil)
+                    }
+                case .lastUse:
+                    ForEach(ages, id: \.bucket) { entry in
+                        LegendChip(color: FusionPalette.swatch(entry.bucket, scheme: scheme),
+                                   title: entry.bucket.title, detail: Formatters.bytes(entry.bytes))
+                    }
+                case .neutral:
+                    EmptyView()
                 }
-                .accessibilityElement(children: .contain)
             }
         }
+        .accessibilityElement(children: .contain)
     }
 
-    private static let rowSpacing = 6.0
-
-    /// Two rows of chip text, invisible: the room the legend keeps in every mode.
-    private var reservedHeight: some View {
-        VStack(spacing: Self.rowSpacing) {
-            Text(verbatim: "Ag")
-            Text(verbatim: "Ag")
+    /// The fullest legends, invisible, for `LegendFlow` to measure: every category and "Altri
+    /// (misti)", then every age bucket (`reservedGroups`).
+    @ViewBuilder
+    private var reserve: some View {
+        Group {
+            ForEach(FileCategory.allCases, id: \.self) { category in
+                LegendChip(color: .clear, title: category.title, detail: Self.widestFigure)
+            }
+            LegendChip(color: .clear, title: "Altri (misti)", detail: nil)
+            ForEach(AgeBucket.allCases, id: \.self) { bucket in
+                LegendChip(color: .clear, title: bucket.title, detail: Self.widestFigure)
+            }
         }
-        .font(LegendChip.font)
         .hidden()
         .accessibilityHidden(true)
     }
@@ -93,19 +104,40 @@ private struct LegendChip: View {
     }
 }
 
-/// Lays chips out in centered rows, wrapping when the next one does not fit.
+/// Lays chips out in centered rows, wrapping when the next one does not fit. The first subviews
+/// are the hidden reserve, in groups of `reservedGroups` counts: the height is the most rows any
+/// group's chips could need, in any subset and order (`FlowRows.worstCase`), so it depends only
+/// on the width. The chips after the reserve are the ones shown.
 private struct LegendFlow: Layout {
     let horizontalSpacing: Double
     let verticalSpacing: Double
+    let reservedGroups: [Int]
 
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let rows = rows(width: proposal.width ?? .infinity, subviews: subviews)
-        let width = rows.map(\.width).max() ?? 0
-        let height = rows.map(\.height).reduce(0, +) + verticalSpacing * Double(max(rows.count - 1, 0))
-        return CGSize(width: width, height: height)
+    struct Cache {
+        /// Last proposed width and the height reserved for it.
+        var width: Double?
+        var height = 0.0
     }
 
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+    func makeCache(subviews: Subviews) -> Cache { Cache() }
+
+    private var reservedCount: Int { reservedGroups.reduce(0, +) }
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
+        let width = proposal.width ?? .infinity
+        let rows = rows(width: width, subviews: subviews)
+        if cache.width != width {
+            cache.width = width
+            cache.height = reservedHeight(width: width, subviews: subviews)
+        }
+        let height = max(cache.height, height(of: rows))  // max() only guards the exact bound
+        return CGSize(width: width.isFinite ? width : rows.map(\.width).max() ?? 0, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
+        for index in subviews.indices.prefix(reservedCount) {
+            subviews[index].place(at: bounds.origin, proposal: .unspecified)
+        }
         var y = bounds.minY
         for row in rows(width: bounds.width, subviews: subviews) {
             var x = bounds.midX - row.width / 2
@@ -125,13 +157,34 @@ private struct LegendFlow: Layout {
         var height = 0.0
     }
 
+    private func height(rows: Int, rowHeight: Double) -> Double {
+        rows > 0 ? Double(rows) * rowHeight + verticalSpacing * Double(rows - 1) : 0
+    }
+
+    private func height(of rows: [Row]) -> Double {
+        rows.map(\.height).reduce(0, +) + verticalSpacing * Double(max(rows.count - 1, 0))
+    }
+
+    /// The most rows any reserve group could need at `width`, as a height.
+    private func reservedHeight(width: Double, subviews: Subviews) -> Double {
+        var start = 0
+        var height = 0.0
+        for count in reservedGroups {
+            let sizes = subviews[start..<start + count].map { $0.sizeThatFits(.unspecified) }
+            start += count
+            let rows = FlowRows.worstCase(sizes.map { Double($0.width) }, spacing: horizontalSpacing, width: width)
+            height = max(height, self.height(rows: rows, rowHeight: Double(sizes.map(\.height).max() ?? 0)))
+        }
+        return height
+    }
+
+    /// The shown chips (after the reserve) in rows, wrapping as `FlowRows.rows` does.
     private func rows(width: Double, subviews: Subviews) -> [Row] {
         var rows: [Row] = []
         var row = Row()
-        for index in subviews.indices {
+        for index in subviews.indices.dropFirst(reservedCount) {
             let size = subviews[index].sizeThatFits(.unspecified)
-            let needed = row.indices.isEmpty ? size.width : row.width + horizontalSpacing + size.width
-            if !row.indices.isEmpty, needed > width {
+            if !row.indices.isEmpty, row.width + horizontalSpacing + size.width > width {
                 rows.append(row)
                 row = Row()
             }

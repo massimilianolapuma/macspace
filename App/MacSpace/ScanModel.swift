@@ -38,6 +38,8 @@ final class ScanModel {
     var categoryTotals: [FileCategory: UInt64] = [:]
     /// Bytes per age bucket below `center`, non-zero entries only (for the legend).
     var ageTotals: [AgeBucket: UInt64] = [:]
+    /// Whether the active chart shows a merged "Altri N elementi" element (for the legend).
+    var showsMerged = false
     /// The hovered sunburst segment (sunburst chart only).
     var hovered: ArcSegment?
     /// The hovered treemap tile (treemap chart only).
@@ -151,6 +153,11 @@ final class ScanModel {
             breadcrumb = snapshot.breadcrumb
             if categoryTotals != snapshot.categoryTotals { categoryTotals = snapshot.categoryTotals }
             if ageTotals != snapshot.ageTotals { ageTotals = snapshot.ageTotals }
+            let merged = switch chart {
+            case .sunburst: snapshot.segments.contains { $0.node == nil }
+            case .treemap: snapshot.tiles.contains { $0.node == nil }
+            }
+            if showsMerged != merged { showsMerged = merged }
             if let hoveredID {
                 let segment = snapshot.segments.first { $0.id == hoveredID }
                 if segment != hovered { hovered = segment }
@@ -185,6 +192,7 @@ final class ScanModel {
         breadcrumb = []
         categoryTotals = [:]
         ageTotals = [:]
+        showsMerged = false
         phase = .scanning(ScanProgress(filesSeen: 0, bytesSeen: 0, directoriesPending: 1))
 
         let latest = LatestProgress()
