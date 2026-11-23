@@ -6,9 +6,9 @@ import Testing
         for c in FileCategory.allCases { #expect(!Contrast.isReservedOrange(ChartPalette.category(c, scheme: s))) }
         for b in AgeBucket.allCases { #expect(!Contrast.isReservedOrange(ChartPalette.age(b, scheme: s))) }
         for surface in mergedSurfaces(s) {
-            for lift in [0.0, 12] {
-                #expect(!Contrast.isReservedOrange(ChartPalette.mergedFill(on: surface, scheme: s, lift: lift)))
-                #expect(!Contrast.isReservedOrange(ChartPalette.mergedOutline(on: surface, scheme: s, lift: lift)))
+            for hovered in [false, true] {
+                #expect(!Contrast.isReservedOrange(ChartPalette.mergedFill(on: surface, scheme: s, hovered: hovered)))
+                #expect(!Contrast.isReservedOrange(ChartPalette.mergedOutline(on: surface, scheme: s, hovered: hovered)))
             }
         }
     }
@@ -113,12 +113,12 @@ private func mergedSurfaces(_ s: ChartPalette.Scheme) -> [Contrast.RGB] {
 @Test func mergedOutlineReachesThreeToOneOnEverySurface() {
     for s in [ChartPalette.Scheme.light, .dark] {
         for surface in mergedSurfaces(s) {
-            for lift in [0.0, 12] {
-                let outline = ChartPalette.mergedOutline(on: surface, scheme: s, lift: lift)
-                #expect(Contrast.ratio(outline, surface) >= 3, "\(s) outline+\(lift) vs surface \(surface)")
-                for fillLift in Set([0, lift]) {
-                    let fill = ChartPalette.mergedFill(on: surface, scheme: s, lift: fillLift)
-                    #expect(Contrast.ratio(outline, fill) >= 3, "\(s) outline+\(lift) vs fill+\(fillLift) on \(surface)")
+            for hovered in [false, true] {
+                let outline = ChartPalette.mergedOutline(on: surface, scheme: s, hovered: hovered)
+                #expect(Contrast.ratio(outline, surface) >= 3, "\(s) outline \(hovered) vs surface \(surface)")
+                for fillHovered in Set([false, hovered]) {
+                    let fill = ChartPalette.mergedFill(on: surface, scheme: s, hovered: fillHovered)
+                    #expect(Contrast.ratio(outline, fill) >= 3, "\(s) outline \(hovered) vs fill \(fillHovered) on \(surface)")
                 }
             }
         }
@@ -142,8 +142,10 @@ private func mergedSurfaces(_ s: ChartPalette.Scheme) -> [Contrast.RGB] {
                                                            over: base, scheme: s)
                     let hovered = ChartPalette.sectionSurface(
                         tint: ChartPalette.categoryFill(c, scheme: s, depth: depth, lift: 12), over: base, scheme: s)
-                    let outline = ChartPalette.mergedOutline(on: rest, scheme: s)
-                    #expect(Contrast.ratio(outline, hovered) >= 3, "\(s) \(c) d\(depth) on \(base)")
+                    for merged in [false, true] {
+                        let outline = ChartPalette.mergedOutline(on: rest, scheme: s, hovered: merged)
+                        #expect(Contrast.ratio(outline, hovered) >= 3, "\(s) \(c) d\(depth) on \(base)")
+                    }
                 }
             }
         }
@@ -154,8 +156,8 @@ private func mergedSurfaces(_ s: ChartPalette.Scheme) -> [Contrast.RGB] {
 @Test func mergedOutlineIsNeutral() {
     for s in [ChartPalette.Scheme.light, .dark] {
         for surface in mergedSurfaces(s) {
-            for lift in [0.0, 12] {
-                #expect(Contrast.hslComponents(ChartPalette.mergedOutline(on: surface, scheme: s, lift: lift)).s <= 10.5)
+            for hovered in [false, true] {
+                #expect(Contrast.hslComponents(ChartPalette.mergedOutline(on: surface, scheme: s, hovered: hovered)).s <= 10.5)
             }
         }
     }
@@ -172,20 +174,59 @@ private func mergedSurfaces(_ s: ChartPalette.Scheme) -> [Contrast.RGB] {
             #expect(Contrast.ratio(rest, surface) < 1.25, "\(s) \(surface)")
             #expect(Contrast.deltaE2000(rest, surface) >= 2, "\(s) \(surface)")
             if s == .dark { #expect(Contrast.luminance(rest) > Contrast.luminance(surface)) }
-            for lift in [0.0, 12] {
-                let fill = ChartPalette.mergedFill(on: surface, scheme: s, lift: lift)
+            for hovered in [false, true] {
+                let fill = ChartPalette.mergedFill(on: surface, scheme: s, hovered: hovered)
                 #expect(Contrast.ratio(ChartPalette.labelInk(on: fill, scheme: s), fill) >= 4.5, "\(fill)")
             }
         }
     }
 }
 
-/// Hovering a merged element shows, as on every category fill.
+/// Hovering a merged element shows. Its lift is smaller than the categories' +12 (Ruling AI: the
+/// hovered fill must not become a category color), so the bar is CIE76 > 4 rather than > 5.
 @Test func hoverLiftIsVisibleOnTheMergedFill() {
     for s in [ChartPalette.Scheme.light, .dark] {
         for surface in mergedSurfaces(s) {
             let rest = ChartPalette.mergedFill(on: surface, scheme: s)
-            #expect(Contrast.deltaE(rest, ChartPalette.mergedFill(on: surface, scheme: s, lift: 12)) > 5)
+            #expect(Contrast.deltaE(rest, ChartPalette.mergedFill(on: surface, scheme: s, hovered: true)) > 4)
+        }
+    }
+}
+
+/// Ruling AI: the merged fill, resting and hovered, on every surface it can sit on, is never a
+/// category color: CIEDE2000 >= 8 from every resting category fill at depths 1…3 (fractional ones
+/// included, as animations blend levels), in both themes.
+@Test func mergedFillIsNotACategoryColor() {
+    for s in [ChartPalette.Scheme.light, .dark] {
+        var categories: [(FileCategory, Double, Contrast.RGB)] = []
+        for c in FileCategory.allCases {
+            for depth in stride(from: 1.0, through: 3, by: 0.25) {
+                categories.append((c, depth, ChartPalette.categoryFill(c, scheme: s, depth: depth)))
+            }
+        }
+        for surface in mergedSurfaces(s) {
+            for hovered in [false, true] {
+                let merged = ChartPalette.mergedFill(on: surface, scheme: s, hovered: hovered)
+                for (c, depth, fill) in categories {
+                    let difference = Contrast.deltaE2000(merged, fill)
+                    #expect(difference >= 8, "\(s) merged \(hovered) on \(surface) vs \(c) d\(depth): \(difference)")
+                }
+            }
+        }
+    }
+}
+
+/// Ruling AI: the hovered fill keeps its surface's tint: same hue and saturation, lifted without
+/// clamping (never pure white in light mode).
+@Test func hoveredMergedFillKeepsTheSurfaceTint() {
+    for s in [ChartPalette.Scheme.light, .dark] {
+        for surface in mergedSurfaces(s) {
+            let (h, sat, l) = Contrast.hslComponents(surface)
+            let hovered = Contrast.hslComponents(ChartPalette.mergedFill(on: surface, scheme: s, hovered: true))
+            #expect(hovered.l <= 98.5, "\(s) \(surface): \(hovered.l)")
+            #expect(hovered.l > l - 4, "\(s) \(surface)")
+            #expect(abs(hovered.s - sat) < 0.5, "\(s) \(surface)")
+            if sat > 1 { #expect(abs(hovered.h - h) < 0.5, "\(s) \(surface)") }
         }
     }
 }

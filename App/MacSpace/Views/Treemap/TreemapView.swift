@@ -159,7 +159,8 @@ struct TreemapView: View {
             let fill = FusionPalette.fill(subject, mode: mode, depth: pose.shadeDepth, step: pose.shadeStep,
                                           lift: lift, on: base, scheme: scheme)
             context.fill(shape, with: .color(fill.opacity(alpha)))
-            if let outline = FusionPalette.mergedOutline(subject, mode: mode, lift: lift, on: base, scheme: scheme) {
+            if base != nil {
+                let outline = labels.mergedOutline(for: item, hovered: lift > 0, motion: motion)
                 MergedOutline.strokeTile(rect, radius: cornerRadius(rect, depth: tile.depth),
                                          color: outline.opacity(alpha), scale: scale, in: context)
             }

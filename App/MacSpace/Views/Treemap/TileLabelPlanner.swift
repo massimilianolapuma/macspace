@@ -65,6 +65,7 @@ final class TileLabelPlanner {
     private var leaves: [PlanKey: Leaf?] = [:]
     private var headers: [PlanKey: Header?] = [:]
     private var surfaces: [SurfaceKey: Contrast.RGB] = [:]
+    private var mergedOutlines: [SurfaceKey: Color] = [:]
     private let fitter = TextFitter<Line>(
         text: { string, line in
             switch line {
@@ -82,6 +83,7 @@ final class TileLabelPlanner {
         else { return }
         if mode != self.mode || scheme != self.scheme || generation != self.generation {
             surfaces.removeAll(keepingCapacity: true)
+            mergedOutlines.removeAll(keepingCapacity: true)
         }
         self.generation = generation
         self.size = size
@@ -106,6 +108,16 @@ final class TileLabelPlanner {
     /// whatever was drawn first) or the background.
     func base(for item: TreemapMotion.Item, motion: TreemapMotion) -> Contrast.RGB {
         motion.parent(of: item).map { surface(for: $0, lift: 0, motion: motion) } ?? FusionPalette.backgroundRGB(scheme)
+    }
+
+    /// The dashed outline of merged block `item` on `base(for: item)`, `hovered` or not; solved once
+    /// per tile and generation.
+    func mergedOutline(for item: TreemapMotion.Item, hovered: Bool, motion: TreemapMotion) -> Color {
+        let key = SurfaceKey(plan: Self.key(item), lifted: hovered)
+        if let hit = mergedOutlines[key] { return hit }
+        let outline = FusionPalette.mergedOutline(on: base(for: item, motion: motion), hovered: hovered, scheme: scheme)
+        mergedOutlines[key] = outline
+        return outline
     }
 
     /// The surface of section `item` (`lift` > 0 while hovered), over `base(for: item)`.

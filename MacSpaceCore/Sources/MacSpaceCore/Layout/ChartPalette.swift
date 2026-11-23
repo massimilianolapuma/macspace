@@ -132,25 +132,33 @@ public enum ChartPalette {
     // MARK: Merged "Altri"
 
     /// The fill of a merged "Altri N elementi" element in "by file type" mode, sitting on `surface`
-    /// (its parent section's surface in the treemap, the background in the sunburst). It mixes
-    /// types, so it takes none of theirs (Ruling AG): it stays close to its surface, a little darker
-    /// in light mode and a little lighter in dark mode (so it never reads as a hole), and the dashed
-    /// `mergedOutline` around it says "many small items". Lifted by `lift` while hovered.
-    public static func mergedFill(on surface: Contrast.RGB, scheme: Scheme, lift: Double = 0) -> Contrast.RGB {
+    /// (its parent section's resting surface in the treemap, the background in the sunburst). It
+    /// mixes types, so it takes none of theirs (Ruling AG): it keeps its surface's hue and
+    /// saturation, a little darker in light mode and a little lighter in dark mode (so it never
+    /// reads as a hole), and the dashed `mergedOutline` around it says "many small items". While
+    /// `hovered` it lifts by `mergedHoverLift`.
+    ///
+    /// Ruling AI: resting or hovered, it stays at CIEDE2000 >= 8 from every resting category fill.
+    /// Dark mode is the binding side: the darkest, near-grey categories (system, other) sit close
+    /// above the brightest section surfaces, which is why its lift is small.
+    public static func mergedFill(on surface: Contrast.RGB, scheme: Scheme, hovered: Bool = false) -> Contrast.RGB {
         let (h, s, l) = Contrast.hslComponents(surface)
-        let offset = scheme == .dark ? 5.0 : -4.0
-        return Contrast.hsl(h, s, min(max(l + offset + lift, 0), 100))
+        let offset = scheme == .dark ? mergedOffsetDark : mergedOffsetLight
+        return Contrast.hsl(h, s, min(max(l + offset + (hovered ? mergedHoverLift(scheme) : 0), 0), 100))
     }
 
-    /// The dashed outline of a merged element on `surface`, hovered when `lift` > 0: a Fusion neutral
+    /// Lightness points a hovered merged fill gains over the resting one (the categories take
+    /// `hoverLift`, 12).
+    public static func mergedHoverLift(_ scheme: Scheme) -> Double { scheme == .dark ? 4 : 7 }
+    private static let mergedOffsetLight = -4.0, mergedOffsetDark = 3.0
+
+    /// The dashed outline of a merged element on `surface`, `hovered` or not: a Fusion neutral
     /// (`hsl(30, 10%, …)` light, `hsl(240, 4%, …)` dark), as close to the surface as it can be while
     /// it keeps 3:1 (WCAG 1.4.11, plus a little margin for rounding) against the surface and against
-    /// the merged fill, resting and, while hovered, lifted. So it is as quiet as the rule allows: in
-    /// light mode it stays the same on hover (the lifted fill is lighter, never the binding side); in
-    /// dark mode it brightens with the lifted fill.
-    public static func mergedOutline(on surface: Contrast.RGB, scheme: Scheme, lift: Double = 0) -> Contrast.RGB {
+    /// the merged fill, resting and, while hovered, lifted. So it is as quiet as the rule allows.
+    public static func mergedOutline(on surface: Contrast.RGB, scheme: Scheme, hovered: Bool = false) -> Contrast.RGB {
         var references = [surface, mergedFill(on: surface, scheme: scheme)]
-        if lift > 0 { references.append(mergedFill(on: surface, scheme: scheme, lift: lift)) }
+        if hovered { references.append(mergedFill(on: surface, scheme: scheme, hovered: true)) }
         let (hue, saturation) = scheme == .dark ? (240.0, 4.0) : (30.0, 10.0)
         func outline(_ l: Double) -> Contrast.RGB { Contrast.hsl(hue, saturation, l) }
         func clears(_ l: Double) -> Bool {

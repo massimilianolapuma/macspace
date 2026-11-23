@@ -68,9 +68,10 @@ struct FusionPalette {
     /// - Neutral: the plan-1 ring palette, unchanged.
     /// - By type: the category's `ChartPalette.categoryFill`, up to 6 lightness points lighter per
     ///   level below the first. Merged "altri" elements mix types, so they take
-    ///   `ChartPalette.mergedFill` instead (Ruling AG): a recessive tone close to the surface they
-    ///   sit on (`surface`; the background when nil), drawn with the dashed `mergedOutline`, which
-    ///   the legend names "Altri (misti)".
+    ///   `ChartPalette.mergedFill` instead (Rulings AG, AI): a recessive tone close to the surface
+    ///   they sit on (`surface`; the background when nil), with its own smaller hover lift (any
+    ///   `lift` > 0 means hovered), drawn with the dashed `mergedOutline`, which the legend names
+    ///   "Altri (misti)".
     /// - By last use: the age bucket's `ChartPalette.ageFill`, the same at every depth (Ruling V:
     ///   its lightness *is* the age, so a depth shift would make a deep recent folder read as an
     ///   older one). Merged "altri" take the bucket holding most of their bytes, which their
@@ -102,15 +103,28 @@ struct FusionPalette {
             ?? ringRGB(lightness: ringLightness(depth: depth, step: step, scheme: scheme) + lift, scheme: scheme)
     }
 
-    /// The dashed outline of a merged "altri" element in "by file type" mode, on `surface` (nil:
-    /// the background), hovered when `lift` > 0; nil for every other element and mode. At least
-    /// 3:1 against the surface and the merged fill (`ChartPalette.mergedOutline`).
-    static func mergedOutline(_ subject: FillSubject, mode: ColorMode, lift: Double = 0,
-                              on surface: Contrast.RGB? = nil, scheme: ColorScheme) -> Color? {
+    /// The dashed outline of a merged "altri" element on the background (the sunburst) in "by file
+    /// type" mode, `hovered` or not; nil for every other element and mode. At least 3:1 against
+    /// the background and the merged fill (`ChartPalette.mergedOutline`). Solved once per scheme.
+    static func mergedOutline(_ subject: FillSubject, mode: ColorMode, hovered: Bool = false,
+                              scheme: ColorScheme) -> Color? {
         guard subject.isMerged, mode == .category else { return nil }
-        return color(ChartPalette.mergedOutline(on: surface ?? backgroundRGB(scheme), scheme: paletteScheme(scheme),
-                                                lift: lift))
+        return backgroundOutlines[paletteScheme(scheme)]?[hovered ? 1 : 0]
     }
+
+    /// The dashed outline of a merged element on `surface` (a treemap section), `hovered` or not.
+    /// Solved on each call: callers cache it per tile.
+    static func mergedOutline(on surface: Contrast.RGB, hovered: Bool, scheme: ColorScheme) -> Color {
+        color(ChartPalette.mergedOutline(on: surface, scheme: paletteScheme(scheme), hovered: hovered))
+    }
+
+    /// Merged outlines on the background, resting and hovered, per scheme.
+    private static let backgroundOutlines: [ChartPalette.Scheme: [Color]] = Dictionary(
+        uniqueKeysWithValues: [ChartPalette.Scheme.light, .dark].map { scheme in
+            (scheme, [false, true].map {
+                color(ChartPalette.mergedOutline(on: ChartPalette.surface(scheme), scheme: scheme, hovered: $0))
+            })
+        })
 
     /// Surface of a treemap section over `base` (`ChartPalette.sectionSurface`).
     static func sectionSurface(tint: Contrast.RGB, over base: Contrast.RGB, scheme: ColorScheme) -> Contrast.RGB {
@@ -139,7 +153,8 @@ struct FusionPalette {
             nil
         case .category:
             subject.isMerged
-                ? ChartPalette.mergedFill(on: surface ?? backgroundRGB(scheme), scheme: paletteScheme(scheme), lift: lift)
+                ? ChartPalette.mergedFill(on: surface ?? backgroundRGB(scheme), scheme: paletteScheme(scheme),
+                                          hovered: lift > 0)
                 : ChartPalette.categoryFill(subject.category, scheme: paletteScheme(scheme), depth: depth, lift: lift)
         case .lastUse:
             ChartPalette.ageFill(subject.ageBucket, scheme: paletteScheme(scheme), lift: lift)
@@ -162,9 +177,8 @@ struct FusionPalette {
     /// The merged "altri" fill and dashed outline in "by file type" mode, on the background, for
     /// its legend chip.
     static func mergedSwatch(scheme: ColorScheme) -> (fill: Color, outline: Color) {
-        let background = backgroundRGB(scheme)
-        return (color(ChartPalette.mergedFill(on: background, scheme: paletteScheme(scheme))),
-                color(ChartPalette.mergedOutline(on: background, scheme: paletteScheme(scheme))))
+        (color(ChartPalette.mergedFill(on: backgroundRGB(scheme), scheme: paletteScheme(scheme))),
+         backgroundOutlines[paletteScheme(scheme)]?[0] ?? .clear)
     }
 
     /// Hairline around a swatch dot, so pale or dark swatches still show against the window.
