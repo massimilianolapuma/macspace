@@ -102,7 +102,7 @@ struct TreemapView: View {
                 let rescale = TreemapCanvas(size: size, layoutSize: motion.size)
                 change = .zoomIn(rescale.slot(target.pose.rect))
             } else if let previous = new.first(where: { $0.node == motionCenter }) {
-                change = .zoomOut(CGRect(x: previous.x, y: previous.y, width: previous.width, height: previous.height))
+                change = .zoomOut(previous.slot)
             } else {
                 change = .unrelated
             }

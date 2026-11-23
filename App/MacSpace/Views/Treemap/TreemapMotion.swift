@@ -27,6 +27,11 @@ struct TilePose: Equatable {
     static func fade(_ t: Double) -> Double { min(t * 1.6, 1) }
 }
 
+extension TreemapTile {
+    /// The tile's layout slot as a rect.
+    var slot: CGRect { CGRect(x: x, y: y, width: width, height: height) }
+}
+
 /// How the new treemap relates to the one on screen, so tiles can move instead of popping.
 enum TreemapChange {
     /// Same center, fresher data or a new canvas size: drawn at once.
@@ -88,7 +93,9 @@ struct TreemapMotion {
         var to: TilePose
         /// Still in the map (as opposed to fading out).
         var isCurrent: Bool
-        /// Child tiles are drawn inside it: it is a section, not a block.
+        /// Child tiles are drawn inside it: it is a section, not a block. A folder whose children
+        /// are all too small to draw (`isVisible`) is a block, filled and labelled like a file,
+        /// rather than an empty surface.
         var isSection: Bool
         /// Drawn at all: where it settles (or, leaving, where it was) it clears `minDrawnSide`.
         /// Decided once per transition, so a zoom never pops tiles in or out as they grow.
@@ -191,7 +198,8 @@ struct TreemapMotion {
         }
 
         let canvas = CGRect(origin: .zero, size: size)
-        let sections = Set(tiles.map(\.parent))
+        // Sections: folders with at least one child that is drawn.
+        let sections = Set(tiles.lazy.filter { TreemapCanvas.isVisible(slot: $0.slot) }.map(\.parent))
         var next: [Item] = []
         next.reserveCapacity(tiles.count)
         var newIDs = Set<String>()
@@ -201,7 +209,7 @@ struct TreemapMotion {
         for tile in tiles {
             let index = familyIndex[tile.parent, default: 0]
             familyIndex[tile.parent] = index + 1
-            let to = TilePose(rect: CGRect(x: tile.x, y: tile.y, width: tile.width, height: tile.height), alpha: 1,
+            let to = TilePose(rect: tile.slot, alpha: 1,
                               shadeDepth: Double(tile.depth), shadeStep: Double(index % 4))
             // A zoom moves the whole map as one picture (the old one growing out of view or
             // shrinking into its tile, the new one growing from the clicked tile or in from
