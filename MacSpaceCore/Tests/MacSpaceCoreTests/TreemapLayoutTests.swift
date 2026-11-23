@@ -143,36 +143,39 @@ func randomTreeTilesAreFiniteNonNegativeAndNested(width: Double, height: Double)
     }
 }
 
-@Test func hugeFolderStaysBounded() {
+@Test func hugeFolderStaysBounded() throws {
     let t = FileTree(rootName: "r", rootPath: "/r")
     for i in 0..<200_000 { t.addChild(of: 0, name: "f\(i)", kind: .file, allocatedSize: UInt64(i % 1000 + 1)) }
     let tiles = TreemapLayout.compute(tree: t, center: 0, width: 800, height: 600)
     // Every drawn tile but "altri" covers at least minTileArea, and the budget caps the rest.
     #expect(tiles.count <= 800 * 600 / 36 + 1 && tiles.count <= 3000)
-    #expect(tiles.last?.node == nil && tiles.last!.otherCount > 0)
+    let other = try #require(tiles.last)
+    #expect(other.node == nil && other.otherCount > 0)
     #expect(tiles.reduce(0) { $0 + $1.size } == t.size(0))
 }
 
-@Test func familyBudgetKeepsTheLargestAndMergesTheRest() {
+@Test func familyBudgetKeepsTheLargestAndMergesTheRest() throws {
     // Every one of these would cover > 36 pt², but only 1 200 siblings get tiles of their own.
     let tiles = TreemapLayout.compute(tree: flat((1...100_000).map { UInt64($0) }), center: 0, width: 2560, height: 1600)
-    #expect(tiles.count == 1201 && tiles.last!.node == nil && tiles.last!.otherCount == 100_000 - 1200)
+    let other = try #require(tiles.last)
+    #expect(tiles.count == 1201 && other.node == nil && other.otherCount == 100_000 - 1200)
     #expect(tiles.dropLast().allSatisfy { $0.size > 100_000 - 1200 })
     #expect(tiles.reduce(0) { $0 + $1.size } == 100_000 * 100_001 / 2)
 }
 
-@Test func familyBudgetKeepsEqualSizedFilesVisible() {
+@Test func familyBudgetKeepsEqualSizedFilesVisible() throws {
     // 5 000 similar photos: 1 200 of them are drawn, not one grey "altri" block.
     let tiles = TreemapLayout.compute(tree: flat(Array(repeating: 1_000, count: 5_000)), center: 0, width: 2560, height: 1600)
     let members = tiles.filter { $0.node != nil }
     #expect(tiles.count == 1201 && members.count == 1200)
-    #expect(tiles.last!.node == nil && tiles.last!.otherCount == 3_800 && tiles.last!.size == 3_800_000)
+    let other = try #require(tiles.last)
+    #expect(other.node == nil && other.otherCount == 3_800 && other.size == 3_800_000)
     // Ties go to the earliest inserted (node ids 1...1200), then are ordered like `children(of:)`.
     #expect(Set(members.compactMap(\.node)) == Set(1...1200))
     let names = members.map(\.name)
     #expect(names == names.sorted())
     let equal = TreemapLayout.compute(tree: flat(Array(repeating: 10, count: 100_000)), center: 0, width: 2560, height: 1600)
-    #expect(equal.count == 1201 && equal.last!.otherCount == 100_000 - 1200)
+    #expect(equal.count == 1201 && equal.last?.otherCount == 100_000 - 1200)
 }
 
 @Test func largeOtherIsSquarifiedInSizeOrder() {

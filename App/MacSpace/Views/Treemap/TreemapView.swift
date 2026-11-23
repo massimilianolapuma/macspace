@@ -67,8 +67,9 @@ struct TreemapView: View {
             }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Text(verbatim: model.breadcrumb.last?.name ?? ""))
-        .accessibilityValue(Text(verbatim: Formatters.bytes(model.breadcrumb.last?.size ?? 0)))
+        .accessibilityLabel(Text(verbatim: ChartAccessibility.label(for: model)))
+        .chartUpAction(enabled: model.breadcrumb.count > 1) { model.goUp() }
+        .accessibilityChildren { accessibleTiles }
         .onAppear {
             motion.retarget(to: model.tiles, size: model.tilesSize, change: .refresh, at: .now, animated: false)
             motionCenter = model.center
@@ -80,6 +81,28 @@ struct TreemapView: View {
             guard animating else { return }
             try? await Task.sleep(for: .seconds(max(motion.endsAt.timeIntervalSinceNow, 0) + 0.03))
             if !Task.isCancelled { animating = false }
+        }
+    }
+
+    // MARK: Accessibility
+
+    /// The largest tiles as VoiceOver children, each on its own slot.
+    private var accessibleTiles: some View {
+        GeometryReader { proxy in
+            let canvas = TreemapCanvas(size: proxy.size, layoutSize: motion.size)
+            ForEach(ChartAccessibility.largest(model.tiles) { $0.size }) { tile in
+                let subject = SegmentTooltip.Subject(tile: tile)
+                let slot = canvas.slot(tile.slot)
+                Color.clear
+                    .frame(width: slot.width, height: slot.height)
+                    .position(x: slot.midX, y: slot.midY)
+                    .accessibilityElement()
+                    .accessibilityLabel(Text(verbatim: subject.title))
+                    .accessibilityValue(Text(verbatim: subject.spokenValue))
+                    .accessibilityAction(named: Text("Apri")) {
+                        if let node = tile.node, tile.hasChildren { model.drill(into: node) }
+                    }
+            }
         }
     }
 

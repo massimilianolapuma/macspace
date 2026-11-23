@@ -65,8 +65,9 @@ struct SunburstView: View {
             }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Text(verbatim: model.breadcrumb.last?.name ?? ""))
-        .accessibilityValue(Text(verbatim: Formatters.bytes(centerSize)))
+        .accessibilityLabel(Text(verbatim: ChartAccessibility.label(for: model)))
+        .chartUpAction(enabled: canGoUp) { model.goUp() }
+        .accessibilityChildren { accessibleSegments }
         .onAppear {
             motion.retarget(to: model.segments, change: .refresh, at: .now, animated: false)
             motionCenter = model.center
@@ -78,6 +79,29 @@ struct SunburstView: View {
             guard animating else { return }
             try? await Task.sleep(for: .seconds(motion.duration + 0.03))
             if !Task.isCancelled { animating = false }
+        }
+    }
+
+    // MARK: Accessibility
+
+    /// The largest segments as VoiceOver children, each placed on its arc's middle.
+    private var accessibleSegments: some View {
+        GeometryReader { proxy in
+            let geometry = ChartGeometry(size: proxy.size)
+            ForEach(ChartAccessibility.largest(model.segments) { $0.size }) { segment in
+                let subject = SegmentTooltip.Subject(segment: segment)
+                let spot = geometry.point(angle: (segment.startAngle + segment.endAngle) / 2,
+                                          radius: geometry.innerRadius(depth: Double(segment.depth) + 0.5))
+                Color.clear
+                    .frame(width: geometry.ringWidth, height: geometry.ringWidth)
+                    .position(spot)
+                    .accessibilityElement()
+                    .accessibilityLabel(Text(verbatim: subject.title))
+                    .accessibilityValue(Text(verbatim: subject.spokenValue))
+                    .accessibilityAction(named: Text("Apri")) {
+                        if let node = segment.node, segment.hasChildren { model.drill(into: node) }
+                    }
+            }
         }
     }
 

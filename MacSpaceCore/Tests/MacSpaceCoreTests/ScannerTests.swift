@@ -12,10 +12,13 @@ func scanFixture(_ fx: Fixture) async throws -> (ScanStore, ScanSummary) {
 @Test func totalsMatchFixture() async throws {
     let fx = try Fixture(); defer { fx.cleanup() }
     let a = try fx.file("d1/a", bytes: 10_000), b = try fx.file("d1/d2/b", bytes: 50_000)
-    let alloc = { (u: URL) in UInt64(try! u.resourceValues(forKeys: [.totalFileAllocatedSizeKey]).totalFileAllocatedSize!) }
+    let alloc = { (u: URL) throws -> UInt64 in
+        let size = try #require(try u.resourceValues(forKeys: [.totalFileAllocatedSizeKey]).totalFileAllocatedSize)
+        return UInt64(size)
+    }
     let (store, s) = try await scanFixture(fx)
     #expect(s.files == 2 && s.directories >= 2 && !s.wasCancelled)
-    #expect(await store.rootSize() == alloc(a) + alloc(b))
+    #expect(await store.rootSize() == (try alloc(a)) + (try alloc(b)))
 }
 @Test func hardLinkCountedOnce() async throws {
     let fx = try Fixture(); defer { fx.cleanup() }

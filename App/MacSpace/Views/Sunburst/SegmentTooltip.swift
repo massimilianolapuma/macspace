@@ -24,16 +24,12 @@ struct SegmentTooltip: View {
     @Environment(\.colorScheme) private var scheme
 
     init(segment: ArcSegment, total: UInt64) {
-        subject = Subject(title: SunburstView.title(of: segment), size: segment.size, isMerged: segment.node == nil,
-                          hasChildren: segment.hasChildren, category: segment.category,
-                          ageBucket: segment.ageBucket, lastUsed: segment.lastUsed, flags: segment.flags)
+        subject = Subject(segment: segment)
         self.total = total
     }
 
     init(tile: TreemapTile, total: UInt64) {
-        subject = Subject(title: TreemapView.title(of: tile), size: tile.size, isMerged: tile.node == nil,
-                          hasChildren: tile.hasChildren, category: tile.category, ageBucket: tile.ageBucket,
-                          lastUsed: tile.lastUsed, flags: tile.flags)
+        subject = Subject(tile: tile)
         self.total = total
     }
 

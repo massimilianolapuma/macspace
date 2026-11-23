@@ -69,6 +69,7 @@ struct Fixture {
             close(fd)
         }
         rmdir(root.path)
+        assert(!FileManager.default.fileExists(atPath: root.path), "Fixture cleanup left \(root.path) behind")
     }
 
     // MARK: - Helpers

@@ -13,6 +13,9 @@
     "Altro" : {
 
     },
+    "Analisi in corso…" : {
+
+    },
     "Analisi in corso… %@ file" : {
 
     },
@@ -23,6 +26,9 @@
 
     },
     "App" : {
+
+    },
+    "Apri" : {
 
     },
     "Apri Impostazioni di Sistema" : {
@@ -104,6 +110,9 @@
 
     },
     "Tipo: %@" : {
+
+    },
+    "Torna su" : {
 
     },
     "Treemap" : {

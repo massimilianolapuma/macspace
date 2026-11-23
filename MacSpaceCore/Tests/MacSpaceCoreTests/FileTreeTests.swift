@@ -129,3 +129,64 @@ import Testing
     t.sortLikeChildren(&all)
     #expect(all == t.children(of: 0))
 }
+
+@Test func sizeAndLastUseAggregateThroughAFiveLevelChain() {
+    let t = FileTree(rootName: "r", rootPath: "/r")
+    var chain = [FileTree.root]
+    for level in 1...5 {
+        chain.append(t.addChild(of: chain[level - 1], name: "d\(level)", kind: .directory, allocatedSize: 0))
+    }
+    t.addChild(of: chain[5], name: "leaf", kind: .file, allocatedSize: 4096, category: .video, lastUsed: 77)
+    for node in chain {
+        #expect(t.size(node) == 4096, "node \(node)")
+        #expect(t.lastUsed(node) == 77, "node \(node)")
+        #expect(t.categoryTotals(node)[.video] == 4096, "node \(node)")
+    }
+    #expect(t.path(of: chain[5]) == "/r/d1/d2/d3/d4/d5")
+}
+
+@Test func insertFlagsUnionsWithExistingFlags() {
+    let t = FileTree(rootName: "r", rootPath: "/r")
+    let d = t.addChild(of: 0, name: "d", kind: .directory, allocatedSize: 0, flags: .unreadable)
+    #expect(t.flags(d) == .unreadable)
+    t.insertFlags(.unreadable, for: d)              // idempotent
+    #expect(t.flags(d) == .unreadable)
+    let f = t.addChild(of: 0, name: "f", kind: .file, allocatedSize: 1)
+    #expect(t.flags(f).isEmpty)
+    t.insertFlags(.unreadable, for: f)
+    #expect(t.flags(f) == .unreadable)
+}
+
+@Test func hasChildrenIsTrueOnlyOnceAChildExists() {
+    let t = FileTree(rootName: "r", rootPath: "/r")
+    let d = t.addChild(of: 0, name: "d", kind: .directory, allocatedSize: 0)
+    #expect(t.row(d).hasChildren == false)
+    t.addChild(of: d, name: "f", kind: .file, allocatedSize: 1)
+    #expect(t.row(d).hasChildren == true)
+    #expect(t.row(0).hasChildren == true)
+}
+
+@Test func pathOfIgnoresATrailingSlashOnTheRoot() {
+    for rootPath in ["/r", "/r/"] {
+        let t = FileTree(rootName: "r", rootPath: rootPath)
+        let a = t.addChild(of: 0, name: "a", kind: .directory, allocatedSize: 0)
+        let b = t.addChild(of: a, name: "b", kind: .file, allocatedSize: 1)
+        #expect(t.path(of: a) == "/r/a", "root \(rootPath)")
+        #expect(t.path(of: b) == "/r/a/b", "root \(rootPath)")
+    }
+}
+
+@Test func hundredThousandNodesInsertUnderOneSecond() {
+    let t = FileTree(rootName: "r", rootPath: "/r")
+    let clock = ContinuousClock()
+    let elapsed = clock.measure {
+        var dir = FileTree.root
+        for i in 0..<100_000 {
+            if i % 1000 == 0 { dir = t.addChild(of: 0, name: "d\(i)", kind: .directory, allocatedSize: 0) }
+            t.addChild(of: dir, name: "f\(i)", kind: .file, allocatedSize: 10)
+        }
+    }
+    #expect(t.count == 100_000 + 100 + 1)
+    #expect(t.size(FileTree.root) == 1_000_000)
+    #expect(elapsed < .seconds(1), "took \(elapsed)")
+}
