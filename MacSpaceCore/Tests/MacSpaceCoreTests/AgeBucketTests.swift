@@ -78,3 +78,27 @@ private func treeWithMergedSiblings() -> FileTree {
                                      biggestLimit: 5).tiles
     #expect(tiles.first?.ageBucket == .oneToTwoYears)
 }
+
+/// Ruling X: a timestamp more than a day past the scan start is a bogus clock, not a use.
+@Test func futureTimestampsAreIgnoredAsLastUse() async throws {
+    let store = ScanStore(rootName: "r", rootPath: "/r", now: now)
+    func file(_ name: String, mtime: UInt32, atime: UInt32) -> DirectoryEntry {
+        DirectoryEntry(name: name, kind: .file, allocatedSize: 100, device: 1, inode: 0, linkCount: 1,
+                       isMountPoint: false, isDataless: false, modificationTime: mtime, accessTime: atime)
+    }
+    let future = now + 2 * day
+    _ = await store.insert([file("both.txt", mtime: future, atime: future + 10),
+                            file("atime.txt", mtime: now - 400 * day, atime: future),
+                            file("mtime.txt", mtime: future, atime: now - 10 * day),
+                            file("soon.txt", mtime: now + day / 2, atime: 0)],
+                           under: FileTree.root, parentPath: "/r",
+                           boundary: ScanBoundary(allowedDevices: [1], excludedPaths: []))
+    let rows = await store.rows(childrenOf: FileTree.root, limit: 10)
+    func row(_ name: String) throws -> NodeRow { try #require(rows.first { $0.name == name }) }
+    #expect(try row("both.txt").lastUsed == 0 && row("both.txt").ageBucket == .unknown)
+    #expect(try row("atime.txt").lastUsed == now - 400 * day)
+    #expect(try row("mtime.txt").lastUsed == now - 10 * day)
+    // Within a day of the scan start: clock skew, kept.
+    #expect(try row("soon.txt").lastUsed == now + day / 2)
+    #expect(await store.row(FileTree.root).lastUsed == now + day / 2)
+}

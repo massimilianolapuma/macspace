@@ -42,7 +42,7 @@ public actor ScanStore {
     /// per `(device, inode)`: later links are added with size 0 and `.hardLinkDuplicate`.
     ///
     /// Each entry is classified under `parent`'s context: a directory stores the context it
-    /// imposes, anything else its category. Non-directories record `max(modification, access)`
+    /// imposes, anything else its category. Non-directories record `lastUse(modification:access:now:)`
     /// as their last use (duplicates too, though they add no bytes). A directory's own times are
     /// ignored, since merely listing it can update them: its last use is the latest of its contents.
     public func insert(_ entries: [DirectoryEntry], under parent: NodeID, parentPath: String,
@@ -67,7 +67,8 @@ public actor ScanStore {
             guard entry.kind == .directory else {
                 tree.addChild(of: parent, name: entry.name, kind: entry.kind, allocatedSize: size, flags: flags,
                               category: classifier.category(forFile: entry.name, context: parentContext),
-                              lastUsed: max(entry.modificationTime, entry.accessTime))
+                              lastUsed: Self.lastUse(modification: entry.modificationTime,
+                                                     access: entry.accessTime, now: tree.now))
                 continue
             }
             let path = prefix + entry.name
@@ -117,6 +118,19 @@ public actor ScanStore {
     }
 
     public func path(of id: NodeID) -> String { tree.path(of: id) }
+
+    /// A file's last use: the latest of its modification and access times (0 = unknown). A time
+    /// more than `futureTolerance` past `now` (the scan start) is a bogus clock, not a use, and is
+    /// ignored; if both are, the last use is unknown.
+    public static func lastUse(modification: UInt32, access: UInt32, now: UInt32) -> UInt32 {
+        let limit = now.addingReportingOverflow(futureTolerance)
+        let latest = limit.overflow ? UInt32.max : limit.partialValue
+        func valid(_ t: UInt32) -> UInt32 { t <= latest ? t : 0 }
+        return max(valid(modification), valid(access))
+    }
+
+    /// How far past the scan start a timestamp may lie (clock skew between machines): one day.
+    public static let futureTolerance: UInt32 = 86_400
 
     /// Sunburst ring segments below `center`, `depth` rings deep.
     public func sunburst(center: NodeID, depth: Int) -> [ArcSegment] {
