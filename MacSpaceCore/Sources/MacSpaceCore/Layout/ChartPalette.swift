@@ -3,7 +3,8 @@
 /// Designed to sit inside the Fusion style (spec §5.2): muted, paper-like tones in light mode
 /// and the same hues stepped for graphite in dark mode, never in the orange reserved for what
 /// can be deleted. Checked in `ChartPaletteTests`: no reserved orange, an AA label on every
-/// fill, every pair of categories at CIE76 ΔE > 12 (worst pair ≈ 18.7 light, 17.1 dark).
+/// fill, every pair of categories at CIE76 ΔE > 12 (worst pair ≈ 17.0 light, music and app;
+/// ≈ 16.8 dark, system and other).
 ///
 /// Ten categories cannot all stay apart for color-vision deficiencies (any two can touch in
 /// a sunburst), so a category is never shown by color alone: the legend, tooltip and list
@@ -16,16 +17,18 @@ public enum ChartPalette {
         // Hues follow the kind of content: warm rose for video, sage for photos, violet for
         // music, blue for documents, indigo for apps, teal for development, ochre for archives,
         // olive for app data; system is slate and "other" a quiet stone, both nearly grey.
+        // Pale light tones sit low enough to lighten over two more levels plus the hover lift
+        // before they would fade into the background.
         case (.video, .light): 0xB8758F
-        case (.photo, .light): 0x8ABD93
-        case (.music, .light): 0xB795CC
+        case (.photo, .light): 0x82B88B
+        case (.music, .light): 0xB08BC7
         case (.document, .light): 0x67A3CA
         case (.app, .light): 0x767AB5
         case (.development, .light): 0x4D9895
-        case (.archive, .light): 0xC9B274
+        case (.archive, .light): 0xC5AD6B
         case (.system, .light): 0x6D7986
         case (.appData, .light): 0x8B9661
-        case (.other, .light): 0xC3BDB4
+        case (.other, .light): 0xACA498
         case (.video, .dark): 0x995C74
         case (.photo, .dark): 0x6B9974
         case (.music, .dark): 0x9678A9
@@ -86,12 +89,21 @@ public enum ChartPalette {
 
     /// A category fill as drawn at ring or tile `depth` (1 = first level; fractional while
     /// animating), lifted by `lift` lightness points while hovered. Each level below the first
-    /// lightens by 6 points, capped so the hover lift always has room and no fill, hovered or not,
-    /// drops below 1.3:1 against the background.
+    /// lightens by up to 6 points: pale tones take smaller steps, so the third level still has room
+    /// for the hover lift and no fill, hovered or not, drops below 1.3:1 against the background.
     public static func categoryFill(_ c: FileCategory, scheme: Scheme, depth: Double = 1,
                                     lift: Double = 0) -> Contrast.RGB {
         let tone = (scheme == .dark ? darkCategoryTones : lightCategoryTones)[Int(c.rawValue)]
-        return tone.shade(levels: 6 * (max(depth, 1) - 1), lift: lift)
+        return tone.shade(levels: tone.depthStep * (max(depth, 1) - 1), lift: lift)
+    }
+
+    /// The fill of a merged "Altri N elementi" element in "by file type" mode: it mixes types, so it
+    /// takes none of theirs but a warm graphite, the Fusion neutral (`hsl(30, 10%, 34%)` is the
+    /// first neutral ring in light mode), the same at every depth and darker than every category so
+    /// it reads as "not a type" (Ruling AF: CIEDE2000 >= 10 from every category fill at every depth,
+    /// hovered or not, both themes). Lifted by `lift` while hovered.
+    public static func mergedFill(scheme: Scheme, lift: Double = 0) -> Contrast.RGB {
+        Contrast.hsl(30, 10, (scheme == .dark ? 24 : 34) + lift)
     }
 
     /// An age fill, lifted by `lift` while hovered. The same at every depth: its lightness is the
@@ -107,6 +119,8 @@ public enum ChartPalette {
         let ceiling: Double
         /// Resting fills stop here (`ceiling - hoverLift`, or the base if already above).
         let restingMax: Double
+        /// Lightness added per level: 6 points, or less when two levels would pass `restingMax`.
+        let depthStep: Double
 
         init(_ color: Contrast.RGB, scheme: Scheme) {
             (h, s, l) = Contrast.hslComponents(color)
@@ -120,6 +134,7 @@ public enum ChartPalette {
             }
             ceiling = top
             restingMax = max(l, min(scheme == .dark ? 78 : 86, top - ChartPalette.hoverLift))
+            depthStep = min(6, (restingMax - l) / 2)
         }
 
         func shade(levels: Double, lift: Double) -> Contrast.RGB {
