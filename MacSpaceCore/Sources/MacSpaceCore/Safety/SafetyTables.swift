@@ -48,8 +48,16 @@ public enum SafetyTables {
     /// Never-touch folders of `~/Library` holding Apple data (rule 6), relative to `~/Library`.
     public static let appleDataFolders = [
         "Keychains", "Mail", "Messages", "Accounts", "Calendars", "Safari", "IdentityServices",
+        "Daemon Containers", "Biome", "Metadata", "Suggestions", "Sharing", "Assistant", "IntelligencePlatform",
+        "Shortcuts", "Trial",
         "Application Support/AddressBook", "Application Support/CallHistoryDB", "Application Support/Knowledge",
+        "Application Support/CloudDocs", "Application Support/FileProvider",
+        "Application Support/CallHistoryTransactions",
     ]
+
+    /// Direct children of `~/Library` that rule 12b leaves to the other rules, besides the
+    /// `LibraryLocation` folders: every other child is a Library internal (caution).
+    public static let libraryInternalExceptions = ["Developer", "pnpm", "Mobile Documents", "CloudStorage"]
 
     /// Lowercase name prefixes of Apple's own `~/Library/Containers` entries (rule 6).
     public static let appleContainerPrefixes = ["com.apple."]

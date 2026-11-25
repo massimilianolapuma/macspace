@@ -209,7 +209,7 @@ private let old: UInt32 = 1_000_000_000
     // No apps index needed.
     #expect(v(lib + "/Application Support/com.apple.foo", apps: nil).reason == .appleData)
     #expect(v(lib + "/mail/x").reason == .appleData)
-    #expect(v(lib + "/Mailbox/x").reason == .ordinary)
+    #expect(v(lib + "/Mailbox/x").reason == .libraryInternal)   // ruling R43
     #expect(v(lib + "/Containers/com.applefoo.x", lastUsed: old).reason == .leftover)
     // Caches and Logs are not appleData.
     #expect(v(lib + "/Caches/com.apple.Safari/x", kind: .file) == SafetyVerdict(level: .caution, reason: .appleCache, owner: nil))
@@ -259,7 +259,7 @@ private let old: UInt32 = 1_000_000_000
     #expect(v(lib + "/CloudStorage/GoogleDrive-me@x.com/My Drive/a.pdf", kind: .file).owner == "GoogleDrive")
     #expect(v(lib + "/Mobile Documents").reason == .essentialFolder)
     #expect(v(lib + "/CloudStorage").reason == .essentialFolder)
-    #expect(v(lib + "/CloudStoragex/a").reason == .ordinary)
+    #expect(v(lib + "/CloudStoragex/a").reason == .libraryInternal)   // ruling R43
     // A cloud installer stays a cloud item.
     #expect(v(lib + "/CloudStorage/Dropbox-Personal/Setup.dmg", kind: .file).reason == .cloudSynced)
 }
@@ -450,8 +450,8 @@ private func longReason(_ path: String = "/Users/u/Movies/a.mov", kind: NodeKind
         #expect(longReason(category: category) == .ordinary, "\(category)")
     }
     #expect(longReason(kind: .directory) == .ordinary)
-    #expect(longReason("/Users/u/Library/Movies/a.mov") == .ordinary)
-    #expect(longReason("/Users/u/library/a.mov") == .ordinary)
+    #expect(longReason("/Users/u/Library/Movies/a.mov") == .libraryInternal)   // ruling R43
+    #expect(longReason("/Users/u/library/a.mov") == .libraryInternal)   // ruling R43
     #expect(longReason("/Users/u/Library/Application Support/Some Name/a.mov") == .ordinary)
     #expect(longReason("/Volumes/Ext/a.mov") == .ordinary)
     #expect(longReason("/Users/other/a.mov") == .ordinary)
@@ -462,7 +462,7 @@ private func longReason(_ path: String = "/Users/u/Movies/a.mov", kind: NodeKind
 @Test func otherwiseOrdinary() {
     #expect(v("/Users/u/Documents/report.pdf", kind: .file) == SafetyVerdict(level: .normal, reason: .ordinary, owner: nil))
     #expect(v("/Applications/Foo.app", flags: [.package]).reason == .ordinary)
-    #expect(v(lib + "/Fonts/x.ttf", kind: .file).reason == .ordinary)
+    #expect(v(lib + "/Fonts/x.ttf", kind: .file).reason == .libraryInternal)   // ruling R43
 }
 
 // MARK: - InstallerMatcher
@@ -536,7 +536,7 @@ private let installerApps = AppsIndex(records: [
         #expect(v(lib + "/" + folder).reason == .appleData, "\(folder)")
         #expect(v(lib + "/" + folder + "/x/y.db", kind: .file, apps: nil).reason == .appleData, "\(folder)")
     }
-    #expect(v(lib + "/Safarix").reason == .ordinary)
+    #expect(v(lib + "/Safarix").reason == .libraryInternal)   // ruling R43
     #expect(v(lib + "/Application Support/AddressBookx").reason == .ordinary)
     #expect(v(lib + "/Application Support/KnowledgeBase").reason == .ordinary)
 }
@@ -668,4 +668,47 @@ private func synced(_ path: String, kind: NodeKind = .directory, flags: NodeFlag
     try fx.write("Documents/b.txt", data: Data("b".utf8))
     #expect(SafetyEnvironment.iCloudSyncedHomeFolders(home: fx.root.path).isEmpty)
     #expect(SafetyEnvironment.system(home: fx.root.path, apps: nil).syncedHomeFolders.isEmpty)
+}
+
+// MARK: - ~/Library outside the known locations (final review I4, ruling R43)
+
+@Test func moreAppleFoldersAreNeverTouched() {
+    for folder in ["Daemon Containers", "Biome", "Metadata", "Suggestions", "Sharing", "Assistant",
+                   "IntelligencePlatform", "Shortcuts", "Trial", "Application Support/CloudDocs",
+                   "Application Support/FileProvider", "Application Support/CallHistoryTransactions"] {
+        let apple = SafetyVerdict(level: .protected, reason: .appleData)
+        #expect(v(lib + "/" + folder) == apple, "\(folder)")
+        #expect(v(lib + "/" + folder + "/x/y.db", kind: .file, lastUsed: old) == apple, "\(folder)")
+        #expect(v(lib.lowercased() + "/" + folder.uppercased()) == apple, "\(folder)")   // case-insensitive
+    }
+    // Component-wise: a longer name is not the folder.
+    #expect(v(lib + "/Biomes").reason == .libraryInternal)
+    #expect(v(lib + "/Application Support/CloudDocsX").reason == .ordinary)
+}
+
+@Test func otherLibraryFoldersAreLibraryInternal() {
+    let libraryInternal = SafetyVerdict(level: .caution, reason: .libraryInternal)
+    for name in ["Fonts", "Autosave Information", "Application Scripts", "Android", "Some Vendor", ".DS_Store"] {
+        #expect(v(lib + "/" + name) == libraryInternal, "\(name)")
+        #expect(v(lib + "/" + name + "/deep/file.bin", kind: .file, lastUsed: old) == libraryInternal, "\(name)")
+    }
+    // An installer kept there is still only caution, as a Library item.
+    #expect(v(lib + "/Stuff/Setup.dmg", kind: .file) == libraryInternal)
+    // The known locations, Developer, pnpm and the cloud roots keep their own rules.
+    #expect(v(lib + "/Application Support/SomeTool").reason == .ordinary)
+    #expect(v(lib + "/Caches/com.gone.x").reason == .leftover)
+    #expect(v(lib + "/Developer/Xcode/Archives/2026/App.xcarchive", flags: [.package]).reason == .ordinary)
+    #expect(v(lib + "/Developer/Xcode/DerivedData/App").reason == .developerCache)
+    #expect(v(lib + "/pnpm/store/v3").reason == .developerCache)
+    #expect(v(lib + "/pnpm/other").reason == .ordinary)
+    #expect(v(lib + "/Mobile Documents/com~apple~CloudDocs/a").reason == .cloudSynced)
+    #expect(v(lib + "/CloudStorage/Box/a").reason == .cloudSynced)
+    // Earlier rules win: protected, never-touch, write access, the Library itself.
+    #expect(v(lib + "/Keychains/login.keychain-db", kind: .file).reason == .appleData)
+    #expect(v(lib + "/Stuff/Photos.photoslibrary", flags: [.package]).reason == .photosLibrary)
+    #expect(v(lib + "/Stuff/a", kind: .file, writable: false).reason == .notWritable)
+    #expect(v(lib).reason == .essentialFolder)
+    // Not below the home's Library.
+    #expect(v("/Library/Fonts/a.ttf", kind: .file).reason == .ordinary)
+    #expect(v("/Users/u/Libraryx/a", kind: .file).reason == .ordinary)
 }

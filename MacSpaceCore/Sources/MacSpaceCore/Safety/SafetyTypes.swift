@@ -13,7 +13,7 @@ public enum SafetyLevel: UInt8, Sendable, CaseIterable {
 public enum SafetyReason: Sendable, Hashable, CaseIterable {
     case unusualPath
     case scanRoot, essentialFolder, insidePackage, systemLocation, trash, appleData, photosLibrary, runningApp
-    case notWritable, cloudOnly, cloudSynced, developerCache, analysisPending
+    case notWritable, cloudOnly, cloudSynced, developerCache, libraryInternal, analysisPending
     case appleCache, cacheOfRunningApp, cacheOfApp, leftover
     case runningAppData, appData, leftoverLaunchAgent, recentLeftover, vendorLeftover
     case installer, notUsedForLong, ordinary

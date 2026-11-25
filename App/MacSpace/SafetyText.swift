@@ -46,6 +46,7 @@ extension SafetyVerdict {
         case .developerCache:
             owner.map { String(localized: "Cache per sviluppatori (\($0)): si rigenera da sola") }
                 ?? String(localized: "Cache per sviluppatori: si rigenera da sola")
+        case .libraryInternal: String(localized: "Cartella interna della Libreria: controlla prima")
         case .analysisPending: String(localized: "Analisi delle app in corso…")
         case .appleCache: String(localized: "Cache di sistema: si rigenera, ma alcuni servizi la usano di continuo")
         case .cacheOfRunningApp:

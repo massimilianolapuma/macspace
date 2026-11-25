@@ -92,6 +92,12 @@ public enum SafetyRules {
         if let cache = t.developerCaches.first(where: { SafetyPaths.isUnder(key, $0.path) }) {
             return SafetyVerdict(level: .safe, reason: .developerCache, owner: cache.name)
         }
+        // 12b. Any other `~/Library` child (and below) outside the known locations: macOS or app
+        //      internals no table describes, so only caution (ruling R43).
+        if let child = SafetyPaths.component(below: t.library, path: path, key: key),
+           !t.libraryKnownChildren.contains(SafetyPaths.key(child)) {
+            return SafetyVerdict(level: .caution, reason: .libraryInternal)
+        }
         if let anchor, let ownership {
             // 13. `L/<location>/<name>` (and below) while the apps index is not ready.
             guard env.apps != nil else { return SafetyVerdict(level: .normal, reason: .analysisPending) }
@@ -231,6 +237,8 @@ struct SafetyPaths: Sendable {
     let cloudStorage: String
     let developerCaches: [(name: String, path: String)]
     let locations: [(location: LibraryLocation, path: String)]
+    /// Lowercased names of the `~/Library` children rule 12b leaves alone.
+    let libraryKnownChildren: Set<String>
 
     init(home rawHome: String) {
         let h = SafetyTables.normalized(rawHome)
@@ -248,6 +256,8 @@ struct SafetyPaths: Sendable {
         cloudStorage = Self.key(lib + "/CloudStorage")
         developerCaches = SafetyTables.developerCaches(home: h).map { ($0.name, Self.key($0.path)) }
         locations = LibraryLocation.allCases.map { ($0, Self.key(lib + "/" + $0.rawValue)) }
+        libraryKnownChildren = Set((LibraryLocation.allCases.map(\.rawValue) + SafetyTables.libraryInternalExceptions)
+            .map(Self.key))
     }
 
     /// The `L/<location>/<name>` folder `path` is at or below, if any.
