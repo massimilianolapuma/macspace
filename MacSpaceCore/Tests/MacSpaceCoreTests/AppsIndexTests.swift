@@ -117,3 +117,21 @@ func appsIndexTiming() {
     #expect(idx.app(forTeam: "abcde12345")?.name == "A")
     #expect(idx.app(forTeam: "ZZZZZ99999") == nil)
 }
+
+@Test func appForVendorUsesTheFirstTwoLabelsAndLowestPath() {   // ruling R36
+    let idx = AppsIndex(records: [
+        AppRecord(bundleID: "com.openai.codex", name: "ChatGPT", teamID: nil, path: "/Applications/ChatGPT.app"),
+        AppRecord(bundleID: "com.openai.atlas", name: "Atlas", teamID: nil, path: "/Applications/Atlas.app"),
+        AppRecord(bundleID: "com.apple.Safari", name: "Safari", teamID: nil, path: "/Applications/Safari.app"),
+        AppRecord(bundleID: "single", name: "Single", teamID: nil, path: "/Applications/Single.app"),
+        AppRecord(bundleID: "", name: "NoID", teamID: nil, path: "/Applications/NoID.app"),
+    ])
+    #expect(idx.app(forVendorOf: "com.openai.chat")?.name == "Atlas")      // lowest path wins
+    #expect(idx.app(forVendorOf: "COM.OpenAI.chat.helper")?.name == "Atlas")
+    #expect(idx.app(forVendorOf: "com.openai")?.name == "Atlas")
+    #expect(idx.app(forVendorOf: "com.openaix.chat") == nil)
+    #expect(idx.app(forVendorOf: "com.apple.foo") == nil)                  // Apple is handled separately
+    #expect(idx.app(forVendorOf: "single") == nil)
+    #expect(idx.app(forVendorOf: "single.x") == nil)                       // "single" has one label: no vendor
+    #expect(idx.app(forVendorOf: "") == nil)
+}

@@ -36,6 +36,8 @@ public struct AppsIndex: Sendable {
     private let byName: [String: AppRecord]
     private let teams: Set<String>
     private let byTeam: [String: AppRecord]
+    /// Lowest-path app per vendor (first two bundle-ID labels), `com.apple` excluded.
+    private let byVendor: [String: AppRecord]
 
     /// Builds an index over `records`; the first record wins when keys collide.
     public init(records: [AppRecord]) {
@@ -44,12 +46,16 @@ public struct AppsIndex: Sendable {
         var byName: [String: AppRecord] = [:]
         var teams: Set<String> = []
         var byTeam: [String: AppRecord] = [:]
+        var byVendor: [String: AppRecord] = [:]
         for record in records {
             let id = Self.lower(record.bundleID)
             if !id.isEmpty {   // "" means "no bundle ID": never reachable through identifier lookups
                 if byID[id] == nil { byID[id] = record }
                 for prefix in Self.dotPrefixes(of: id) where byIDPrefix[prefix] == nil {
                     byIDPrefix[prefix] = record
+                }
+                if let vendor = Self.vendor(of: id) {
+                    if let current = byVendor[vendor], current.path <= record.path {} else { byVendor[vendor] = record }
                 }
             }
             for name in [record.name, Self.baseName(ofPath: record.path)] {
@@ -68,6 +74,7 @@ public struct AppsIndex: Sendable {
         self.byName = byName
         self.teams = teams
         self.byTeam = byTeam
+        self.byVendor = byVendor
     }
 
     /// The app whose bundle ID equals `id`, or where one is a prefix of the other on a `.` boundary
@@ -110,6 +117,13 @@ public struct AppsIndex: Sendable {
     /// The app signed by `teamID` (case-insensitive); when several are, the one with the lowest `path`.
     public func app(forTeam teamID: String) -> AppRecord? {
         byTeam[Self.lower(teamID)]
+    }
+
+    /// The app whose bundle ID has the same vendor (first two labels, `com.openai` for
+    /// `com.openai.chat`) as `id`; when several do, the one with the lowest `path`. `com.apple` is no
+    /// vendor here (Apple items are decided before), nor is an identifier with fewer than 2 labels.
+    public func app(forVendorOf id: String) -> AppRecord? {
+        Self.vendor(of: Self.lower(id)).flatMap { byVendor[$0] }
     }
 
     // MARK: - Building
@@ -171,6 +185,15 @@ public struct AppsIndex: Sendable {
         var bytes = Array(string.utf8)
         for index in bytes.indices where bytes[index] >= 0x41 && bytes[index] <= 0x5A { bytes[index] += 0x20 }
         return String(decoding: bytes, as: UTF8.self)
+    }
+
+    /// The first two labels of a lowercased identifier (`com.openai`), or nil when it has fewer than 2
+    /// non-empty leading labels or the vendor is `com.apple`.
+    private static func vendor(of id: String) -> String? {
+        let labels = id.split(separator: ".", maxSplits: 2, omittingEmptySubsequences: false)
+        guard labels.count >= 2, !labels[0].isEmpty, !labels[1].isEmpty else { return nil }
+        let vendor = labels[0] + "." + labels[1]
+        return vendor == "com.apple" ? nil : String(vendor)
     }
 
     /// Proper dot-prefixes of `id` that keep at least 2 labels.

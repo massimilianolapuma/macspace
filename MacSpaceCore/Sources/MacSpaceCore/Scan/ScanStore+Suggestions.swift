@@ -22,7 +22,7 @@ extension ScanStore {
             return tree.children(of: folder).compactMap { item($0, reasons: reasons) }
         }
 
-        let leftoverReasons: Set<SafetyReason> = [.leftover, .recentLeftover, .leftoverLaunchAgent]
+        let leftoverReasons: Set<SafetyReason> = [.leftover, .recentLeftover, .vendorLeftover, .leftoverLaunchAgent]
         let cacheReasons: Set<SafetyReason> = [.cacheOfApp, .cacheOfRunningApp, .appleCache]
         var leftovers: [SuggestionItem] = []
         for location in LibraryLocation.allCases {

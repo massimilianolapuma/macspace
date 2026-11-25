@@ -330,6 +330,36 @@ private let old: UInt32 = 1_000_000_000
             == SafetyVerdict(level: .safe, reason: .leftover, owner: nil))
 }
 
+@Test func leftoverOfAnInstalledVendorIsCaution() {   // ruling R36
+    let apps = AppsIndex(records: [
+        AppRecord(bundleID: "com.openai.codex", name: "ChatGPT", teamID: nil, path: "/Applications/ChatGPT.app"),
+        AppRecord(bundleID: "com.spotify.client", name: "Spotify", teamID: nil, path: "/Applications/Spotify.app"),
+    ])
+    let vendor = SafetyVerdict(level: .caution, reason: .vendorLeftover, owner: "ChatGPT")
+    for location in ["Application Support", "Containers", "Preferences", "HTTPStorages", "WebKit", "Logs"] {
+        let name = location == "Preferences" ? "com.openai.chat.plist" : "com.openai.chat"
+        #expect(v(lib + "/" + location + "/" + name, lastUsed: old, apps: apps) == vendor, "\(location)")
+        #expect(v(lib + "/" + location + "/" + name + "/x", kind: .file, lastUsed: old, apps: apps) == vendor,
+                "\(location)")
+    }
+    #expect(v(lib + "/Saved Application State/com.openai.chat.savedState", lastUsed: old, apps: apps) == vendor)
+    #expect(v(lib + "/Group Containers/group.com.openai.chat", lastUsed: old, apps: apps) == vendor)
+    // Caches (rule 14) too, whatever the recency.
+    #expect(v(lib + "/Caches/com.openai.chat", apps: apps) == vendor)
+    #expect(v(lib + "/Caches/com.openai.chat/Cache.db", kind: .file, lastUsed: now, apps: apps) == vendor)
+    // A vendor nobody installed stays a leftover.
+    #expect(v(lib + "/Application Support/ai.perplexity.mac", lastUsed: old, apps: apps)
+            == SafetyVerdict(level: .safe, reason: .leftover))
+    #expect(v(lib + "/Caches/ai.perplexity.mac", apps: apps) == SafetyVerdict(level: .safe, reason: .leftover))
+    #expect(v(lib + "/Application Support/com.openaix.chat", lastUsed: old, apps: apps).reason == .leftover)
+    // Launch agents keep their own caution reason; an installed match is still app data.
+    #expect(v(lib + "/LaunchAgents/com.openai.chat.agent.plist", kind: .file, apps: apps).reason == .leftoverLaunchAgent)
+    #expect(v(lib + "/Application Support/com.openai.codex", lastUsed: old, apps: apps)
+            == SafetyVerdict(level: .caution, reason: .appData, owner: "ChatGPT"))
+    // Never safe: not preselected, and the reason says why.
+    #expect(SafetyLevel.caution.isTrashable)
+}
+
 @Test func leftoverRecencyBoundaries() {
     let path = lib + "/Application Support/com.gone.app"
     #expect(v(path, lastUsed: now - SafetyRules.recentLeftoverSeconds).reason == .leftover)

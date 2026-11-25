@@ -86,3 +86,17 @@ private func age(_ url: URL, years: Int) {
     #expect(Set(items.map(\.name)) == ["_cacache", "DerivedData"])
     #expect(items.allSatisfy { $0.verdict.reason == .developerCache })
 }
+
+@Test func vendorLeftoverIsListedButNotPreselected() async throws {   // ruling R36
+    let fx = try Fixture(); defer { fx.cleanup() }
+    let data = try fx.file("Library/Application Support/com.spotify.legacy/a", bytes: 2_000_000)
+    age(data, years: 3)
+    try fx.file("Library/Caches/com.spotify.legacy/a", bytes: 2_000_000)
+    let store = try await scanned(fx)
+
+    let leftovers = try #require(await store.suggestions().first { $0.kind == .leftovers })
+    #expect(leftovers.items.count == 2)
+    #expect(leftovers.items.allSatisfy {
+        $0.verdict == SafetyVerdict(level: .caution, reason: .vendorLeftover, owner: "Spotify") && !$0.preselected
+    })
+}

@@ -88,7 +88,7 @@ public enum SafetyRules {
             // 13. `L/<location>/<name>` (and below) while the apps index is not ready.
             guard env.apps != nil else { return SafetyVerdict(level: .normal, reason: .analysisPending) }
             if anchor.location == .caches {
-                // 14. Caches.
+                // 14. Caches. An unmatched identifier whose vendor has an installed app is only caution.
                 switch ownership {
                 case .apple:
                     return SafetyVerdict(level: .caution, reason: .appleCache)
@@ -96,7 +96,10 @@ public enum SafetyRules {
                     return SafetyVerdict(level: .caution, reason: .cacheOfRunningApp, owner: owner(of: app))
                 case .installed(let app):
                     return SafetyVerdict(level: .safe, reason: .cacheOfApp, owner: owner(of: app))
-                case .unmatchedIdentifier:
+                case .unmatchedIdentifier(let id):
+                    if let vendor = vendorApp(of: id, in: env) {
+                        return SafetyVerdict(level: .caution, reason: .vendorLeftover, owner: owner(of: vendor))
+                    }
                     return SafetyVerdict(level: .safe, reason: .leftover)
                 case .unknownName:
                     return SafetyVerdict(level: .safe, reason: .cacheOfApp)
@@ -110,9 +113,13 @@ public enum SafetyRules {
                 return SafetyVerdict(level: .protected, reason: .runningAppData, owner: owner(of: app))
             case .installed(let app):
                 return SafetyVerdict(level: .caution, reason: .appData, owner: owner(of: app))
-            case .unmatchedIdentifier:
+            case .unmatchedIdentifier(let id):
                 if anchor.location == .launchAgents {
                     return SafetyVerdict(level: .caution, reason: .leftoverLaunchAgent)
+                }
+                // Same vendor as an installed app (ruling R36): maybe the app's old or sibling ID.
+                if let vendor = vendorApp(of: id, in: env) {
+                    return SafetyVerdict(level: .caution, reason: .vendorLeftover, owner: owner(of: vendor))
                 }
                 // Unknown last use (0) is not evidence of age: treated as recent.
                 if f.anchorLastUsed == 0 || age(f.anchorLastUsed, now: env.now) < recentLeftoverSeconds {
@@ -171,6 +178,11 @@ public enum SafetyRules {
         app.name.isEmpty
             || env.runningIndex.app(forIdentifier: app.bundleID) != nil
             || (!app.path.isEmpty && env.runningPathsKey.contains(SafetyPaths.key(SafetyTables.normalized(app.path))))
+    }
+
+    /// An installed app from the same vendor (first two labels) as the unmatched identifier `id`.
+    private static func vendorApp(of id: String, in env: SafetyEnvironment) -> AppRecord? {
+        env.apps?.app(forVendorOf: id)
     }
 
     /// The app's name, or nil when unknown (a running-only match).

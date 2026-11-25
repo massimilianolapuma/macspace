@@ -15,7 +15,7 @@ public enum SafetyReason: Sendable, Hashable, CaseIterable {
     case scanRoot, essentialFolder, insidePackage, systemLocation, trash, appleData, photosLibrary, runningApp
     case notWritable, cloudOnly, cloudSynced, developerCache, analysisPending
     case appleCache, cacheOfRunningApp, cacheOfApp, leftover
-    case runningAppData, appData, leftoverLaunchAgent, recentLeftover
+    case runningAppData, appData, leftoverLaunchAgent, recentLeftover, vendorLeftover
     case installer, notUsedForLong, ordinary
 }
 

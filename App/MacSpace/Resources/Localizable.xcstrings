@@ -412,6 +412,12 @@
     "Seleziona" : {
 
     },
+    "Sembra un avanzo, ma %@ dello stesso sviluppatore è installata: controlla prima" : {
+
+    },
+    "Sembra un avanzo, ma un'app dello stesso sviluppatore è installata: controlla prima" : {
+
+    },
     "Sembra un avanzo, ma è stato usato di recente: forse appartiene a un'app non trovata" : {
 
     },

@@ -57,6 +57,9 @@ extension SafetyVerdict {
         case .leftover: String(localized: "Avanzo di un'app non più installata")
         case .recentLeftover:
             String(localized: "Sembra un avanzo, ma è stato usato di recente: forse appartiene a un'app non trovata")
+        case .vendorLeftover:
+            owner.map { String(localized: "Sembra un avanzo, ma \($0) dello stesso sviluppatore è installata: controlla prima") }
+                ?? String(localized: "Sembra un avanzo, ma un'app dello stesso sviluppatore è installata: controlla prima")
         case .leftoverLaunchAgent:
             String(localized: "Avvio automatico di un programma non trovato: controlla prima di rimuoverlo")
         case .appData:
