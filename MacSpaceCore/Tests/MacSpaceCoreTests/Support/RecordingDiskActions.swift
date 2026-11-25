@@ -14,7 +14,7 @@ final class RecordingDiskActions: DiskActions {
     /// Paths passed to `moveToTrash`, in call order.
     var moved: [String] { log.withLock { $0 } }
 
-    func moveToTrash(_ path: String) throws -> String {
+    func moveToTrash(_ path: String) throws -> String? {
         log.withLock { $0.append(path) }
         let destination = trash + "/" + (path as NSString).lastPathComponent
         guard rename(path, destination) == 0 else {

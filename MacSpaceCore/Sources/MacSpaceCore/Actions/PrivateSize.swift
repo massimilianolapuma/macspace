@@ -3,7 +3,8 @@
 ///
 /// Each file counts its private size (`ATTR_CMNEXT_PRIVATESIZE`: blocks not shared with an APFS
 /// clone or snapshot), or its allocated size where the volume does not report one. A file with
-/// more than one hard link counts 0: its blocks stay reachable through the other links.
+/// more than one hard link counts 0: its blocks stay reachable through the other links. That is
+/// also a lower bound when a directory holds every link of the file.
 ///
 /// Clones: a clone's private size is ~0, and so is its original's while the clone exists. For
 /// a directory holding both an original and its clone each file reports ~0, so the directory
@@ -30,7 +31,8 @@ public enum PrivateSize {
                 if entry.kind == .directory {
                     pending.append(base + entry.name)
                 } else {
-                    total &+= own(entry)
+                    let (sum, overflow) = total.addingReportingOverflow(own(entry))
+                    total = overflow ? .max : sum
                 }
             }
         }

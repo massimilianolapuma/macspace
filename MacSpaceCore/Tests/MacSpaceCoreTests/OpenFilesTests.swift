@@ -26,6 +26,24 @@ import Testing
     #expect(kernel.isOpen("/private/tmp/t") && kernel.hasOpen(under: "/tmp"))
 }
 
+@Test func prefixLookupIsByteWiseNFC() {
+    // A combining mark right after "/" sorts between siblings but is not a grapheme prefix.
+    let set = OpenFileSet(paths: ["/a/c", "/a/d/\u{301}x", "/a/d/\u{4E00}"])
+    #expect(set.hasOpen(under: "/a/d"))
+    #expect(set.isOpen("/a/d/\u{301}x") && set.isOpen("/a/d/\u{4E00}") && !set.hasOpen(under: "/a/c"))
+    // The same name stored in NFD matches an NFC query, and the other way round.
+    let nfd = OpenFileSet(paths: ["/u/Cafe\u{0301}/f"])
+    #expect(nfd.isOpen("/u/Caf\u{E9}/f") && nfd.hasOpen(under: "/u/Caf\u{E9}"))
+    let nfc = OpenFileSet(paths: ["/u/Caf\u{E9}/f"])
+    #expect(nfc.isOpen("/u/Cafe\u{0301}/f") && nfc.hasOpen(under: "/u/Cafe\u{0301}"))
+}
+
+@Test func completeness() {
+    #expect(OpenFileSet(paths: ["/a"]).isComplete)
+    #expect(!OpenFileSet(paths: ["/a"], isComplete: false).isComplete)
+    #expect(OpenFileSet.current().isComplete)
+}
+
 @Test func systemPackageProbe() {
     #expect(SystemPackageProbe().isPackage("/System/Applications/Calculator.app"))
     #expect(!SystemPackageProbe().isPackage("/System/Applications"))
@@ -39,6 +57,6 @@ import Testing
     let actions = RecordingDiskActions(trash: trash.path)
     let moved = try actions.moveToTrash(item.path)
     #expect(actions.moved == [item.path])
-    #expect(moved == trash.path + "/doc.txt" && FileManager.default.fileExists(atPath: moved))
+    #expect(moved == trash.path + "/doc.txt" && FileManager.default.fileExists(atPath: trash.path + "/doc.txt"))
     #expect(!FileManager.default.fileExists(atPath: item.path))
 }

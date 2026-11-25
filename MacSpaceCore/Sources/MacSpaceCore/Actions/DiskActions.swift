@@ -17,8 +17,9 @@ public struct SystemPackageProbe: PackageProbe {
 
 /// The only disk writes the app makes on items: moving them to the Trash.
 public protocol DiskActions: Sendable {
-    /// Moves the item at `path` to the Trash and returns its new path inside the Trash.
-    func moveToTrash(_ path: String) throws -> String
+    /// Moves the item at `path` to the Trash and returns its new path inside the Trash, or nil
+    /// when the item was moved but the system reported no resulting path.
+    func moveToTrash(_ path: String) throws -> String?
 }
 
 /// Moves items with `FileManager.trashItem`, so the Finder's "Put Back" works.
@@ -26,11 +27,10 @@ public protocol DiskActions: Sendable {
 public struct SystemDiskActions: DiskActions {
     public init() {}
 
-    /// Throws whatever `FileManager.trashItem(at:resultingItemURL:)` throws. Returns an empty
-    /// string if the system moved the item without reporting where.
-    public func moveToTrash(_ path: String) throws -> String {
+    /// Throws whatever `FileManager.trashItem(at:resultingItemURL:)` throws.
+    public func moveToTrash(_ path: String) throws -> String? {
         var resulting: NSURL?
         try FileManager.default.trashItem(at: URL(filePath: path), resultingItemURL: &resulting)
-        return resulting?.path ?? ""
+        return resulting?.path
     }
 }
