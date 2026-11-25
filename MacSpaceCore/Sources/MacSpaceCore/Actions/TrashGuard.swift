@@ -7,9 +7,13 @@ public enum TrashGuard {
     /// slash included); `/`; fewer than 2 components; `home` itself or any folder above it; the
     /// essential folders; a direct child of `/Volumes` (a mounted volume), of `/Users` (a home
     /// folder or Shared), of `~/Library/Mobile Documents` or of `~/Library/CloudStorage` (a cloud
-    /// drive root). Also refuses everything when `home` itself is not a plain absolute path.
+    /// drive root); a path holding U+FFFD (a name decoded from invalid UTF-8). Also refuses
+    /// everything when `home` itself is not a plain absolute path.
     public static func refusal(path: String, home: String) -> String? {
         guard let parts = components(path) else { return "not a plain absolute path" }
+        // U+FFFD stands in for bytes that were not valid UTF-8 when the name was read: the path may
+        // then name another item, or none.
+        if path.unicodeScalars.contains("\u{FFFD}") { return "a name that could not be read exactly" }
         if parts.isEmpty { return "the root folder" }
         if parts.count < 2 { return "a top-level folder" }
         var homePath = home

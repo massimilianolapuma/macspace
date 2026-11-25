@@ -553,3 +553,28 @@ private let installerApps = AppsIndex(records: [
     #expect(v(lib + "/Application Support/Slack", runningPaths: ["/Applications/Slack.app"])
             == SafetyVerdict(level: .protected, reason: .runningAppData, owner: "Slack"))
 }
+
+@Test func homeInAnotherUnicodeFormFailsClosed() {   // security review: NFC/NFD home vs disk names
+    let nfc = "/Users/Jos\u{E9}", nfd = "/Users/Jose\u{301}"
+    func verdict(home: String, path: String) -> SafetyVerdict {
+        SafetyRules.evaluate(
+            NodeFacts(path: path, name: (path as NSString).lastPathComponent, kind: .directory, flags: [], size: 0,
+                      lastUsed: old, category: .other, isScanRoot: false),
+            in: SafetyEnvironment(home: home, apps: testApps, runningBundleIDs: [], runningAppPaths: [], now: now,
+                                  isWritable: { _ in true }))
+    }
+    // Same form: the Library rules apply.
+    #expect(verdict(home: nfc, path: nfc + "/Library/Containers/com.apple.Notes").reason == .appleData)
+    #expect(verdict(home: nfd, path: nfd + "/Library/Containers/com.apple.Notes").reason == .appleData)
+    #expect(verdict(home: nfd, path: nfd + "/Projects/x").reason == .ordinary)
+    // Other form: the home-relative rules cannot be trusted, so everything below home is protected.
+    for (home, disk) in [(nfc, nfd), (nfd, nfc)] {
+        #expect(verdict(home: home, path: disk + "/Library/Containers/com.apple.Notes")
+                == SafetyVerdict(level: .protected, reason: .unusualPath))
+        #expect(verdict(home: home, path: disk + "/.Trash/x").reason == .unusualPath)
+        #expect(verdict(home: home, path: disk + "/Projects/x").reason == .unusualPath)
+        #expect(verdict(home: home, path: "/Users/Shared/x").reason == .ordinary)   // not below home
+    }
+    // An ASCII home is unaffected by non-ASCII names below it.
+    #expect(verdict(home: "/Users/u", path: "/Users/u/Caf\u{E9}").reason == .ordinary)
+}

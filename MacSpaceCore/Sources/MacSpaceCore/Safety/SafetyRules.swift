@@ -6,7 +6,8 @@ import Foundation
 /// (macOS volumes are case-insensitive by default, so a differently cased path names the same item).
 /// Case folding only ever reduces protection on a case-sensitive volume, where a folder whose name
 /// differs only by case from a known root (a cache, a `~/Library` location) is judged like that root.
-/// Paths are not resolved: anything not absolute or with an empty, `.` or `..` component is protected.
+/// Paths are not resolved: anything not absolute or with an empty, `.` or `..` component is protected,
+/// and so is anything below a non-ASCII home folder spelled in another Unicode form than `env.home`.
 /// Doubtful cases resolve towards `.protected`, `.caution` or `.normal`, never `.safe`.
 public enum SafetyRules {
     /// A file unused this long (and big enough) is suggested for review: 2 years.
@@ -28,6 +29,12 @@ public enum SafetyRules {
 
         // 0. Not a plain absolute path (`//`, `.`, `..`, relative): no rule below can be trusted.
         if isUnusual(path) { return SafetyVerdict(level: .protected, reason: .unusualPath) }
+        //    Below a non-ASCII home folder whose name on disk is in another Unicode form (NFC/NFD) or
+        //    case than `env.home`: the byte-wise home rules below would all miss, so none is trusted.
+        if let folded = t.homeFolded, !SafetyPaths.isUnder(key, t.home), !path.utf8.allSatisfy({ $0 < 0x80 }),
+           SafetyPaths.isUnder(SafetyPaths.folded(path), folded) {
+            return SafetyVerdict(level: .protected, reason: .unusualPath)
+        }
         // 1. The scanned folder itself.
         if f.isScanRoot { return SafetyVerdict(level: .protected, reason: .scanRoot) }
         // 2. Essential folders of the Mac and the user (exact path).
@@ -212,6 +219,8 @@ struct SafetyPaths: Sendable {
     }
 
     let home: String
+    /// `home` in NFC and Unicode lowercase when it has non-ASCII bytes (rule 0), else nil.
+    let homeFolded: String?
     let library: String
     let essential: Set<String>
     let system: [String]
@@ -228,6 +237,7 @@ struct SafetyPaths: Sendable {
         let h = SafetyTables.normalized(rawHome)
         let lib = h + "/Library"
         home = Self.key(h)
+        homeFolded = h.utf8.allSatisfy { $0 < 0x80 } ? nil : Self.folded(h)
         library = Self.key(lib)
         essential = Set(SafetyTables.essentialPaths(home: h).map(Self.key))
         system = SafetyTables.systemPrefixes.map(Self.key)
@@ -256,6 +266,11 @@ struct SafetyPaths: Sendable {
         var bytes = Array(string.utf8)
         for index in bytes.indices where bytes[index] >= 0x41 && bytes[index] <= 0x5A { bytes[index] += 0x20 }
         return String(decoding: bytes, as: UTF8.self)
+    }
+
+    /// NFC and Unicode lowercase: compares names whatever form the file system keeps them in.
+    static func folded(_ string: String) -> String {
+        string.precomposedStringWithCanonicalMapping.lowercased()
     }
 
     /// Whether `key` is `root` or below it, component-wise (both already keys).

@@ -341,6 +341,14 @@ private func exists(_ path: String) -> Bool {
     #expect(TrashGuard.refusal(path: "/Users/u/Library", home: "/Users/u/") != nil)
 }
 
+@Test func guardRefusesNamesNotReadExactly() {   // security review: lossy UTF-8 decoding
+    // A name the file system returned as invalid UTF-8 is decoded with U+FFFD, so the path may name
+    // another item (or none): never moved.
+    #expect(TrashGuard.refusal(path: "/Users/u/Downloads/caf\u{FFFD}.txt", home: "/Users/u") != nil)
+    #expect(TrashGuard.refusal(path: "/Users/u/\u{FFFD}/a.txt", home: "/Users/u") != nil)
+    #expect(TrashGuard.refusal(path: "/Users/u/Downloads/caf\u{E9}\nlinea.txt", home: "/Users/u") == nil)
+}
+
 @Test func noTrashWhileScanning() async throws {
     let fx = try Fixture(); defer { fx.cleanup() }
     let bin = try Fixture(); defer { bin.cleanup() }
