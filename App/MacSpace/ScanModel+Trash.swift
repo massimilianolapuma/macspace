@@ -19,7 +19,16 @@ struct TrashCandidate: Identifiable, Sendable {
     let path: String
     let kind: NodeKind
     let size: UInt64
-    let verdict: SafetyVerdict
+    /// As shown; replaced when a refresh finds another one.
+    var verdict: SafetyVerdict
+}
+
+/// What the store says about the sheet's items right now (`ScanModel.trashVerdicts`).
+struct TrashVerdicts: Sendable {
+    /// The items `resolveSelection` still allows.
+    var allowed: Set<NodeID>
+    /// Each item's current verdict; absent for an item no longer in the tree.
+    var verdicts: [NodeID: SafetyVerdict]
 }
 
 /// What the sheet shows once a move ended.
@@ -53,24 +62,44 @@ extension ScanModel {
         return candidates
     }
 
+    /// Which of `ids` the store still allows, and their verdicts now, judged afresh (the cache is
+    /// dropped first, so a folder that became read-only shows): what the sheet compares its rows
+    /// with after an environment update and right before moving.
+    func trashVerdicts(_ ids: [NodeID]) async -> TrashVerdicts {
+        guard let store else { return TrashVerdicts(allowed: [], verdicts: [:]) }
+        await store.invalidateVerdicts()
+        let allowed = Set(await store.resolveSelection(Set(ids)).ids)
+        var verdicts: [NodeID: SafetyVerdict] = [:]
+        for id in ids {
+            if let verdict = await store.verdict(id) { verdicts[id] = verdict }
+        }
+        return TrashVerdicts(allowed: allowed, verdicts: verdicts)
+    }
+
     /// Moves `ids` to the Trash through `ScanStore.trash`, which re-checks each one right before
-    /// moving it (still there and unchanged, not open, not protected, not inside a package) and
-    /// skips with a reason whatever fails. Then: the history gains what moved, the selection, ticks
-    /// and outlines lose it, the views and suggestions are refreshed (the tree was updated in place).
+    /// moving it (still there and unchanged, not open, not protected, not inside a package, and at
+    /// the level in `expectedLevels`: what the user confirmed) and skips with a reason whatever
+    /// fails. Then: the history gains what moved, the selection, ticks and outlines lose it, the
+    /// views and suggestions are refreshed (the tree was updated in place).
     /// Refused while another move runs or while the Trash is unavailable: nothing is moved then.
-    func trash(_ ids: [NodeID]) async -> TrashOutcome {
+    func trash(_ ids: [NodeID], expectedLevels: [NodeID: SafetyLevel]? = nil) async -> TrashOutcome {
         guard let store else { return TrashOutcome() }
         guard !isTrashing else { return TrashOutcome() }
         guard trashUnavailableReason == nil else {
-            var names: [TrashOutcome.Skipped] = []
-            for id in ids { names.append(.init(node: id, name: await store.row(id)?.name ?? "", reason: .scanInProgress)) }
-            return TrashOutcome(skipped: names)
+            // Said as it is: the scan has not settled, or verdicts are still being updated.
+            let reason: TrashSkip = isScanning || !scanSettled ? .scanInProgress : .appsAnalysisInProgress
+            var skipped: [TrashOutcome.Skipped] = []
+            for id in ids {
+                guard let row = await store.row(id) else { continue }
+                skipped.append(.init(node: id, name: row.name, reason: reason))
+            }
+            return TrashOutcome(skipped: skipped)
         }
         isTrashing = true
         defer { isTrashing = false }
         // On the store's actor: blocking file system calls, off the main actor.
         let outcome = await store.trash(Set(ids), actions: SystemDiskActions(), packages: SystemPackageProbe(),
-                                        openFiles: { OpenFileSet.current() })
+                                        openFiles: { OpenFileSet.current() }, expectedLevels: expectedLevels)
         // Whatever happened to the scan meanwhile, these really are in the Trash now.
         let now = Date.now
         history.insert(contentsOf: outcome.moved.map {

@@ -27,11 +27,13 @@ struct HistoryPopover: View {
             .padding(.top, 14)
             .padding(.bottom, 10)
             Divider()
-            if entries.count > Self.visibleRows {
-                ScrollView { list }.frame(height: 330)
-            } else {
-                list
+            ScrollCueList(count: entries.count, visibleRows: Self.visibleRows) { index in
+                VStack(spacing: 0) {
+                    if index > 0 { Divider().padding(.leading, 16) }
+                    HistoryRow(entry: entries[index], inTrash: inTrash.contains(entries[index].id))
+                }
             }
+            .padding(.vertical, 4)
         }
         .frame(width: 360)
         .onAppear {
@@ -39,16 +41,6 @@ struct HistoryPopover: View {
                 entry.trashedURL.map { FileManager.default.fileExists(atPath: $0.path(percentEncoded: false)) } ?? false
             }.map(\.id))
         }
-    }
-
-    private var list: some View {
-        VStack(spacing: 0) {
-            ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
-                if index > 0 { Divider().padding(.leading, 16) }
-                HistoryRow(entry: entry, inTrash: inTrash.contains(entry.id))
-            }
-        }
-        .padding(.vertical, 4)
     }
 }
 

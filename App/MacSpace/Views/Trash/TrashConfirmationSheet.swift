@@ -21,6 +21,8 @@ struct TrashSheet: View {
 /// "Spostare <N> elementi nel Cestino?" (spec §5.6): the items, each with its level and, for those
 /// to look at first, why; what moving them frees; and the move itself. On appear, off the main
 /// actor, it reads the open files (open items are left out) and estimates each item's private size.
+/// The rows follow the store: after an environment update they are read again (changed ones say
+/// "Aggiornato"), and right before moving too, so nothing moves at a level the user did not see.
 /// Nothing moves here: `ScanModel.trash` hands the items to the store, which checks them again.
 struct TrashConfirmationSheet: View {
     let model: ScanModel
@@ -28,16 +30,24 @@ struct TrashConfirmationSheet: View {
     let requested: [NodeID]
     @Environment(\.colorScheme) private var scheme
 
-    /// The items still allowed, largest first; nil until resolved.
+    /// The rows, largest first, with the verdicts on show; nil until resolved.
     @State private var candidates: [TrashCandidate]?
+    /// Rows the store no longer allows (now protected, gone): shown, dimmed, never moved.
+    @State private var withdrawn: [NodeID: TrashSkip] = [:]
+    /// Rows whose verdict changed while the sheet was open.
+    @State private var updated: Set<NodeID> = []
     @State private var openCheck = OpenCheck.running
     /// `PrivateSize.freed` of each item, as each estimate finishes.
     @State private var freed: [NodeID: UInt64] = [:]
     @State private var moving = false
+    /// A move was stopped because the rows had changed: they were refreshed for another look.
+    @State private var changedBeforeMove = false
     /// Resolving, the open-files check and the estimates; cancelled when the sheet closes or moves.
     @State private var work: Task<Void, Never>?
     /// `ScanModel.storeGeneration` when the items were resolved.
     @State private var generation: Int?
+    /// Keyboard focus starts on "Annulla", so Space (Full Keyboard Access) cannot move anything.
+    @FocusState private var focus: FocusTarget?
 
     enum OpenCheck: Equatable {
         case running
@@ -47,10 +57,12 @@ struct TrashConfirmationSheet: View {
         case incomplete
     }
 
+    enum FocusTarget: Hashable {
+        case cancel
+    }
+
     /// Estimates run at most this many at a time (each walks a folder on disk).
     static let estimateWidth = 4
-    /// More rows than this scroll.
-    static let visibleRows = 5
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -62,12 +74,18 @@ struct TrashConfirmationSheet: View {
                     .frame(maxWidth: .infinity, minHeight: 120)
             }
         }
+        .defaultFocus($focus, .cancel)
         .interactiveDismissDisabled(moving)
         .onAppear {
             guard work == nil else { return }
             work = Task { await prepare() }
         }
         .onDisappear { work?.cancel() }
+        .onChange(of: model.verdictRevision) {
+            // An environment update landed (an app launched or quit…): show what the store says now.
+            guard !moving, let candidates, !candidates.isEmpty else { return }
+            Task { _ = await refreshRows() }
+        }
     }
 
     // MARK: Content
@@ -75,12 +93,20 @@ struct TrashConfirmationSheet: View {
     private func confirmation(_ candidates: [TrashCandidate]) -> some View {
         let included = included(of: candidates)
         return VStack(alignment: .leading, spacing: 0) {
-            header(count: included.count)
+            header(count: included.count, restorable: openCheck == .running ? candidates.count : included.count)
                 .padding(.horizontal, 24)
                 .padding(.top, 22)
                 .padding(.bottom, 14)
             Divider()
-            rows(candidates)
+            ScrollCueList(count: candidates.count) { index in
+                let candidate = candidates[index]
+                VStack(spacing: 0) {
+                    if index > 0 { Divider().padding(.leading, 46) }
+                    TrashCandidateRow(candidate: candidate, stays: staysNote(candidate),
+                                      isUpdated: updated.contains(candidate.id), freed: freed[candidate.id])
+                }
+            }
+            .padding(.vertical, 4)
             Divider()
             VStack(alignment: .leading, spacing: 14) {
                 freedSummary(included)
@@ -93,41 +119,20 @@ struct TrashConfirmationSheet: View {
         }
     }
 
-    private func header(count: Int) -> some View {
-        HStack(alignment: .top, spacing: 14) {
-            Image(systemName: "trash")
-                .font(.system(size: 22, weight: .regular))
-                .foregroundStyle(FusionPalette.secondaryText(scheme))
-                .frame(width: 44, height: 44)
-                .background(Circle().fill(.quaternary))
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 4) {
+    /// The question, with the count once the open files are known (it would otherwise drop as they
+    /// are left out), and how to undo.
+    private func header(count: Int, restorable: Int) -> some View {
+        SheetHeader(systemImage: "trash") {
+            if openCheck == .running {
+                HStack(spacing: 8) {
+                    Text("Controllo dei file aperti…")
+                    ProgressView().controlSize(.small)
+                }
+            } else {
                 Text("Spostare \(count) elementi nel Cestino?")
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(FusionPalette.primaryText(scheme))
-                    .accessibilityAddTraits(.isHeader)
-                Text("Potrai ripristinarli dal Cestino del Finder.")
-                    .font(.callout)
-                    .foregroundStyle(FusionPalette.secondaryText(scheme))
             }
-            .padding(.top, 2)
-        }
-    }
-
-    @ViewBuilder
-    private func rows(_ candidates: [TrashCandidate]) -> some View {
-        let list = VStack(spacing: 0) {
-            ForEach(Array(candidates.enumerated()), id: \.element.id) { index, candidate in
-                if index > 0 { Divider().padding(.leading, 46) }
-                TrashCandidateRow(candidate: candidate, isOpen: openIDs.contains(candidate.id),
-                                  freed: freed[candidate.id])
-            }
-        }
-        .padding(.vertical, 4)
-        if candidates.count > Self.visibleRows {
-            ScrollView { list }.frame(height: 330)
-        } else {
-            list
+        } detail: {
+            RestoreFootnote(count: restorable)
         }
     }
 
@@ -143,9 +148,10 @@ struct TrashConfirmationSheet: View {
                     .font(.headline)
                     .foregroundStyle(FusionPalette.primaryText(scheme))
                 if Self.isShared(freed: total, size: size) {
-                    Text("\(Formatters.bytes(size)) occupati, parte condivisa con altre copie")
+                    Text("\(Formatters.bytes(size)) occupati: parte dello spazio è condivisa con copie APFS, la stima è per difetto")
                         .font(.callout)
                         .foregroundStyle(FusionPalette.secondaryText(scheme))
+                        .fixedSize(horizontal: false, vertical: true)
                 }
             } else {
                 HStack(spacing: 6) {
@@ -166,15 +172,18 @@ struct TrashConfirmationSheet: View {
     private var status: some View {
         if moving {
             statusLine("Spostamento nel Cestino…", warning: false, spinner: true)
+        } else if changedBeforeMove {
+            statusLine("La situazione è cambiata: controlla di nuovo l'elenco", warning: true, spinner: false)
         } else if let reason = model.trashUnavailableReason {
             statusLine(reason, warning: false, spinner: true)
         } else {
             switch openCheck {
-            case .running: statusLine("Controllo dei file aperti…", warning: false, spinner: true)
+            case .running: EmptyView()  // said in the title
             case .incomplete: statusLine("Impossibile verificare i file aperti", warning: true, spinner: false)
-            case let .done(open) where !open.isEmpty:
-                statusLine("Gli elementi aperti in un'app restano dove sono.", warning: false, spinner: false)
-            case .done: EmptyView()
+            case let .done(open):
+                if !open.isEmpty || !withdrawn.isEmpty {
+                    statusLine("Gli elementi in grigio restano dove sono.", warning: false, spinner: false)
+                }
             }
         }
     }
@@ -201,9 +210,10 @@ struct TrashConfirmationSheet: View {
             Spacer(minLength: 0)
             Button("Annulla") { model.pendingTrash = nil }
                 .keyboardShortcut(.cancelAction)
+                .focused($focus, equals: .cancel)
                 .disabled(moving)
             // Destructive, and deliberately not the default action: Return must not move anything.
-            Button("Sposta nel Cestino", role: .destructive) { move(included) }
+            Button("Sposta nel Cestino", role: .destructive) { move() }
                 .disabled(!canMove(included))
         }
         .controlSize(.large)
@@ -212,13 +222,10 @@ struct TrashConfirmationSheet: View {
     /// Every item that was asked for is gone, or now protected.
     private var nothingLeft: some View {
         VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 6) {
+            SheetHeader(systemImage: "trash.slash") {
                 Text("Niente da spostare")
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(FusionPalette.primaryText(scheme))
+            } detail: {
                 Text("Gli elementi scelti non ci sono più o ora sono protetti.")
-                    .foregroundStyle(FusionPalette.secondaryText(scheme))
-                    .fixedSize(horizontal: false, vertical: true)
             }
             HStack {
                 Spacer()
@@ -227,7 +234,9 @@ struct TrashConfirmationSheet: View {
             }
             .controlSize(.large)
         }
-        .padding(24)
+        .padding(.horizontal, 24)
+        .padding(.top, 22)
+        .padding(.bottom, 20)
     }
 
     // MARK: State
@@ -237,10 +246,17 @@ struct TrashConfirmationSheet: View {
         return []
     }
 
-    /// The items that will move: all but those open right now.
+    /// Why a row stays where it is (open now, or no longer allowed), or nil when it will move.
+    private func staysNote(_ candidate: TrashCandidate) -> String? {
+        if let skip = withdrawn[candidate.id] { return skip.text }
+        if openIDs.contains(candidate.id) { return TrashSkip.openNow.text }
+        return nil
+    }
+
+    /// The items that will move: all but those open right now or withdrawn.
     private func included(of candidates: [TrashCandidate]) -> [TrashCandidate] {
         let open = openIDs
-        return open.isEmpty ? candidates : candidates.filter { !open.contains($0.id) }
+        return candidates.filter { !open.contains($0.id) && withdrawn[$0.id] == nil }
     }
 
     /// Only once the open files are known in full, with something left to move, the Trash available
@@ -287,6 +303,32 @@ struct TrashConfirmationSheet: View {
         }
     }
 
+    /// Reads the rows' verdicts again and shows what changed, in place: a new verdict marks its
+    /// row "Aggiornato"; a row the store no longer allows is withdrawn. Returns whether anything
+    /// changed.
+    private func refreshRows() async -> Bool {
+        guard let shown = candidates else { return false }
+        let current = await model.trashVerdicts(shown.map(\.id))
+        guard generation == model.storeGeneration, let rows = candidates else { return false }
+        var changed = false
+        var refreshed = rows
+        for index in refreshed.indices {
+            let id = refreshed[index].id
+            guard withdrawn[id] == nil else { continue }
+            let verdict = current.verdicts[id]
+            if !current.allowed.contains(id) {
+                withdrawn[id] = verdict.map { $0.level == .protected ? .protected($0.reason) : .missing } ?? .missing
+                changed = true
+            } else if let verdict, verdict != refreshed[index].verdict {
+                refreshed[index].verdict = verdict
+                updated.insert(id)
+                changed = true
+            }
+        }
+        if changed { candidates = refreshed }
+        return changed
+    }
+
     private enum Check: Sendable {
         case open(OpenFileSet)
         case freed(NodeID, UInt64)
@@ -300,18 +342,36 @@ struct TrashConfirmationSheet: View {
 
     @concurrent nonisolated static func estimate(_ path: String) async -> UInt64 { PrivateSize.freed(path: path) }
 
-    /// Hands what will move to `ScanModel.trash`, then shows the result in place of the confirmation.
-    /// The estimates still running stop; the result estimates those items where they are in the Trash.
-    private func move(_ included: [TrashCandidate]) {
-        guard canMove(included), let candidates, generation == model.storeGeneration else { return }
+    /// Checks the rows one last time: if any verdict changed since they were shown, nothing moves,
+    /// the rows are refreshed and the user is asked to look again. Otherwise hands what will move,
+    /// with the levels on show, to `ScanModel.trash` (the store skips an item whose level is not
+    /// that one), then shows the result in place of the confirmation. The estimates still running
+    /// stop; the result estimates those items where they are in the Trash.
+    private func move() {
+        guard let rows = candidates, canMove(included(of: rows)), generation == model.storeGeneration else { return }
         moving = true
-        work?.cancel()
-        let ids = included.map(\.id)
-        let known = freed
-        let leftOut = candidates.filter { openIDs.contains($0.id) }
-            .map { TrashOutcome.Skipped(node: $0.id, name: $0.name, reason: .openNow) }
+        changedBeforeMove = false
         Task {
-            let outcome = await model.trash(ids)
+            if await refreshRows() {
+                moving = false
+                changedBeforeMove = true
+                return
+            }
+            guard let rows = candidates, generation == model.storeGeneration else {
+                moving = false
+                return
+            }
+            work?.cancel()
+            let included = included(of: rows)
+            let ids = included.map(\.id)
+            let expected = Dictionary(uniqueKeysWithValues: included.map { ($0.id, $0.verdict.level) })
+            let known = freed
+            let leftOut = rows.compactMap { row -> TrashOutcome.Skipped? in
+                if let skip = withdrawn[row.id] { return .init(node: row.id, name: row.name, reason: skip) }
+                if openIDs.contains(row.id) { return .init(node: row.id, name: row.name, reason: .openNow) }
+                return nil
+            }
+            let outcome = await model.trash(ids, expectedLevels: expected)
             let moved = Set(outcome.moved.map(\.node))
             model.trashReport = TrashReport(moved: outcome.moved, skipped: outcome.skipped + leftOut,
                                             freed: known.filter { moved.contains($0.key) })
@@ -320,28 +380,75 @@ struct TrashConfirmationSheet: View {
     }
 }
 
+/// "Potrai ripristinarlo/ripristinarli dal Cestino del Finder.": two strings, since the number
+/// is not in the sentence (a catalog plural must show it).
+struct RestoreFootnote: View {
+    let count: Int
+
+    var body: some View {
+        if count == 1 {
+            Text("Potrai ripristinarlo dal Cestino del Finder.")
+        } else {
+            Text("Potrai ripristinarli dal Cestino del Finder.")
+        }
+    }
+}
+
+/// The sheets' header: a neutral glyph in a circle, a title and one line under it.
+struct SheetHeader<Title: View, Detail: View>: View {
+    let systemImage: String
+    @ViewBuilder let title: () -> Title
+    @ViewBuilder let detail: () -> Detail
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 14) {
+            Image(systemName: systemImage)
+                .font(.system(size: 21, weight: .regular))
+                .foregroundStyle(FusionPalette.secondaryText(scheme))
+                .frame(width: 44, height: 44)
+                .background(Circle().fill(.quaternary))
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 4) {
+                title()
+                    .font(.title3.weight(.semibold))
+                    .foregroundStyle(FusionPalette.primaryText(scheme))
+                    .accessibilityAddTraits(.isHeader)
+                detail()
+                    .font(.callout)
+                    .foregroundStyle(FusionPalette.secondaryText(scheme))
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.top, 2)
+        }
+    }
+}
+
 /// One item: level marker, name, folder, size, and why it needs a look (caution, cloud) or why it
-/// stays (open now).
+/// stays (open now, no longer allowed). "Aggiornato" when its verdict changed while on screen.
 private struct TrashCandidateRow: View {
     let candidate: TrashCandidate
-    let isOpen: Bool
+    /// Why it stays where it is; nil when it will move.
+    let stays: String?
+    let isUpdated: Bool
     /// Its estimate, once known.
     let freed: UInt64?
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
-            SafetySwatch(level: candidate.verdict.level, diameter: 9)
+            levelMarker
                 .frame(width: 10)
                 .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 4 }
-                .opacity(isOpen ? Self.dimmed : 1)
+                .opacity(stays != nil ? Self.dimmed : 1)
             VStack(alignment: .leading, spacing: 3) {
                 VStack(alignment: .leading, spacing: 3) {
-                    HStack(alignment: .firstTextBaseline, spacing: 10) {
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
                         Text(verbatim: candidate.name)
                             .lineLimit(1)
                             .truncationMode(.middle)
                             .foregroundStyle(FusionPalette.primaryText(scheme))
+                        if isUpdated { updatedBadge }
                         Spacer(minLength: 8)
                         Text(verbatim: Formatters.bytes(candidate.size))
                             .monospacedDigit()
@@ -362,7 +469,7 @@ private struct TrashCandidateRow: View {
                     .font(.caption)
                     .foregroundStyle(FusionPalette.secondaryText(scheme))
                 }
-                .opacity(isOpen ? Self.dimmed : 1)
+                .opacity(stays != nil ? Self.dimmed : 1)
                 if let note {
                     Text(verbatim: note)
                         .font(.callout)
@@ -377,27 +484,51 @@ private struct TrashCandidateRow: View {
         .padding(.vertical, 9)
         .help(Text(verbatim: candidate.path))
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(Text(verbatim: [candidate.name, candidate.verdict.level.spokenTitle].compactMap { $0 }
-            .joined(separator: ", ")))
+        .accessibilityLabel(Text(verbatim: [candidate.name, candidate.verdict.level.spokenTitle,
+                                            isUpdated ? String(localized: "Aggiornato") : nil]
+            .compactMap { $0 }.joined(separator: ", ")))
         .accessibilityValue(Text(verbatim: [Formatters.bytes(candidate.size), folder, note].compactMap { $0 }
             .joined(separator: ", ")))
     }
 
-    /// Opacity of an item that stays (open now); its note keeps full contrast.
+    /// The level's swatch; a hollow ring for an ordinary item, so every row has a marker in the column.
+    @ViewBuilder
+    private var levelMarker: some View {
+        if candidate.verdict.level == .normal {
+            Circle()
+                .strokeBorder(FusionPalette.secondaryText(scheme), lineWidth: 1)
+                .frame(width: 9, height: 9)
+                .accessibilityHidden(true)
+        } else {
+            SafetySwatch(level: candidate.verdict.level, diameter: 9)
+        }
+    }
+
+    /// "Aggiornato": the verdict changed while the sheet was open.
+    private var updatedBadge: some View {
+        Text("Aggiornato")
+            .font(.caption.weight(.semibold))
+            .foregroundStyle(FusionPalette.primaryText(scheme))
+            .padding(.horizontal, 6)
+            .padding(.vertical, 1)
+            .background(Capsule().strokeBorder(FusionPalette.primaryText(scheme).opacity(0.55), lineWidth: 1))
+            .fixedSize()
+    }
+
+    /// Opacity of an item that stays; its note keeps full contrast.
     static let dimmed = 0.45
 
-    /// A note to read before moving (caution, open now) is in the primary ink; a safe item's is not.
-    private var notePrimary: Bool { isOpen || candidate.verdict.level == .caution }
+    /// A note to read before moving (caution, staying, changed) is in the primary ink; a safe item's is not.
+    private var notePrimary: Bool { stays != nil || isUpdated || candidate.verdict.level == .caution }
 
     /// The folder it is in, the home folder as "~".
     private var folder: String {
         ((candidate.path as NSString).deletingLastPathComponent as NSString).abbreviatingWithTildeInPath
     }
 
-    /// "Aperto ora in un'app" when it stays; else the reason to look first (caution, cloud) or, for
-    /// a safe item, what it is. Ordinary items have none.
+    /// Why it stays, when it does; else the reason to look first (caution, cloud) or, for a safe
+    /// item, what it is. Ordinary items have none.
     private var note: String? {
-        if isOpen { return String(localized: "Aperto ora in un'app") }
-        return candidate.verdict.sentence
+        stays ?? candidate.verdict.sentence
     }
 }

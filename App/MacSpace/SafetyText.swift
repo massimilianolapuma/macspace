@@ -86,7 +86,9 @@ extension TrashSkip {
         case .missing: String(localized: "Non esiste più")
         case .changed: String(localized: "È cambiato dopo l'analisi")
         case let .protected(reason):
-            String(localized: "Ora è protetto: \(Self.lowercasingFirst(SafetyVerdict(level: .protected, reason: reason).sentence ?? String(localized: SafetyLevel.protected.title)))")
+            String(localized: "Ora è protetto. \(SafetyVerdict(level: .protected, reason: reason).sentence ?? String(localized: SafetyLevel.protected.title))")
+        case .verdictChanged: String(localized: "La sua valutazione è cambiata: controllalo di nuovo")
+        case .appsAnalysisInProgress: String(localized: "Analisi delle app in corso: riprova tra poco")
         case .openNow: String(localized: "Aperto ora in un'app")
         case .insidePackage: String(localized: "Fa parte di un pacchetto")
         case .refused: String(localized: "Rifiutato per sicurezza")
@@ -95,12 +97,5 @@ extension TrashSkip {
         case .scanInProgress: String(localized: "Analisi in corso: riprova al termine")
         case let .failed(message): String(localized: "Errore: \(message)")
         }
-    }
-
-    /// A sentence continued after a colon: its first letter in lower case ("App in esecuzione" →
-    /// "app in esecuzione").
-    private static func lowercasingFirst(_ sentence: String) -> String {
-        guard let first = sentence.first else { return sentence }
-        return first.lowercased() + sentence.dropFirst()
     }
 }

@@ -15,7 +15,7 @@ struct TrashResultView: View {
     @State private var estimating: Bool
 
     /// More skipped rows than this scroll.
-    static let visibleRows = 6
+    static let visibleRows = 5
 
     init(report: TrashReport, done: @escaping () -> Void) {
         self.report = report
@@ -48,29 +48,18 @@ struct TrashResultView: View {
     }
 
     private var header: some View {
-        HStack(alignment: .top, spacing: 14) {
-            Image(systemName: report.moved.isEmpty ? "exclamationmark.triangle" : "checkmark")
-                .font(.system(size: 20, weight: .semibold))
-                .foregroundStyle(FusionPalette.secondaryText(scheme))
-                .frame(width: 44, height: 44)
-                .background(Circle().fill(.quaternary))
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: 4) {
-                if report.moved.isEmpty {
-                    Text("Nessun elemento spostato nel Cestino")
-                        .font(.title3.weight(.semibold))
-                        .foregroundStyle(FusionPalette.primaryText(scheme))
-                } else {
-                    summary
-                    Text("Potrai ripristinarli dal Cestino del Finder.")
-                        .font(.callout)
-                        .foregroundStyle(FusionPalette.secondaryText(scheme))
-                }
+        SheetHeader(systemImage: report.moved.isEmpty ? "exclamationmark.triangle" : "checkmark") {
+            if report.moved.isEmpty {
+                Text("Nessun elemento spostato nel Cestino")
+            } else {
+                summary
             }
-            .padding(.top, 2)
-            .accessibilityElement(children: .combine)
-            .accessibilityAddTraits(.isHeader)
+        } detail: {
+            if !report.moved.isEmpty {
+                RestoreFootnote(count: report.moved.count)
+            }
         }
+        .accessibilityElement(children: .combine)
     }
 
     /// "<N> elementi spostati nel Cestino · liberati circa <X>" ("Calcolo…" while estimating).
@@ -87,8 +76,6 @@ struct TrashResultView: View {
                 freedText
             }
         }
-        .font(.title3.weight(.semibold))
-        .foregroundStyle(FusionPalette.primaryText(scheme))
         .monospacedDigit()
     }
 
@@ -106,7 +93,7 @@ struct TrashResultView: View {
     }
 
     private var skipped: some View {
-        let list = VStack(alignment: .leading, spacing: 0) {
+        VStack(alignment: .leading, spacing: 0) {
             Text("Non spostati")
                 .font(.subheadline.weight(.semibold))
                 .foregroundStyle(FusionPalette.secondaryText(scheme))
@@ -114,7 +101,8 @@ struct TrashResultView: View {
                 .padding(.top, 12)
                 .padding(.bottom, 4)
                 .accessibilityAddTraits(.isHeader)
-            ForEach(Array(report.skipped.enumerated()), id: \.offset) { _, item in
+            ScrollCueList(count: report.skipped.count, visibleRows: Self.visibleRows) { index in
+                let item = report.skipped[index]
                 VStack(alignment: .leading, spacing: 2) {
                     Text(verbatim: item.name)
                         .lineLimit(1)
@@ -132,13 +120,6 @@ struct TrashResultView: View {
             }
         }
         .padding(.bottom, 8)
-        return Group {
-            if report.skipped.count > Self.visibleRows {
-                ScrollView { list }.frame(height: 300)
-            } else {
-                list
-            }
-        }
     }
 
     /// The sum of the estimates of the moved items; nil while some are still being estimated. An

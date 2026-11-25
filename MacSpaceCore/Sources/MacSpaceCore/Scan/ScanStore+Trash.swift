@@ -39,7 +39,8 @@ extension ScanStore {
     /// Then per item, in this order:
     /// 1. removed already (it or a folder above it) → `.missing`;
     /// 2. `TrashGuard` refuses it, or the scan saw it as a mount point → `.refused`;
-    /// 3. a fresh `SafetyRules` verdict (not the cache) is protected → `.protected(reason)`;
+    /// 3. a fresh `SafetyRules` verdict (not the cache) is protected → `.protected(reason)`; its
+    ///    level differs from the one in `expectedLevels` (what the user confirmed) → `.verdictChanged`;
     /// 4. a folder above it, up to `/`, is a package per `packages` → `.insidePackage`;
     /// 5. it or a file inside it is open → `.openNow`;
     /// 6. a folder holding something the rules protect as a whole (Apple data, a Photos library, a
@@ -55,15 +56,21 @@ extension ScanStore {
     /// Residual window: between the step-7 `stat` and the rename inside `moveToTrash` the item can
     /// still be swapped; its identity is checked by kind, mount status and device only (not inode).
     /// Verdicts are dropped afterwards, since sizes and contents moved.
+    ///
+    /// `expectedLevels`: the level each item had when the user confirmed it (items absent from it,
+    /// or a nil map, are not compared).
     public func trash(_ ids: Set<NodeID>, actions: any DiskActions, packages: any PackageProbe,
-                      openFiles: @Sendable () -> OpenFileSet) -> TrashOutcome {
-        trash(ids, actions: actions, packages: packages, openFiles: openFiles, mountPoints: MountTable.current)
+                      openFiles: @Sendable () -> OpenFileSet,
+                      expectedLevels: [NodeID: SafetyLevel]? = nil) -> TrashOutcome {
+        trash(ids, actions: actions, packages: packages, openFiles: openFiles, expectedLevels: expectedLevels,
+              mountPoints: MountTable.current)
     }
 
     /// `trash` with the mount table injectable for tests: `mountPoints` returns every mount-on
     /// path, or nil when they cannot be read.
     func trash(_ ids: Set<NodeID>, actions: any DiskActions, packages: any PackageProbe,
-               openFiles: @Sendable () -> OpenFileSet, mountPoints: () -> [String]?) -> TrashOutcome {
+               openFiles: @Sendable () -> OpenFileSet, expectedLevels: [NodeID: SafetyLevel]? = nil,
+               mountPoints: () -> [String]?) -> TrashOutcome {
         defer { verdictCache.removeAll() }
         let items = topMost(ids, keepingRemoved: true)
         var outcome = TrashOutcome()
@@ -79,7 +86,8 @@ extension ScanStore {
         let devices = allowedDevices()
         for id in items {
             let name = tree.name(id)
-            if let reason = trashBlocker(id, open: open, packages: packages, mounts: mounts, devices: devices) {
+            if let reason = trashBlocker(id, open: open, packages: packages, mounts: mounts, devices: devices,
+                                         expectedLevel: expectedLevels?[id]) {
                 outcome.skipped.append(TrashOutcome.Skipped(node: id, name: name, reason: reason))
                 continue
             }
@@ -107,7 +115,7 @@ extension ScanStore {
 
     /// Checks 1–7 of `trash` for one item: the first failing one, or nil when it may move.
     private func trashBlocker(_ id: NodeID, open: OpenFileSet, packages: any PackageProbe,
-                              mounts: [String], devices: Set<Int32>) -> TrashSkip? {
+                              mounts: [String], devices: Set<Int32>, expectedLevel: SafetyLevel?) -> TrashSkip? {
         // 1. Already moved (`remove` marks the whole subtree).
         if tree.flags(id).contains(.removed) { return .missing }
         let path = tree.path(of: id)
@@ -117,6 +125,8 @@ extension ScanStore {
         // 3. Fresh verdict, bypassing the cache.
         let verdict = SafetyRules.evaluate(facts(id), in: environment)
         if verdict.level == .protected { return .protected(verdict.reason) }
+        // Not what the user saw when confirming (an app launched or quit meanwhile, say).
+        if let expectedLevel, verdict.level != expectedLevel { return .verdictChanged }
         // 4. Inside a package LaunchServices knows of (registered types too).
         if Self.ancestorPaths(of: path).contains(where: packages.isPackage) { return .insidePackage }
         // 5. Open right now.

@@ -107,6 +107,9 @@ final class ScanModel {
     var history: [HistoryEntry] = []
     /// A move is running; another one is refused until it ends.
     var isTrashing = false
+    /// Bumped each time an environment update has fully landed (verdicts may have changed), so an
+    /// open confirmation sheet re-reads its rows.
+    var verdictRevision = 0
     /// Bumped whenever a new store replaces the old one, so a sheet opened on the old one's items
     /// can tell they no longer exist.
     @ObservationIgnored var storeGeneration = 0
@@ -149,6 +152,7 @@ final class ScanModel {
             await refreshViews()
             await selectionWork?.value  // the re-resolve `refreshViews` queued
             await refreshSuggestions()
+            if store === self.store { verdictRevision += 1 }
         }
     }
 

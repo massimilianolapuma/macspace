@@ -577,3 +577,29 @@ private func exists(_ path: String) -> Bool {
     #expect(second.moved.map(\.node) == [other])
     #expect(actions.moved == [fx.root.path + "/Projects/other"])
 }
+
+@Test func levelChangedSinceConfirmationIsSkipped() async throws {
+    let fx = try Fixture(); defer { fx.cleanup() }
+    let bin = try Fixture(); defer { bin.cleanup() }
+    try fx.file("Projects/a.bin", bytes: 100_000)
+    try fx.file("Projects/b.bin", bytes: 50_000)
+    let store = try await scanned(fx)
+    let a = try await node(store, fx, "Projects/a.bin")
+    let b = try await node(store, fx, "Projects/b.bin")
+    let levelA = try #require(await store.verdict(a)).level
+    let levelB = try #require(await store.verdict(b)).level
+    let other: SafetyLevel = levelB == .safe ? .caution : .safe
+
+    // The user confirmed `a` at its current level and `b` at another one: only `a` moves.
+    let actions = RecordingDiskActions(trash: bin.root.path)
+    let outcome = await store.trash([a, b], actions: actions, packages: noPackages, openFiles: nothingOpen,
+                                    expectedLevels: [a: levelA, b: other])
+    #expect(outcome.moved.map(\.node) == [a])
+    #expect(outcome.skipped == [TrashOutcome.Skipped(node: b, name: "b.bin", reason: .verdictChanged)])
+    #expect(actions.moved == [fx.root.path + "/Projects/a.bin"])
+
+    // An item with no expected level is not held back by this check.
+    let rest = await store.trash([b], actions: actions, packages: noPackages, openFiles: nothingOpen,
+                                 expectedLevels: [:])
+    #expect(rest.moved.map(\.node) == [b])
+}

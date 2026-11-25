@@ -4,7 +4,7 @@
     "%@ file" : {
 
     },
-    "%@ occupati, parte condivisa con altre copie" : {
+    "%@ occupati: parte dello spazio è condivisa con copie APFS, la stima è per difetto" : {
 
     },
     "%lld di %lld" : {
@@ -54,7 +54,32 @@
         }
       }
     },
+    "+%lld altri" : {
+      "localizations" : {
+        "it" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "+%lld altro"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "+%lld altri"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "1–2 anni fa" : {
+
+    },
+    "Aggiornato" : {
 
     },
     "Altri %@ elementi" : {
@@ -64,6 +89,9 @@
 
     },
     "Altro" : {
+
+    },
+    "Analisi delle app in corso: riprova tra poco" : {
 
     },
     "Analisi delle app in corso…" : {
@@ -240,7 +268,7 @@
     "Foto e immagini" : {
 
     },
-    "Gli elementi aperti in un'app restano dove sono." : {
+    "Gli elementi in grigio restano dove sono." : {
 
     },
     "Gli elementi più pesanti appariranno qui" : {
@@ -259,6 +287,12 @@
 
     },
     "Interrompi" : {
+
+    },
+    "La situazione è cambiata: controlla di nuovo l'elenco" : {
+
+    },
+    "La sua valutazione è cambiata: controllalo di nuovo" : {
 
     },
     "Le app le ricreano da sole quando servono." : {
@@ -321,7 +355,7 @@
     "Oltre 2 anni" : {
 
     },
-    "Ora è protetto: %@" : {
+    "Ora è protetto. %@" : {
 
     },
     "Pannello" : {
@@ -346,6 +380,9 @@
 
     },
     "Potrai ripristinarli dal Cestino del Finder." : {
+
+    },
+    "Potrai ripristinarlo dal Cestino del Finder." : {
 
     },
     "Privacy e sicurezza › Accesso completo al disco › MacSpace" : {
