@@ -5,7 +5,6 @@ public struct CategoryClassifier: Sendable {
     private let directoryNames: [UInt64: FileCategory]
     private let directoryExtensions: [UInt64: FileCategory]
     private let packageKeys: Set<UInt64>
-    private let installerKeys: Set<UInt64>
     private let developmentPrefixes: [[UInt8]]
     private let systemPrefixes: [[UInt8]]
     private let appDataPrefixes: [[UInt8]]
@@ -41,7 +40,6 @@ public struct CategoryClassifier: Sendable {
         }
         directoryExtensions = dirExt
         packageKeys = Set(SafetyTables.packageExtensions.map { Self.key(of: Array($0.utf8)) })
-        installerKeys = Set(SafetyTables.installerExtensions.map { Self.key(of: Array($0.utf8)) })
 
         var h = home
         while h.count > 1, h.hasSuffix("/") { h.removeLast() }
@@ -81,10 +79,16 @@ public struct CategoryClassifier: Sendable {
     }
 
     /// Whether a file with this name is an installer image or package, by its extension.
-    public func isInstaller(fileName: String) -> Bool {
+    public func isInstaller(fileName: String) -> Bool { Self.isInstallerName(fileName) }
+
+    /// The one installer predicate (scan and safety rule 16): extension in `SafetyTables.installerExtensions`,
+    /// case-insensitive, allocation-free.
+    public static func isInstallerName(_ fileName: String) -> Bool {
         var name = fileName
-        return name.withUTF8 { Self.extensionKey($0).map(installerKeys.contains) ?? false }
+        return name.withUTF8 { extensionKey($0).map(installerKeys.contains) ?? false }
     }
+
+    private static let installerKeys = Set(SafetyTables.installerExtensions.map { key(of: Array($0.utf8)) })
 
     // MARK: - Internals
 

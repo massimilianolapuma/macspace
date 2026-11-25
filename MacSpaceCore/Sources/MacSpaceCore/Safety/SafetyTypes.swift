@@ -11,6 +11,7 @@ public enum SafetyLevel: UInt8, Sendable, CaseIterable {
 
 /// Why an item got its `SafetyLevel`; one case per row of the rule table in `SafetyRules`.
 public enum SafetyReason: Sendable, Hashable, CaseIterable {
+    case unusualPath
     case scanRoot, essentialFolder, insidePackage, systemLocation, trash, appleData, photosLibrary, runningApp
     case notWritable, cloudOnly, cloudSynced, developerCache, analysisPending
     case appleCache, cacheOfRunningApp, cacheOfApp, leftover

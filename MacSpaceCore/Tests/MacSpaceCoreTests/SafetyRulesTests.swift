@@ -70,7 +70,8 @@ private let old: UInt32 = 1_000_000_000
     #expect(v("/Users/u/Library/LaunchAgents/com.gone.agent.plist", kind: .file).reason == .leftoverLaunchAgent)
     #expect(v("/Users/u/Library/Application Support/Slack").reason == .appData)
     #expect(v("/Users/u/Library/Application Support/Slack", running: ["com.tinyspeck.slackmacgap"]).reason == .runningAppData)
-    #expect(v("/Users/u/Library/Application Support/AddressBook").reason == .ordinary)
+    #expect(v("/Users/u/Library/Application Support/AddressBook").reason == .appleData)   // ruling R19
+    #expect(v("/Users/u/Library/Application Support/SomeTool").reason == .ordinary)
 }
 
 @Test func recentLeftoverIsCaution() {
@@ -250,9 +251,9 @@ private let old: UInt32 = 1_000_000_000
     #expect(v("/Users/u/Documents/x.mov", kind: .file, flags: [.dataless])
             == SafetyVerdict(level: .normal, reason: .cloudOnly, owner: nil))
     #expect(v(lib + "/Caches/com.spotify.client/x", kind: .file, flags: [.dataless]).reason == .cloudOnly)
-    #expect(v(lib + "/Mobile Documents/com~apple~CloudDocs").owner == "iCloud Drive")
+    #expect(v(lib + "/Mobile Documents/com~apple~CloudDocs/Notes").owner == "iCloud Drive")
     #expect(v(lib + "/CloudStorage/Box/x", kind: .file) == SafetyVerdict(level: .caution, reason: .cloudSynced, owner: "Box"))
-    #expect(v(lib + "/CloudStorage/OneDrive-Personal").owner == "OneDrive")
+    #expect(v(lib + "/CloudStorage/OneDrive-Personal/Work").owner == "OneDrive")
     #expect(v(lib + "/CloudStorage/GoogleDrive-me@x.com/My Drive/a.pdf", kind: .file).owner == "GoogleDrive")
     #expect(v(lib + "/Mobile Documents").reason == .essentialFolder)
     #expect(v(lib + "/CloudStorage").reason == .essentialFolder)
@@ -354,9 +355,11 @@ private let old: UInt32 = 1_000_000_000
 
 @Test func installerRows() {
     #expect(v("/Users/u/Downloads/A.dmg", kind: .file) == SafetyVerdict(level: .safe, reason: .installer, owner: nil))
-    #expect(v("/Users/u/Downloads/A.dmg", kind: .file, apps: nil).reason == .installer)
+    #expect(v("/Users/u/Downloads/A.dmg", kind: .file, apps: nil).level == .safe)
+    #expect(v("/Users/u/Downloads/Sub/A.dmg", kind: .file).level == .safe)
     for name in ["x.DMG", "x.pkg", "x.mpkg", "x.xip"] {
-        #expect(v("/Users/u/Downloads/" + name, kind: .file).reason == .installer, "\(name)")
+        #expect(v("/Users/u/Downloads/" + name, kind: .file) == SafetyVerdict(level: .safe, reason: .installer),
+                "\(name)")
     }
     #expect(SafetyTables.installerExtensions == ["dmg", "pkg", "mpkg", "xip"])
     #expect(v("/Users/u/Downloads/Foo.pkg").reason == .ordinary)               // a directory is no installer
@@ -367,12 +370,29 @@ private let old: UInt32 = 1_000_000_000
     #expect(v(lib + "/Application Support/Some Name/update.pkg", kind: .file).reason == .ordinary)
 }
 
+@Test func installersOutsideDownloadsNeedAnInstalledApp() {   // ruling R17
+    #expect(v("/Users/u/Documents/Private.dmg", kind: .file) == SafetyVerdict(level: .caution, reason: .installer))
+    #expect(v("/Users/u/Desktop/Spotify 1.2.dmg", kind: .file)
+            == SafetyVerdict(level: .safe, reason: .installer, owner: "Spotify"))
+    #expect(v("/Users/u/Desktop/Unknown.pkg", kind: .file) == SafetyVerdict(level: .caution, reason: .installer))
+    #expect(v("/Users/u/Desktop/Spotify 1.2.dmg", kind: .file, apps: nil).level == .caution)
+    #expect(v("/Volumes/Ext/Vault.dmg", kind: .file).level == .caution)
+    #expect(v("/Users/u/Downloadsx/A.dmg", kind: .file).level == .caution)
+    #expect(v("/Users/u/downloads/A.dmg", kind: .file).level == .safe)
+}
+
 @Test func classifierInstallerTableComesFromSafetyTables() {
     let c = CategoryClassifier(home: "/Users/u")
     for ext in SafetyTables.installerExtensions {
         #expect(c.isInstaller(fileName: "a." + ext) && c.isInstaller(fileName: "a." + ext.uppercased()))
     }
     #expect(!c.isInstaller(fileName: "dmg") && !c.isInstaller(fileName: "a.dmgx"))
+    // Rule 16 and the scanner share one predicate.
+    for name in ["a.dmg", "A.PKG", "x.mpkg", "y.xip", ".dmg", "dmg", "a.dmg.zip", "a.", "a.dmgx", "é.dmg"] {
+        #expect(CategoryClassifier.isInstallerName(name) == c.isInstaller(fileName: name), "\(name)")
+        let isInstallerVerdict = v("/Users/u/Downloads/" + name, kind: .file).reason == .installer
+        #expect(isInstallerVerdict == c.isInstaller(fileName: name), "\(name)")
+    }
 }
 
 private let longMin = SafetyRules.longUnusedMinSize
@@ -447,4 +467,59 @@ private let installerApps = AppsIndex(records: [
     #expect(match("Firefoxy.dmg") == nil)                         // the stem is longer than the name
     #expect(match("Firefox 1.dmg")?.name == "Firefox")
     #expect(InstallerMatcher.app(forInstaller: "Firefox.dmg", apps: .empty) == nil)
+}
+
+// MARK: - Fix round 1: unusual paths, cloud roots, Apple data, rule order
+
+@Test func unusualPathsFailClosed() {   // ruling R16
+    for path in ["/Users/u/Library/Containers//com.apple.Notes/x", "/Users/u//Library/Keychains/x",
+                 "/Users/u/Documents/../Library/Keychains/x", "/Users/u/./Documents", "/Users/u/Downloads/..",
+                 "Users/u/Downloads/A.dmg", "./A.dmg", "A.dmg", "", "//Users"] {
+        #expect(v(path, kind: .file) == SafetyVerdict(level: .protected, reason: .unusualPath), "\(path)")
+    }
+    #expect(v("relative/dir", root: true).reason == .unusualPath)          // before rule 1
+    #expect(v("/").reason == .essentialFolder)
+    #expect(v("//").reason == .essentialFolder)                             // trailing slashes stripped: "/"
+    #expect(v("/Users/u/Downloads/").reason == .essentialFolder)           // trailing slashes are fine
+    #expect(v("/Users/u/Downloads//").reason == .essentialFolder)
+    #expect(v("/Users/u/Downloads/..x/a", kind: .file).reason == .ordinary)
+    #expect(v("/Users/u/Downloads/.x", kind: .file).reason == .ordinary)
+}
+
+@Test func cloudDriveRootsAreEssential() {   // ruling R18
+    for path in [lib + "/Mobile Documents/com~apple~CloudDocs", lib + "/Mobile Documents/iCloud~com~x~y",
+                 lib + "/CloudStorage/Dropbox-Personal", lib + "/CloudStorage/Box", lib + "/cloudstorage/OneDrive-X"] {
+        #expect(v(path) == SafetyVerdict(level: .protected, reason: .essentialFolder), "\(path)")
+        #expect(v(path, flags: [.dataless]).reason == .essentialFolder)
+    }
+    #expect(v(lib + "/Mobile Documents/iCloud~com~x~y/Documents/a.txt", kind: .file)
+            == SafetyVerdict(level: .caution, reason: .cloudSynced, owner: "iCloud Drive"))
+    #expect(v(lib + "/CloudStorage/Dropbox-Personal/Photos", kind: .directory).reason == .cloudSynced)
+}
+
+@Test func appleUserDataFoldersAreNeverTouched() {   // ruling R19
+    for folder in ["Accounts", "Calendars", "Safari", "IdentityServices", "Application Support/AddressBook",
+                   "Application Support/CallHistoryDB", "Application Support/Knowledge", "Keychains", "Mail",
+                   "Messages"] {
+        #expect(v(lib + "/" + folder).reason == .appleData, "\(folder)")
+        #expect(v(lib + "/" + folder + "/x/y.db", kind: .file, apps: nil).reason == .appleData, "\(folder)")
+    }
+    #expect(v(lib + "/Safarix").reason == .ordinary)
+    #expect(v(lib + "/Application Support/AddressBookx").reason == .ordinary)
+    #expect(v(lib + "/Application Support/KnowledgeBase").reason == .ordinary)
+}
+
+@Test func ruleOrder() {
+    // 2 before 3: an essential folder flagged inside a package.
+    #expect(v(lib + "/Caches", flags: [.insidePackage]).reason == .essentialFolder)
+    // 5 before 6: a `.Trashes` component inside Apple data.
+    #expect(v(lib + "/Keychains/.Trashes/x", kind: .file).reason == .trash)
+    // 6 before 7: a Photos library inside an Apple container.
+    #expect(v(lib + "/Containers/com.apple.Photos/Data/P.photoslibrary", flags: [.package]).reason == .appleData)
+    // 16 before 17: an old, large disk image in the home folder.
+    #expect(v("/Users/u/Movies/old.dmg", kind: .file, size: 60_000_000, lastUsed: old, category: .archive)
+            == SafetyVerdict(level: .caution, reason: .installer))
+    // `.runningAppData` reached through the running bundle path only.
+    #expect(v(lib + "/Application Support/Slack", runningPaths: ["/Applications/Slack.app"])
+            == SafetyVerdict(level: .protected, reason: .runningAppData, owner: "Slack"))
 }

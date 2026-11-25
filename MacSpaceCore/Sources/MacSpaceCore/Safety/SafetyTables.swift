@@ -46,7 +46,10 @@ public enum SafetyTables {
     public static let systemExceptions = ["/usr/local"]
 
     /// Never-touch folders of `~/Library` holding Apple data (rule 6), relative to `~/Library`.
-    public static let appleDataFolders = ["Keychains", "Mail", "Messages"]
+    public static let appleDataFolders = [
+        "Keychains", "Mail", "Messages", "Accounts", "Calendars", "Safari", "IdentityServices",
+        "Application Support/AddressBook", "Application Support/CallHistoryDB", "Application Support/Knowledge",
+    ]
 
     /// Lowercase name prefixes of Apple's own `~/Library/Containers` entries (rule 6).
     public static let appleContainerPrefixes = ["com.apple."]

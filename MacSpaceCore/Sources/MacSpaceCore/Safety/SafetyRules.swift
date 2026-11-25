@@ -4,6 +4,9 @@ import Foundation
 ///
 /// Paths are compared component-wise ("under X" = X itself or below it) and ASCII case-insensitively
 /// (macOS volumes are case-insensitive by default, so a differently cased path names the same item).
+/// Case folding only ever reduces protection on a case-sensitive volume, where a folder whose name
+/// differs only by case from a known root (a cache, a `~/Library` location) is judged like that root.
+/// Paths are not resolved: anything not absolute or with an empty, `.` or `..` component is protected.
 /// Doubtful cases resolve towards `.protected`, `.caution` or `.normal`, never `.safe`.
 public enum SafetyRules {
     /// A file unused this long (and big enough) is suggested for review: 2 years.
@@ -23,10 +26,17 @@ public enum SafetyRules {
         let path = SafetyTables.normalized(f.path)
         let key = SafetyPaths.key(path)
 
+        // 0. Not a plain absolute path (`//`, `.`, `..`, relative): no rule below can be trusted.
+        if isUnusual(path) { return SafetyVerdict(level: .protected, reason: .unusualPath) }
         // 1. The scanned folder itself.
         if f.isScanRoot { return SafetyVerdict(level: .protected, reason: .scanRoot) }
         // 2. Essential folders of the Mac and the user (exact path).
         if t.essential.contains(key) { return SafetyVerdict(level: .protected, reason: .essentialFolder) }
+        //    ... and every cloud drive root: a direct child of `L/Mobile Documents` or `L/CloudStorage`.
+        let parentKey = parent(of: key)
+        if parentKey == t.mobileDocuments || parentKey == t.cloudStorage {
+            return SafetyVerdict(level: .protected, reason: .essentialFolder)
+        }
         // 3. Anything inside a package: only the package as a whole can move.
         if f.flags.contains(.insidePackage) { return SafetyVerdict(level: .protected, reason: .insidePackage) }
         // 4. macOS-owned trees, except /usr/local.
@@ -113,10 +123,12 @@ public enum SafetyRules {
                 return SafetyVerdict(level: .normal, reason: .ordinary)
             }
         }
-        // 16. An installer file.
-        if f.kind == .file, isInstaller(fileName: f.name) {
+        // 16. An installer file: safe in Downloads or when its app is installed; elsewhere it may be a
+        //     disk image the user made (an encrypted vault), so only caution.
+        if f.kind == .file, CategoryClassifier.isInstallerName(f.name) {
             let app = InstallerMatcher.app(forInstaller: f.name, apps: env.apps ?? .empty)
-            return SafetyVerdict(level: .safe, reason: .installer, owner: app.flatMap(owner(of:)))
+            let level: SafetyLevel = app != nil || SafetyPaths.isUnder(key, t.downloads) ? .safe : .caution
+            return SafetyVerdict(level: level, reason: .installer, owner: app.flatMap(owner(of:)))
         }
         // 17. Big user content in the home folder (outside ~/Library) unused for long.
         if f.kind == .file, SafetyPaths.isUnder(key, t.home), !SafetyPaths.isUnder(key, t.library),
@@ -130,11 +142,12 @@ public enum SafetyRules {
 
     // MARK: - Helpers
 
-    /// Whether a file name has an installer extension (`SafetyTables.installerExtensions`), case-insensitively.
-    static func isInstaller(fileName: String) -> Bool {
-        guard let dot = fileName.lastIndex(of: "."), dot != fileName.startIndex else { return false }
-        let ext = fileName[fileName.index(after: dot)...]
-        return !ext.isEmpty && SafetyTables.installerExtensions.contains(SafetyPaths.key(String(ext)))
+    /// Not absolute, or holding an empty, `.` or `..` component (`path` has no trailing slash; `/` is fine).
+    static func isUnusual(_ path: String) -> Bool {
+        guard path.hasPrefix("/") else { return true }
+        guard path != "/" else { return false }
+        return path.utf8.dropFirst().split(separator: UInt8(ascii: "/"), omittingEmptySubsequences: false)
+            .contains { $0.isEmpty || $0.elementsEqual(".".utf8) || $0.elementsEqual("..".utf8) }
     }
 
     /// `L/Containers/com.apple.*`, `L/Group Containers/group.com.apple.*` or `L/Group Containers/*.com.apple.*`.
@@ -192,6 +205,7 @@ struct SafetyPaths: Sendable {
     let system: [String]
     let systemExceptions: [String]
     let homeTrash: String
+    let downloads: String
     let appleData: [String]
     let mobileDocuments: String
     let cloudStorage: String
@@ -207,6 +221,7 @@ struct SafetyPaths: Sendable {
         system = SafetyTables.systemPrefixes.map(Self.key)
         systemExceptions = SafetyTables.systemExceptions.map(Self.key)
         homeTrash = Self.key(h + "/.Trash")
+        downloads = Self.key(h + "/Downloads")
         appleData = SafetyTables.appleDataFolders.map { Self.key(lib + "/" + $0) }
         mobileDocuments = Self.key(lib + "/Mobile Documents")
         cloudStorage = Self.key(lib + "/CloudStorage")
