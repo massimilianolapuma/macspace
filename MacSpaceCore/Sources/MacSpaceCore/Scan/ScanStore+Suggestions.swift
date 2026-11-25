@@ -11,7 +11,7 @@ extension ScanStore {
             let flags = tree.flags(id)
             guard !flags.contains(.removed), !flags.contains(.dataless),
                   tree.size(id) >= SafetyRules.suggestionMinSize else { return nil }
-            let verdict = self.verdict(id)
+            let verdict = judged(id)
             guard verdict.level == .safe || verdict.level == .caution, reasons.contains(verdict.reason),
                   seen.insert(id).inserted else { return nil }
             return SuggestionItem(id: id, name: tree.name(id), path: tree.path(of: id),
@@ -31,7 +31,7 @@ extension ScanStore {
         var caches = children(ofFolder: lib + "/" + LibraryLocation.caches.rawValue, reasons: cacheReasons)
         for root in SafetyTables.developerCaches(home: home) {
             guard let id = tree.node(atPath: root.path) else { continue }
-            if verdict(id).reason == .developerCache {
+            if judged(id).reason == .developerCache {
                 if let found = item(id, reasons: [.developerCache]) { caches.append(found) }
             } else {
                 caches += children(ofFolder: root.path, reasons: [.developerCache])

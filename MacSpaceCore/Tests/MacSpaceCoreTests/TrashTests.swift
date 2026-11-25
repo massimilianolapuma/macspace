@@ -56,7 +56,7 @@ private func exists(_ path: String) -> Bool {
     let target = try await node(store, fx, "Library/Caches/com.gone.x")
     let path = fx.root.path + "/Library/Caches/com.gone.x"
     let before = await store.rootSize()
-    let size = await store.row(target).size
+    let size = try #require(await store.row(target)).size
     #expect(size >= 2_000_000)
 
     let actions = RecordingDiskActions(trash: bin.root.path)
@@ -68,7 +68,7 @@ private func exists(_ path: String) -> Bool {
     #expect(outcome.skipped.isEmpty)
     #expect(!exists(path) && exists(bin.root.path + "/com.gone.x/a"))
     #expect(await store.rootSize() == before - size)
-    #expect(await store.row(target).flags.contains(.removed))
+    #expect(await store.row(target)?.flags.contains(.removed) == true)
     #expect(await store.node(atPath: path) == nil)
     let caches = try await node(store, fx, "Library/Caches")
     #expect(await store.rows(childrenOf: caches, limit: 10).map(\.name) == ["com.kept.y"])
@@ -321,7 +321,7 @@ private func exists(_ path: String) -> Bool {
     }
     #expect(!message.isEmpty && outcome.moved.isEmpty)
     #expect(await store.rootSize() == before)
-    #expect(await !store.row(a).flags.contains(.removed))
+    #expect(await store.row(a)?.flags.contains(.removed) == false)
 }
 
 @Test func guardRefusals() {
@@ -416,7 +416,7 @@ private func exists(_ path: String) -> Bool {
     let locked = try await node(store, fx, "Locked")
     let partial = try await node(store, fx, "Partial")
     let lockedInside = try await node(store, fx, "Locked/inside")
-    #expect(await store.row(lockedInside).flags.contains(.unreadable))
+    #expect(await store.row(lockedInside)?.flags.contains(.unreadable) == true)
     await store.addFlags(.mountPoint, to: try node(store, fx, "Disks/usb"))
     // As if a cancelled scan never listed `Partial/sub`.
     await store.markScanFinished(allowedDevices: try ScanBoundary.forFolder(fx.root.path).allowedDevices,
@@ -496,7 +496,7 @@ private func exists(_ path: String) -> Bool {
     let store = try await scanned(fx)
     let mixed = try await node(store, fx, "Projects/mixed")
     let inner = try await node(store, fx, "Projects/mixed/ro/inner")
-    #expect(await store.verdict(inner).reason == .notWritable)
+    #expect(await store.verdict(inner)?.reason == .notWritable)
 
     let actions = RecordingDiskActions(trash: bin.root.path)
     let outcome = await store.trash([mixed], actions: actions, packages: noPackages, openFiles: nothingOpen)

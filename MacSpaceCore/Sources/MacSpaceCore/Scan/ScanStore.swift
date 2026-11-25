@@ -143,16 +143,18 @@ public actor ScanStore {
 
     public func rootSize() -> UInt64 { tree.size(FileTree.root) }
 
-    /// `id`'s row, with its safety level.
-    public func row(_ id: NodeID) -> NodeRow { stamped(tree.row(id)) }
+    /// `id`'s row, with its safety level; nil for an ID that is not in this tree (`contains`).
+    public func row(_ id: NodeID) -> NodeRow? { contains(id) ? stamped(tree.row(id)) : nil }
 
     /// Whether `id` names a node of this store's tree. IDs are per store: one kept from an earlier
     /// scan's store may be out of range here (every other query traps on it) or name another node.
     public func contains(_ id: NodeID) -> Bool { id >= 0 && Int(id) < tree.count }
 
-    /// The largest `limit` children of `id`, by size descending then name, with their safety levels.
+    /// The largest `limit` children of `id`, by size descending then name, with their safety levels;
+    /// none for an ID that is not in this tree.
     public func rows(childrenOf id: NodeID, limit: Int) -> [NodeRow] {
-        tree.largestChildren(of: id, limit: limit).map { stamped(tree.row($0)) }
+        guard contains(id) else { return [] }
+        return tree.largestChildren(of: id, limit: limit).map { stamped(tree.row($0)) }
     }
 
     /// Bytes per age bucket below `id`, non-zero entries only.
@@ -161,8 +163,10 @@ public actor ScanStore {
     /// Bytes per category below `id`, non-zero entries only.
     public func categoryTotals(of id: NodeID) -> [FileCategory: UInt64] { tree.categoryTotals(id) }
 
-    /// Rows from the root down to and including `id`, with their safety levels.
+    /// Rows from the root down to and including `id`, with their safety levels; none for an ID that
+    /// is not in this tree.
     public func breadcrumb(to id: NodeID) -> [NodeRow] {
+        guard contains(id) else { return [] }
         var rows = [stamped(tree.row(id))]
         var cur = id
         while let p = tree.parent(cur) {
@@ -172,7 +176,8 @@ public actor ScanStore {
         return rows.reversed()
     }
 
-    public func path(of id: NodeID) -> String { tree.path(of: id) }
+    /// `id`'s absolute path; nil for an ID that is not in this tree.
+    public func path(of id: NodeID) -> String? { contains(id) ? tree.path(of: id) : nil }
 
     /// A file's last use: the latest of its modification and access times (0 = unknown). A time
     /// more than `futureTolerance` past `now` (the scan start) is a bogus clock, not a use, and is
@@ -191,7 +196,7 @@ public actor ScanStore {
     public func sunburst(center: NodeID, depth: Int) -> [ArcSegment] {
         var segments = SunburstLayout.compute(tree: tree, center: center, depth: depth)
         for i in segments.indices {
-            if let node = segments[i].node { segments[i].safety = verdict(node).level }
+            if let node = segments[i].node { segments[i].safety = judged(node).level }
         }
         return segments
     }
@@ -201,7 +206,7 @@ public actor ScanStore {
     public func treemap(center: NodeID, width: Double, height: Double, depth: Int) -> [TreemapTile] {
         var tiles = TreemapLayout.compute(tree: tree, center: center, width: width, height: height, depth: depth)
         for i in tiles.indices {
-            if let node = tiles[i].node { tiles[i].safety = verdict(node).level }
+            if let node = tiles[i].node { tiles[i].safety = judged(node).level }
         }
         return tiles
     }
@@ -246,7 +251,7 @@ public actor ScanStore {
         let crumbs = breadcrumb(to: center)
         var verdicts: [NodeID: SafetyVerdict] = [:]
         for id in segments.compactMap(\.node) + tiles.compactMap(\.node) + (biggest + crumbs).map(\.id) {
-            verdicts[id] = verdict(id)
+            verdicts[id] = judged(id)
         }
         return Snapshot(segments: segments, tiles: tiles, biggest: biggest, breadcrumb: crumbs,
                         categoryTotals: categoryTotals(of: center), ageTotals: ageTotals(of: center),

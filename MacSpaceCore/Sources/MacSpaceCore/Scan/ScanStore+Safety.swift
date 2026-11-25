@@ -20,8 +20,12 @@ extension ScanStore {
         if !verdictCache.isEmpty { verdictCache.removeAll() }
     }
 
-    /// `id`'s verdict under the current environment, computed once and cached.
-    public func verdict(_ id: NodeID) -> SafetyVerdict {
+    /// `id`'s verdict under the current environment, computed once and cached; nil for an ID that is
+    /// not in this tree.
+    public func verdict(_ id: NodeID) -> SafetyVerdict? { contains(id) ? judged(id) : nil }
+
+    /// `verdict` for an ID known to be in the tree.
+    func judged(_ id: NodeID) -> SafetyVerdict {
         if let cached = verdictCache[id] { return cached }
         let verdict = SafetyRules.evaluate(facts(id), in: environment)
         verdictEvaluations += 1
@@ -35,7 +39,7 @@ extension ScanStore {
     /// `row` with its node's safety level.
     func stamped(_ row: NodeRow) -> NodeRow {
         var row = row
-        row.safety = verdict(row.id).level
+        row.safety = judged(row.id).level
         return row
     }
 

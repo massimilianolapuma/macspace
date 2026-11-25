@@ -100,5 +100,5 @@ private func treeWithMergedSiblings() -> FileTree {
     #expect(try row("mtime.txt").lastUsed == now - 10 * day)
     // Within a day of the scan start: clock skew, kept.
     #expect(try row("soon.txt").lastUsed == now + day / 2)
-    #expect(await store.row(FileTree.root).lastUsed == now + day / 2)
+    #expect(await store.row(FileTree.root)?.lastUsed == now + day / 2)
 }

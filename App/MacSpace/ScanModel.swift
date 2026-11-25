@@ -127,9 +127,8 @@ final class ScanModel {
                 lastUsedInFlight = false
                 lookUpHoveredLastUsed()
             }
-            // A node from an earlier scan's store may not exist in this one.
-            guard await store.contains(node), await store.row(node).kind == .file else { return }
-            let path = await store.path(of: node)
+            // A node from an earlier scan's store may not exist in this one: no row, no path.
+            guard await store.row(node)?.kind == .file, let path = await store.path(of: node) else { return }
             let date = await Task.detached(priority: .utility) { SpotlightLastUsed.lastUsed(path: path) }.value
             guard store === self.store, let date else { return }
             spotlightLastUsed[node] = date

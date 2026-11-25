@@ -184,7 +184,7 @@ func scanFixture(_ fx: Fixture) async throws -> (ScanStore, ScanSummary) {
     _ = await app.insert([file("clip.mov", size: 4096, mtime: 5, atime: 9)], under: FileTree.root,
                          parentPath: "/Applications/Xcode.app", boundary: boundary)
     #expect(await app.categoryTotals(of: FileTree.root) == [.app: 4096])
-    #expect(await app.row(FileTree.root).lastUsed == 9)
+    #expect(await app.row(FileTree.root)?.lastUsed == 9)
     // A hard-link duplicate adds no bytes but still raises the last use.
     let store = ScanStore(rootName: "fx", rootPath: "/fx", home: "/nonexistent")
     _ = await store.insert([file("a.mov", size: 4096, links: 2, mtime: 10, atime: 20)], under: FileTree.root,
@@ -193,7 +193,7 @@ func scanFixture(_ fx: Fixture) async throws -> (ScanStore, ScanSummary) {
                                  parentPath: "/fx", boundary: boundary)
     #expect(dup.bytes == 0)
     #expect(await store.categoryTotals(of: FileTree.root) == [.video: 4096])
-    #expect(await store.row(FileTree.root).lastUsed == 30)
+    #expect(await store.row(FileTree.root)?.lastUsed == 30)
 }
 
 @Test func cargoTargetIsClassifiedFromItsSiblings() async throws {
@@ -212,8 +212,8 @@ func scanFixture(_ fx: Fixture) async throws -> (ScanStore, ScanSummary) {
         .descend.first)
     let webTarget = try #require(await store.insert([entry("target", .directory)], under: web.id,
                                                     parentPath: web.path, boundary: boundary).descend.first)
-    #expect(await store.row(rustTarget.id).category == .development)
-    #expect(await store.row(webTarget.id).category == .other)
+    #expect(await store.row(rustTarget.id)?.category == .development)
+    #expect(await store.row(webTarget.id)?.category == .other)
 }
 
 @Test func packagesFlagTheirInterior() async throws {
@@ -247,7 +247,7 @@ func scanFixture(_ fx: Fixture) async throws -> (ScanStore, ScanSummary) {
     let root = fx.root.appendingPathComponent("Foo.app/Contents").path
     let store = ScanStore(rootName: "Contents", rootPath: root, home: "/nonexistent")
     _ = await Scanner(rootPath: root, boundary: try .forFolder(root)).scan(into: store)
-    #expect(await store.row(FileTree.root).flags.contains(.insidePackage))
+    #expect(await store.row(FileTree.root)?.flags.contains(.insidePackage) == true)
     #expect(await store.categoryTotals(of: FileTree.root).keys.allSatisfy { $0 == .app })
 }
 
@@ -311,7 +311,7 @@ private func scanLeftoverHome(_ fx: Fixture) async throws -> ScanStore {
     #expect(dmg.safety == .safe && tilesSnap.verdicts[dmgNode]?.reason == .installer)
     #expect(tilesSnap.biggest.first?.safety == .safe && tilesSnap.segments.isEmpty)
     #expect(await store.rows(childrenOf: caches, limit: 5).first?.safety == .safe)
-    #expect(await store.verdict(dmgNode).level == .safe)
+    #expect(await store.verdict(dmgNode)?.level == .safe)
 }
 
 @Test func noAppsIndexMeansNoLeftovers() async throws {
@@ -333,7 +333,7 @@ private func scanLeftoverHome(_ fx: Fixture) async throws -> ScanStore {
     }
     // Once the index is ready, the cached pending verdicts are replaced.
     await store.setEnvironment(.system(home: home, apps: .empty))
-    #expect(await store.verdict(segNode).reason == .leftover)
+    #expect(await store.verdict(segNode)?.reason == .leftover)
 }
 
 @Test func deepFileInRecentlyUsedLeftoverIsCaution() async throws {
@@ -421,13 +421,13 @@ private func scanLeftoverHome(_ fx: Fixture) async throws -> ScanStore {
     #expect(await store.verdictEvaluations - before == evaluated)   // all cached
     // A change outside the tree is not seen until the cache is invalidated.
     writable.withLock { $0 = false }
-    #expect(await store.verdict(app.id).reason == .leftover)
+    #expect(await store.verdict(app.id)?.reason == .leftover)
     await store.invalidateVerdicts()
-    #expect(await store.verdict(app.id).reason == .notWritable)
+    #expect(await store.verdict(app.id)?.reason == .notWritable)
     // A recent file arriving during the scan is seen at once: inserting drops the cache.
     writable.withLock { $0 = true }
     await store.invalidateVerdicts()
-    #expect(await store.verdict(app.id).reason == .leftover)
+    #expect(await store.verdict(app.id)?.reason == .leftover)
     _ = await store.insert([file("new", time: now)], under: app.id, parentPath: app.path, boundary: boundary)
     #expect(await store.verdict(app.id) == SafetyVerdict(level: .caution, reason: .recentLeftover))
 }
