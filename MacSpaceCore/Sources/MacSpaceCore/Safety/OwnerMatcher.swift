@@ -47,6 +47,13 @@ public enum OwnerMatcher {
     public static func ownership(
         of name: String, in location: LibraryLocation, apps: AppsIndex, running: Set<String>
     ) -> Ownership {
+        ownership(of: name, in: location, apps: apps, running: RunningApps(bundleIDs: running, paths: []))
+    }
+
+    /// `ownership` against running apps already indexed (`SafetyEnvironment.running`, built once).
+    static func ownership(
+        of name: String, in location: LibraryLocation, apps: AppsIndex, running: RunningApps
+    ) -> Ownership {
         let parsed = parse(name, in: location)
         if isApple(parsed.text) || parsed.team?.lowercased() == SafetyTables.appleTeamID.lowercased() {
             return .apple
@@ -57,13 +64,9 @@ public enum OwnerMatcher {
                 ?? apps.app(named: core).map(Ownership.installed) ?? .unknownName
         }
         if let app = apps.app(forIdentifier: core) { return .installed(app) }
-        // Running apps may live outside every scanned root. Built per call (only reached when nothing
-        // else matched), reusing AppsIndex's prefix rule one running ID at a time, lowest ID first.
-        for id in running.sorted() {
-            let single = AppsIndex(records: [AppRecord(bundleID: id, name: "", teamID: nil, path: "")])
-            if single.app(forIdentifier: core) != nil {
-                return .installed(AppRecord(bundleID: id, name: "", teamID: nil, path: ""))
-            }
+        // Running apps may live outside every scanned root: the lowest related running ID.
+        if let id = running.id(relatedTo: core) {
+            return .installed(AppRecord(bundleID: id, name: "", teamID: nil, path: ""))
         }
         if location == .groupContainers, let team = parsed.team, let app = apps.app(forTeam: team) {
             return .installed(app)

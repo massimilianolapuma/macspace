@@ -118,3 +118,20 @@ private func isInstalled(_ ownership: Ownership) -> Bool {
     #expect(own("com.gone.app.SAVEDSTATE", .savedState) == .unmatchedIdentifier("com.gone.app"))
     #expect(own("GROUP.com.gone.app", .groupContainers) == .unmatchedIdentifier("com.gone.app"))
 }
+
+@Test func runningAppsFollowTheAppsIndexPrefixRule() {   // final review I5: one index per environment
+    let running = RunningApps(bundleIDs: ["com.acme.tool", "com.acme.tool.x", "org.other.app"],
+                              paths: ["/Applications/Tool.app/", "/Applications/Café.app"])
+    #expect(running.id(relatedTo: "com.acme.tool.x") == "com.acme.tool")      // lowest related ID
+    #expect(running.id(relatedTo: "COM.ACME.TOOL.helper") == "com.acme.tool")
+    #expect(running.id(relatedTo: "com.acme") == "com.acme.tool")             // a prefix of a running ID
+    #expect(running.id(relatedTo: "org.other") == "org.other.app")
+    #expect(running.id(relatedTo: "com") == nil)                              // fewer than 2 shared labels
+    #expect(running.id(relatedTo: "com.acmex.tool") == nil)
+    #expect(running.id(relatedTo: "") == nil)
+    #expect(running.isRunning(path: "/applications/tool.APP"))
+    #expect(running.isRunning(path: "/Applications/Cafe\u{301}.app"))          // NFD spelling of the same name
+    #expect(running.isRunning(path: "/Applications/CAFÉ.app"))
+    #expect(!running.isRunning(path: "/Applications/Tool.app/Contents"))
+    #expect(!RunningApps(bundleIDs: [], paths: []).isRunning(path: "/Applications/Tool.app"))
+}

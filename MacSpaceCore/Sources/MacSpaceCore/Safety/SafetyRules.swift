@@ -59,8 +59,7 @@ public enum SafetyRules {
         //    (except Caches and Logs, decided by rules 14 and 15). Needs no apps index.
         let anchor = t.anchor(path: path, key: key)
         let ownership = anchor.map {
-            OwnerMatcher.ownership(of: $0.name, in: $0.location, apps: env.apps ?? .empty,
-                                   running: env.runningBundleIDs)
+            OwnerMatcher.ownership(of: $0.name, in: $0.location, apps: env.apps ?? .empty, running: env.running)
         }
         if t.appleData.contains(where: { SafetyPaths.isUnder(key, $0) }) || isAppleContainer(anchor)
             || (ownership == .apple && anchor.map { $0.location != .caches && $0.location != .logs } == true) {
@@ -71,7 +70,7 @@ public enum SafetyRules {
             return SafetyVerdict(level: .protected, reason: .photosLibrary)
         }
         // 8. A running app's bundle.
-        if env.runningPathsKey.contains(key) {
+        if env.running.isRunning(path: path, key: key) {
             return SafetyVerdict(level: .protected, reason: .runningApp, owner: AppsIndex.baseName(ofPath: path))
         }
         // 9. The user may not remove it from its folder.
@@ -182,9 +181,7 @@ public enum SafetyRules {
     /// Running when the record came from a running-only match (empty name, ruling R9), its bundle ID is
     /// related to a running ID by the `AppsIndex` prefix rule, or its bundle is a running app's.
     private static func isRunning(_ app: AppRecord, in env: SafetyEnvironment) -> Bool {
-        app.name.isEmpty
-            || env.runningIndex.app(forIdentifier: app.bundleID) != nil
-            || (!app.path.isEmpty && env.runningPathsKey.contains(SafetyPaths.key(SafetyTables.normalized(app.path))))
+        app.name.isEmpty || env.running.isRunning(app)
     }
 
     /// An installed app from the same vendor (first two labels) as the unmatched identifier `id`.
@@ -268,9 +265,11 @@ struct SafetyPaths: Sendable {
         return String(decoding: bytes, as: UTF8.self)
     }
 
-    /// NFC and Unicode lowercase: compares names whatever form the file system keeps them in.
+    /// NFC and Unicode lowercase: compares names whatever form the file system keeps them in. The
+    /// one comparison form for running apps' bundle paths (rule 8, running app data, the Trash's
+    /// subtree check). ASCII strings take a fast path with the same result (`key`).
     static func folded(_ string: String) -> String {
-        string.precomposedStringWithCanonicalMapping.lowercased()
+        string.utf8.allSatisfy { $0 < 0x80 } ? key(string) : string.precomposedStringWithCanonicalMapping.lowercased()
     }
 
     /// Whether `key` is `root` or below it, component-wise (both already keys).

@@ -1,3 +1,4 @@
+import AppKit
 import Darwin
 import Foundation
 import Testing
@@ -57,15 +58,19 @@ func startupDiskScan() async throws {
 
 /// Opt-in: `MACSPACE_BENCH=1 swift test -c release --filter librarySnapshotWithVerdicts`.
 /// A treemap snapshot of `~/Library` (the app's canvas and depth) with verdicts, the real apps
-/// index and running apps: the first (cold cache) and the median of warm repeats, which must
-/// stay under 20 ms.
+/// index (with Spotlight) and the apps running now: the first (cold cache) and the median of warm
+/// repeats, which must stay under 20 ms.
 @Test(.enabled(if: ProcessInfo.processInfo.environment["MACSPACE_BENCH"] == "1"))
 func librarySnapshotWithVerdicts() async throws {
     let home = NSHomeDirectory(), library = home + "/Library"
     let store = ScanStore(rootName: "Library", rootPath: library, home: home)
     let summary = await Scanner(rootPath: library, boundary: try .forFolder(library)).scan(into: store)
-    let apps = AppsIndex.build()
-    await store.setEnvironment(.system(home: home, apps: apps))
+    let apps = AppsIndex.build(extraAppPaths: AppsIndex.spotlightAppPaths())
+    // The apps running now, as the app reads them (every unmatched identifier is checked against them).
+    let running = NSWorkspace.shared.runningApplications
+    await store.setEnvironment(.system(
+        home: home, apps: apps, runningBundleIDs: Set(running.compactMap(\.bundleIdentifier)),
+        runningAppPaths: Set(running.compactMap { $0.bundleURL?.path(percentEncoded: false) })))
     let chart = ChartRequest.treemap(width: 1100, height: 700, depth: 3)
     let clock = ContinuousClock()
     let ms = { (d: Duration) in Double(d.components.seconds) * 1e3 + Double(d.components.attoseconds) / 1e15 }
@@ -79,12 +84,18 @@ func librarySnapshotWithVerdicts() async throws {
         warm.append(ms(clock.now - start))
     }
     warm.sort()
+    // Suggestions judge every node of the tree (cold: the snapshot's verdicts dropped first).
+    await store.invalidateVerdicts()
+    let suggestionsStart = clock.now
+    let suggestions = await store.suggestions()
+    let suggestionsTime = clock.now - suggestionsStart
     let median = warm[warm.count / 2]
     let levels = SafetyLevel.allCases.map { level in "\(level)=\(snapshot.tiles.filter { $0.safety == level }.count)" }
     print("""
     BENCH library files=\(summary.files) tiles=\(snapshot.tiles.count) verdicts=\(snapshot.verdicts.count) \
-    apps=\(apps.count) cold=\(String(format: "%.2f", ms(cold)))ms \
+    apps=\(apps.count) running=\(running.count) cold=\(String(format: "%.2f", ms(cold)))ms \
     warmMedian=\(String(format: "%.2f", median))ms warmMax=\(String(format: "%.2f", warm.last ?? 0))ms \
+    suggestions=\(suggestions.count) suggestionsCold=\(String(format: "%.1f", ms(suggestionsTime)))ms \
     tiles \(levels.joined(separator: " "))
     """)
     #expect(median < 20)

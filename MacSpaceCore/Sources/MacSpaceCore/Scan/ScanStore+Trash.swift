@@ -201,11 +201,11 @@ extension ScanStore {
             }
             tree.forEachChild(of: n) { stack.append($0) }
         }
-        let base = Self.pathKey(path)
+        let base = SafetyPaths.folded(path)
         let below = base + "/"
-        for running in environment.runningAppPaths {
-            let key = Self.pathKey(SafetyTables.normalized(running))
-            if key.utf8.elementsEqual(base.utf8) || key.utf8.starts(with: below.utf8) { return .protected(.runningApp) }
+        for key in environment.running.pathKeys
+        where key.utf8.elementsEqual(base.utf8) || key.utf8.starts(with: below.utf8) {
+            return .protected(.runningApp)
         }
         return nil
     }
@@ -222,11 +222,6 @@ extension ScanStore {
             end = slash
         }
         return result
-    }
-
-    /// Comparison form of a path: NFC, lowercased.
-    private static func pathKey(_ path: String) -> String {
-        path.precomposedStringWithCanonicalMapping.lowercased()
     }
 
     /// A readable, localized message for a failed `stat`.

@@ -196,8 +196,8 @@ public struct AppsIndex: Sendable {
         return vendor == "com.apple" ? nil : String(vendor)
     }
 
-    /// Proper dot-prefixes of `id` that keep at least 2 labels.
-    private static func dotPrefixes(of id: String) -> [String] {
+    /// Proper dot-prefixes of `id` that keep at least 2 labels, longest first.
+    static func dotPrefixes(of id: String) -> [String] {
         var result: [String] = []
         var end = id.endIndex
         while let dot = id[..<end].lastIndex(of: ".") {

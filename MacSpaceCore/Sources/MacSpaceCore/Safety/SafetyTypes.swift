@@ -80,10 +80,8 @@ public struct SafetyEnvironment: Sendable {
 
     /// Lowercased path tables derived from `home`.
     let paths: SafetyPaths
-    /// `runningBundleIDs` as an index, so the `AppsIndex` prefix rule relates them to bundle IDs.
-    let runningIndex: AppsIndex
-    /// `runningAppPaths` normalized and lowercased.
-    let runningPathsKey: Set<String>
+    /// `runningBundleIDs` and `runningAppPaths` as lookup tables, built once here (not per node).
+    let running: RunningApps
 
     public init(home: String, apps: AppsIndex?, runningBundleIDs: Set<String>, runningAppPaths: Set<String>,
                 now: UInt32, isWritable: @escaping @Sendable (String) -> Bool) {
@@ -94,10 +92,7 @@ public struct SafetyEnvironment: Sendable {
         self.now = now
         self.isWritable = isWritable
         paths = SafetyPaths(home: home)
-        runningIndex = AppsIndex(records: runningBundleIDs.sorted().map {
-            AppRecord(bundleID: $0, name: "", teamID: nil, path: "")
-        })
-        runningPathsKey = Set(runningAppPaths.map { SafetyPaths.key(SafetyTables.normalized($0)) })
+        running = RunningApps(bundleIDs: runningBundleIDs, paths: runningAppPaths)
     }
 
     /// The live environment: the current time and `access(dir, W_OK)` for write checks.
@@ -108,5 +103,61 @@ public struct SafetyEnvironment: Sendable {
         return SafetyEnvironment(home: home, apps: apps, runningBundleIDs: runningBundleIDs,
                                  runningAppPaths: runningAppPaths, now: now,
                                  isWritable: { access($0, W_OK) == 0 })
+    }
+}
+
+/// The running apps as the rules look them up: built once per `SafetyEnvironment`, so judging a
+/// node costs a few dictionary lookups whatever the number of running apps.
+struct RunningApps: Sendable {
+    /// ASCII-lowercased running bundle ID -> the lowest (sorted) original ID with that key.
+    private let byID: [String: String]
+    /// Every proper dot-prefix of a running ID that keeps at least 2 labels -> the lowest ID having it.
+    private let byPrefix: [String: String]
+    /// Running bundle paths, normalized, in `SafetyPaths.folded` form.
+    let pathKeys: Set<String>
+
+    init(bundleIDs: Set<String>, paths: Set<String>) {
+        var byID: [String: String] = [:]
+        var byPrefix: [String: String] = [:]
+        for id in bundleIDs.sorted() {
+            let key = SafetyPaths.key(id)
+            guard !key.isEmpty else { continue }
+            if byID[key] == nil { byID[key] = id }
+            for prefix in AppsIndex.dotPrefixes(of: key) where byPrefix[prefix] == nil { byPrefix[prefix] = id }
+        }
+        self.byID = byID
+        self.byPrefix = byPrefix
+        pathKeys = Set(paths.map { SafetyPaths.folded(SafetyTables.normalized($0)) })
+    }
+
+    /// The lowest running ID related to `identifier` by the `AppsIndex` prefix rule: equal, or one a
+    /// dot-prefix of the other while they share at least 2 labels. Nil when none is.
+    func id(relatedTo identifier: String) -> String? {
+        let key = SafetyPaths.key(identifier)
+        guard !key.isEmpty else { return nil }
+        var best = byID[key]
+        func consider(_ candidate: String?) {
+            if let candidate, best.map({ candidate < $0 }) ?? true { best = candidate }
+        }
+        // A running ID that is a dot-prefix of the identifier.
+        for prefix in AppsIndex.dotPrefixes(of: key) { consider(byID[prefix]) }
+        // The identifier is a dot-prefix of a longer running ID.
+        if key.contains(".") { consider(byPrefix[key]) }
+        return best
+    }
+
+    /// Whether the bundle at `path` is a running app's (compared as `SafetyPaths.folded`). `key`, when
+    /// given, is `SafetyPaths.key` of the normalized `path` (reused when the path is ASCII).
+    func isRunning(path: String, key: String? = nil) -> Bool {
+        guard !pathKeys.isEmpty else { return false }
+        let clean = SafetyTables.normalized(path)
+        if let key, clean.utf8.allSatisfy({ $0 < 0x80 }) { return pathKeys.contains(key) }
+        return pathKeys.contains(SafetyPaths.folded(clean))
+    }
+
+    /// Whether `record` is a running app: its bundle ID is related to a running ID, or its bundle is
+    /// a running app's.
+    func isRunning(_ record: AppRecord) -> Bool {
+        id(relatedTo: record.bundleID) != nil || (!record.path.isEmpty && isRunning(path: record.path))
     }
 }
