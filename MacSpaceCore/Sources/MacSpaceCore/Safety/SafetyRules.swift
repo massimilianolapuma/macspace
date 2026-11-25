@@ -75,10 +75,10 @@ public enum SafetyRules {
         }
         // 9. The user may not remove it from its folder.
         if !env.isWritable(parent(of: path)) { return SafetyVerdict(level: .protected, reason: .notWritable) }
-        // 10. Cloud-only placeholder: frees nothing locally.
-        if f.flags.contains(.dataless) { return SafetyVerdict(level: .normal, reason: .cloudOnly) }
-        // 11. Synced by iCloud Drive or a File Provider: deleting it deletes it everywhere.
-        if SafetyPaths.isUnder(key, t.mobileDocuments) {
+        // 10. Synced by iCloud Drive (its folder, or the Desktop and Documents it syncs) or a File
+        //     Provider: deleting it deletes it everywhere, downloaded or not (ruling R42).
+        if SafetyPaths.isUnder(key, t.mobileDocuments)
+            || env.syncedFolderKeys.contains(where: { SafetyPaths.isUnder(key, $0) }) {
             return SafetyVerdict(level: .caution, reason: .cloudSynced, owner: SafetyTables.iCloudDriveName)
         }
         if let folder = SafetyPaths.component(below: t.cloudStorage, path: path, key: key) {
@@ -86,6 +86,8 @@ public enum SafetyRules {
                 .map(String.init) ?? ""
             return SafetyVerdict(level: .caution, reason: .cloudSynced, owner: provider.isEmpty ? folder : provider)
         }
+        // 11. Cloud-only placeholder anywhere else: frees nothing locally.
+        if f.flags.contains(.dataless) { return SafetyVerdict(level: .normal, reason: .cloudOnly) }
         // 12. Developer caches that their tools rebuild.
         if let cache = t.developerCaches.first(where: { SafetyPaths.isUnder(key, $0.path) }) {
             return SafetyVerdict(level: .safe, reason: .developerCache, owner: cache.name)

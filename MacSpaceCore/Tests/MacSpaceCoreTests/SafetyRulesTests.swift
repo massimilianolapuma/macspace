@@ -86,7 +86,9 @@ private let old: UInt32 = 1_000_000_000
     #expect(v("/Users/u/Library/Mobile Documents/com~apple~CloudDocs/a.mov", kind: .file)
             == SafetyVerdict(level: .caution, reason: .cloudSynced, owner: "iCloud Drive"))
     #expect(v("/Users/u/Library/CloudStorage/Dropbox-Personal/x", kind: .file).owner == "Dropbox")
-    #expect(v("/Users/u/Library/CloudStorage/Dropbox-Personal/x", kind: .file, flags: [.dataless]).reason == .cloudOnly)
+    // Not downloaded, but trashing it still deletes it from Dropbox (ruling R42).
+    #expect(v("/Users/u/Library/CloudStorage/Dropbox-Personal/x", kind: .file, flags: [.dataless])
+            == SafetyVerdict(level: .caution, reason: .cloudSynced, owner: "Dropbox"))
     #expect(v("/Users/u/Downloads/Spotify 1.2.dmg", kind: .file) == SafetyVerdict(level: .safe, reason: .installer, owner: "Spotify"))
     #expect(v("/Users/u/Movies/old.mov", kind: .file, size: 60_000_000, lastUsed: old, category: .video).reason == .notUsedForLong)
     #expect(v("/Users/u/Movies/old.mov", kind: .file, size: 10_000_000, lastUsed: old, category: .video).reason == .ordinary)
@@ -612,4 +614,58 @@ private let officeApps = AppsIndex(records: [
     // The app's own team: its data, not a leftover.
     #expect(v(lib + "/Group Containers/2DC432GLL2.com.openai.shared", lastUsed: old, apps: apps)
             == SafetyVerdict(level: .caution, reason: .appData, owner: "ChatGPT"))
+}
+
+// MARK: - Cloud deletions (final review I3, ruling R42)
+
+@Test func datalessItemsInACloudRootWarnLikeDownloadedOnes() {
+    let iCloud = SafetyVerdict(level: .caution, reason: .cloudSynced, owner: "iCloud Drive")
+    #expect(v(lib + "/Mobile Documents/com~apple~CloudDocs/a.mov", kind: .file, flags: [.dataless]) == iCloud)
+    #expect(v(lib + "/Mobile Documents/com~apple~CloudDocs/Folder", flags: [.dataless]) == iCloud)
+    #expect(v(lib + "/CloudStorage/Dropbox-Personal/x.zip", kind: .file, flags: [.dataless])
+            == SafetyVerdict(level: .caution, reason: .cloudSynced, owner: "Dropbox"))
+    // Elsewhere a dataless item stays "only in the cloud".
+    #expect(v("/Users/u/Movies/x.mov", kind: .file, flags: [.dataless])
+            == SafetyVerdict(level: .normal, reason: .cloudOnly, owner: nil))
+    // Earlier protected rules still win.
+    #expect(v(lib + "/Mobile Documents/com~apple~CloudDocs", flags: [.dataless]).reason == .essentialFolder)
+    #expect(v(lib + "/CloudStorage/Box/x", kind: .file, flags: [.dataless], writable: false).reason == .notWritable)
+}
+
+private func synced(_ path: String, kind: NodeKind = .directory, flags: NodeFlags = [], size: UInt64 = 0,
+                    lastUsed: UInt32 = 0, category: FileCategory = .other,
+                    folders: Set<String> = ["/Users/u/Desktop", "/Users/u/Documents/"]) -> SafetyVerdict {
+    let env = SafetyEnvironment(home: "/Users/u", apps: testApps, runningBundleIDs: [], runningAppPaths: [],
+                                syncedHomeFolders: folders, now: now, isWritable: { _ in true })
+    return SafetyRules.evaluate(facts(path, kind: kind, flags: flags, size: size, lastUsed: lastUsed,
+                                      category: category), in: env)
+}
+
+@Test func iCloudDesktopAndDocumentsAreSynced() {
+    let iCloud = SafetyVerdict(level: .caution, reason: .cloudSynced, owner: "iCloud Drive")
+    #expect(synced("/Users/u/Documents/Taxes/2025.pdf", kind: .file) == iCloud)
+    #expect(synced("/Users/u/Documents/Project") == iCloud)
+    #expect(synced("/Users/u/desktop/Setup.dmg", kind: .file) == iCloud)              // case-insensitive
+    #expect(synced("/Users/u/Desktop/old.mov", kind: .file, flags: [.dataless]) == iCloud)
+    #expect(synced("/Users/u/Desktop/a.mov", kind: .file, size: 100_000_000, lastUsed: 1, category: .video)
+            == iCloud)                                                                   // not "unused for long"
+    // The folders themselves stay essential; other folders are not synced.
+    #expect(synced("/Users/u/Documents").reason == .essentialFolder)
+    #expect(synced("/Users/u/Desktop").reason == .essentialFolder)
+    #expect(synced("/Users/u/Documentsx/a", kind: .file).reason == .ordinary)
+    #expect(synced("/Users/u/Movies/a.mov", kind: .file).reason == .ordinary)
+    #expect(synced("/Users/u/Movies/a.mov", kind: .file, flags: [.dataless]).reason == .cloudOnly)
+    // Protected items inside stay protected.
+    #expect(synced("/Users/u/Documents/Lib.photoslibrary", flags: [.package]).reason == .photosLibrary)
+    #expect(synced("/Users/u/Documents/App.app/Contents", flags: [.insidePackage]).reason == .insidePackage)
+    // Without sync, Documents holds ordinary items.
+    #expect(synced("/Users/u/Documents/Taxes/2025.pdf", kind: .file, folders: []).reason == .ordinary)
+}
+
+@Test func syncedHomeFoldersOfAPlainFolderAreNone() throws {
+    let fx = try Fixture(); defer { fx.cleanup() }
+    try fx.write("Desktop/a.txt", data: Data("a".utf8))
+    try fx.write("Documents/b.txt", data: Data("b".utf8))
+    #expect(SafetyEnvironment.iCloudSyncedHomeFolders(home: fx.root.path).isEmpty)
+    #expect(SafetyEnvironment.system(home: fx.root.path, apps: nil).syncedHomeFolders.isEmpty)
 }

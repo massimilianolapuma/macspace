@@ -73,6 +73,9 @@ public struct SafetyEnvironment: Sendable {
     public let runningBundleIDs: Set<String>
     /// Bundle paths of running apps.
     public let runningAppPaths: Set<String>
+    /// Home folders iCloud Drive syncs (`~/Desktop`, `~/Documents` with "Desktop and Documents
+    /// Folders" on): everything below them is cloud-synced. Absolute paths.
+    public let syncedHomeFolders: Set<String>
     /// Seconds since 1970.
     public let now: UInt32
     /// Whether the current user may modify the given directory (add or remove entries).
@@ -82,27 +85,56 @@ public struct SafetyEnvironment: Sendable {
     let paths: SafetyPaths
     /// `runningBundleIDs` and `runningAppPaths` as lookup tables, built once here (not per node).
     let running: RunningApps
+    /// `syncedHomeFolders` normalized and lowercased.
+    let syncedFolderKeys: [String]
 
     public init(home: String, apps: AppsIndex?, runningBundleIDs: Set<String>, runningAppPaths: Set<String>,
-                now: UInt32, isWritable: @escaping @Sendable (String) -> Bool) {
+                syncedHomeFolders: Set<String> = [], now: UInt32,
+                isWritable: @escaping @Sendable (String) -> Bool) {
         self.home = home
         self.apps = apps
         self.runningBundleIDs = runningBundleIDs
         self.runningAppPaths = runningAppPaths
+        self.syncedHomeFolders = syncedHomeFolders
         self.now = now
         self.isWritable = isWritable
         paths = SafetyPaths(home: home)
         running = RunningApps(bundleIDs: runningBundleIDs, paths: runningAppPaths)
+        syncedFolderKeys = syncedHomeFolders.map { SafetyPaths.key(SafetyTables.normalized($0)) }.sorted()
     }
 
-    /// The live environment: the current time and `access(dir, W_OK)` for write checks.
+    /// The live environment: the current time, `access(dir, W_OK)` for write checks and the home
+    /// folders iCloud Drive syncs right now (`iCloudSyncedHomeFolders`).
     public static func system(home: String, apps: AppsIndex?, runningBundleIDs: Set<String> = [],
                               runningAppPaths: Set<String> = []) -> SafetyEnvironment {
         let seconds = Date().timeIntervalSince1970
         let now = seconds <= 0 ? 0 : seconds >= Double(UInt32.max) ? UInt32.max : UInt32(seconds)
         return SafetyEnvironment(home: home, apps: apps, runningBundleIDs: runningBundleIDs,
-                                 runningAppPaths: runningAppPaths, now: now,
+                                 runningAppPaths: runningAppPaths,
+                                 syncedHomeFolders: iCloudSyncedHomeFolders(home: home), now: now,
                                  isWritable: { access($0, W_OK) == 0 })
+    }
+
+    /// Which of `SafetyTables.iCloudSyncableHomeFolders` iCloud Drive syncs ("Desktop and Documents
+    /// Folders"), as absolute paths: those the system reports as ubiquitous. When that cannot be
+    /// read, one is counted as synced if iCloud Drive holds a folder of that name (fail closed: its
+    /// items then only get a warning). A few file-system calls.
+    public static func iCloudSyncedHomeFolders(home: String) -> Set<String> {
+        let h = SafetyTables.normalized(home)
+        var result: Set<String> = []
+        for name in SafetyTables.iCloudSyncableHomeFolders {
+            let path = h + "/" + name
+            do {
+                let values = try URL(filePath: path, directoryHint: .isDirectory)
+                    .resourceValues(forKeys: [.isUbiquitousItemKey])
+                if values.isUbiquitousItem == true { result.insert(path) }
+            } catch {
+                if FileManager.default.fileExists(atPath: h + "/Library/Mobile Documents/com~apple~CloudDocs/" + name) {
+                    result.insert(path)
+                }
+            }
+        }
+        return result
     }
 }
 

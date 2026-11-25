@@ -58,8 +58,11 @@ public enum SafetyTables {
     public static let appleGroupContainerPrefixes = ["group.com.apple."]
     public static let appleGroupContainerInfixes = [".com.apple."]
 
-    /// Provider name shown for `~/Library/Mobile Documents` (rule 11).
+    /// Provider name shown for `~/Library/Mobile Documents` and the folders it syncs (rule 10).
     public static let iCloudDriveName = "iCloud Drive"
+
+    /// Home folders iCloud Drive can sync ("Desktop and Documents Folders"), relative to the home.
+    public static let iCloudSyncableHomeFolders = ["Desktop", "Documents"]
 
     /// Caches that developer tools rebuild on demand (rule 12), with their display names, in a fixed order.
     /// Xcode `Archives` is user data and deliberately absent.
