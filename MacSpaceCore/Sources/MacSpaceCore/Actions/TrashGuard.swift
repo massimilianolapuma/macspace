@@ -5,8 +5,9 @@ public enum TrashGuard {
     /// Why `path` must never be moved to the Trash, or nil if this guard has no objection.
     /// Refuses: a path that is not absolute or has an empty, `.` or `..` component (a trailing
     /// slash included); `/`; fewer than 2 components; `home` itself or any folder above it; the
-    /// essential folders; a direct child of `~/Library/Mobile Documents` or `~/Library/CloudStorage`
-    /// (a cloud drive root). Also refuses everything when `home` itself is not a plain absolute path.
+    /// essential folders; a direct child of `/Volumes` (a mounted volume), of `/Users` (a home
+    /// folder or Shared), of `~/Library/Mobile Documents` or of `~/Library/CloudStorage` (a cloud
+    /// drive root). Also refuses everything when `home` itself is not a plain absolute path.
     public static func refusal(path: String, home: String) -> String? {
         guard let parts = components(path) else { return "not a plain absolute path" }
         if parts.isEmpty { return "the root folder" }
@@ -24,9 +25,10 @@ public enum TrashGuard {
         let essential = Set(SafetyTables.essentialPaths(home: homePath).map { key(Substring($0)) })
         if essential.contains(joined) { return "an essential folder" }
         let parentKey = Array(keyParts.dropLast())
-        for cloud in ["Mobile Documents", "CloudStorage"] where parentKey == homeKeyParts + ["library", key(Substring(cloud))] {
-            return "a cloud drive root"
-        }
+        if parentKey == ["volumes"] { return "a mounted volume" }
+        if parentKey == ["users"] { return "a home folder" }
+        let cloudRoots = [homeKeyParts + ["library", "mobile documents"], homeKeyParts + ["library", "cloudstorage"]]
+        if cloudRoots.contains(parentKey) { return "a cloud drive root" }
         return nil
     }
 

@@ -95,6 +95,21 @@ func scanFixture(_ fx: Fixture) async throws -> (ScanStore, ScanSummary) {
     }.value
     #expect(summary.wasCancelled && summary.files == 0 && summary.directories == 0)
     #expect(await store.rootSize() == 0)
+    // A cancelled scan still finishes the store, with the root's contents marked unverified.
+    #expect(await store.scanFinished)
+    #expect(await store.unverifiedDirectories == [FileTree.root])
+}
+
+@Test func completedScanFinishesStoreWithItsDevices() async throws {
+    let fx = try Fixture(); defer { fx.cleanup() }
+    try fx.file("a/b", bytes: 1)
+    let store = ScanStore(rootName: "fx", rootPath: fx.root.path)
+    let boundary = try ScanBoundary.forFolder(fx.root.path)
+    #expect(await !store.scanFinished)
+    _ = await Scanner(rootPath: fx.root.path, boundary: boundary).scan(into: store)
+    #expect(await store.scanFinished)
+    #expect(await store.scanDevices == boundary.allowedDevices)
+    #expect(await store.unverifiedDirectories.isEmpty)
 }
 @Test func pathTooLongIsMarkedUnreadable() async throws {
     let fx = try Fixture(); defer { fx.cleanup() }

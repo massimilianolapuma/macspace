@@ -26,6 +26,22 @@ public actor ScanStore {
     /// How many times `SafetyRules.evaluate` ran (cache misses), for tests.
     var verdictEvaluations = 0
 
+    /// Whether the scan filling this store has ended (normally or cancelled); `trash` waits for it.
+    var scanFinished = false
+    /// Devices the scan was allowed on; items found on another device at Trash time have changed.
+    var scanDevices: Set<Int32> = []
+    /// Directories a cancelled scan never listed, or listed only in part: their contents are unknown.
+    var unverifiedDirectories: Set<NodeID> = []
+
+    /// Called by `Scanner.scan(into:)` when it ends, normally or cancelled (tests that fill a store
+    /// by hand call it themselves): records the devices the scan was confined to and the
+    /// directories whose contents it did not fully list, and allows `trash`.
+    public func markScanFinished(allowedDevices: Set<Int32> = [], unverifiedDirectories: [NodeID] = []) {
+        scanFinished = true
+        scanDevices = allowedDevices
+        self.unverifiedDirectories = Set(unverifiedDirectories)
+    }
+
     /// How many installer files the scan has found.
     func installerCount() -> Int { installerIDs.count }
 
@@ -64,9 +80,12 @@ public actor ScanStore {
     /// as their last use (duplicates too, though they add no bytes). A directory's own times are
     /// ignored, since merely listing it can update them: its last use is the latest of its contents.
     ///
-    /// Sizes and last uses of ancestors move, so cached verdicts are dropped.
+    /// Sizes and last uses of ancestors move, so cached verdicts are dropped. Adds nothing under a
+    /// `parent` that was moved to the Trash.
     public func insert(_ entries: [DirectoryEntry], under parent: NodeID, parentPath: String,
                        boundary: ScanBoundary) -> Inserted {
+        // Moved to the Trash meanwhile: its contents are gone, adding them would corrupt the totals.
+        guard !tree.flags(parent).contains(.removed) else { return Inserted(descend: [], bytes: 0) }
         dropVerdicts()
         let prefix = parentPath.hasSuffix("/") ? parentPath : parentPath + "/"
         let parentContext = tree.context(parent)

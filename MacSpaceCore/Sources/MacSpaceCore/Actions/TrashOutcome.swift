@@ -2,8 +2,8 @@
 public enum TrashSkip: Sendable, Hashable {
     /// No longer on disk, or already moved to the Trash.
     case missing
-    /// On disk it is no longer what was scanned (a folder now a symbolic link, a file now a folder,
-    /// or a folder above it replaced).
+    /// On disk it is no longer what was scanned: another kind of object (a folder now a symbolic
+    /// link, a file now a folder), a folder above it replaced, now a mount point, or on another volume.
     case changed
     /// The safety rules, re-evaluated right before moving, protect it (or something inside it).
     case protected(SafetyReason)
@@ -15,6 +15,11 @@ public enum TrashSkip: Sendable, Hashable {
     case refused
     /// The list of open files could not be read in full, so nothing was moved.
     case cannotCheckOpenFiles
+    /// A folder whose contents were not all seen (a mount point, an unreadable folder, or a folder
+    /// a cancelled scan did not finish listing), so what it holds cannot be checked.
+    case containsUnverified
+    /// The scan is still running, so nothing was moved.
+    case scanInProgress
     /// Checking or moving it failed; the message says why.
     case failed(String)
 }

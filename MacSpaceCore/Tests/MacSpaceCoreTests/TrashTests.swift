@@ -20,6 +20,8 @@ private final class CallCounter: Sendable {
 extension ScanStore {
     /// Plants a (wrong) verdict in the cache, to prove `trash` re-evaluates instead of trusting it.
     func plantVerdict(_ verdict: SafetyVerdict, for id: NodeID) { verdictCache[id] = verdict }
+    /// Adds tree flags, to simulate what the scan would have seen (a mount point).
+    func addFlags(_ flags: NodeFlags, to id: NodeID) { tree.insertFlags(flags, for: id) }
 }
 
 private let fixedNow = UInt32(time(nil))
@@ -326,13 +328,178 @@ private func exists(_ path: String) -> Bool {
     for p in ["relative/x", "", "/", "/Users", "/Users/u", "/Users/u/Library", "/Users/u/a/../b", "/Users/u//x",
               "/x", "/Users/u/./x", "/Users/u/x/", "/USERS/U/library", "/Users/u/Library/Caches",
               "/Users/u/Library/Mobile Documents", "/Users/u/Library/Mobile Documents/com~apple~CloudDocs",
-              "/Users/u/Library/CloudStorage/Dropbox", "/Users/u/Documents", "/Applications"] {
+              "/Users/u/Library/CloudStorage/Dropbox", "/Users/u/Documents", "/Applications",
+              "/Volumes/USB", "/volumes/Backup", "/Users/Shared", "/Users/other"] {
         #expect(TrashGuard.refusal(path: p, home: "/Users/u") != nil, "\(p)")
     }
     for p in ["/Users/u/Downloads/a.dmg", "/Users/u/Library/Caches/com.gone.x",
-              "/Users/u/Library/Mobile Documents/com~apple~CloudDocs/report.pdf", "/Users/other/x"] {
+              "/Users/u/Library/Mobile Documents/com~apple~CloudDocs/report.pdf", "/Users/other/x",
+              "/Volumes/USB/old.dmg", "/Users/Shared/x"] {
         #expect(TrashGuard.refusal(path: p, home: "/Users/u") == nil, "\(p)")
     }
     #expect(TrashGuard.refusal(path: "/Users/u/Downloads/a.dmg", home: "/Users/u/") == nil)
     #expect(TrashGuard.refusal(path: "/Users/u/Library", home: "/Users/u/") != nil)
+}
+
+@Test func noTrashWhileScanning() async throws {
+    let fx = try Fixture(); defer { fx.cleanup() }
+    let bin = try Fixture(); defer { bin.cleanup() }
+    try fx.file("a.bin", bytes: 10_000)
+    let store = ScanStore(rootName: "home", rootPath: fx.root.path, home: fx.root.path, now: fixedNow)
+    let boundary = try ScanBoundary.forFolder(fx.root.path)
+    _ = await store.insert(try DirectoryReader.read(path: fx.root.path), under: FileTree.root,
+                           parentPath: fx.root.path, boundary: boundary)
+    await store.setEnvironment(.system(home: fx.root.path, apps: .empty))
+    let id = try await node(store, fx, "a.bin")
+    let calls = CallCounter()
+    let actions = RecordingDiskActions(trash: bin.root.path)
+
+    let during = await store.trash([id], actions: actions, packages: noPackages,
+                                   openFiles: { calls.tick(); return OpenFileSet(paths: []) })
+    #expect(during.skipped == [TrashOutcome.Skipped(node: id, name: "a.bin", reason: .scanInProgress)])
+    #expect(during.moved.isEmpty && actions.moved.isEmpty && calls.value == 0)
+
+    await store.markScanFinished(allowedDevices: boundary.allowedDevices)
+    let after = await store.trash([id], actions: actions, packages: noPackages, openFiles: nothingOpen)
+    #expect(after.moved.map(\.node) == [id])
+}
+
+@Test func insertUnderRemovedParentAddsNothing() async throws {
+    let fx = try Fixture(); defer { fx.cleanup() }
+    let bin = try Fixture(); defer { bin.cleanup() }
+    try fx.file("Projects/old/f", bytes: 10_000)
+    try fx.file("Projects/keep", bytes: 20_000)
+    let store = try await scanned(fx)
+    let old = try await node(store, fx, "Projects/old")
+    let actions = RecordingDiskActions(trash: bin.root.path)
+    _ = await store.trash([old], actions: actions, packages: noPackages, openFiles: nothingOpen)
+    let size = await store.rootSize()
+    let totals = await store.categoryTotals(of: FileTree.root)
+    let ages = await store.ageTotals(of: FileTree.root)
+
+    let late = [DirectoryEntry(name: "late.mov", kind: .file, allocatedSize: 5_000_000, device: 1, inode: 9,
+                               linkCount: 1, isMountPoint: false, isDataless: false, modificationTime: fixedNow),
+                DirectoryEntry(name: "sub", kind: .directory, allocatedSize: 0, device: 1, inode: 10,
+                               linkCount: 1, isMountPoint: false, isDataless: false)]
+    let inserted = await store.insert(late, under: old, parentPath: fx.root.path + "/Projects/old",
+                                      boundary: ScanBoundary(allowedDevices: [1], excludedPaths: []))
+    #expect(inserted.bytes == 0 && inserted.descend.isEmpty)
+    #expect(await store.rootSize() == size)
+    #expect(await store.categoryTotals(of: FileTree.root) == totals)
+    #expect(await store.ageTotals(of: FileTree.root) == ages)
+    #expect(await store.rows(childrenOf: old, limit: 10).map(\.name) == ["f"])
+}
+
+@Test func mountPointIsRefused() async throws {
+    let fx = try Fixture(); defer { fx.cleanup() }
+    let bin = try Fixture(); defer { bin.cleanup() }
+    try fx.file("Disks/usb/f", bytes: 10_000)
+    let store = try await scanned(fx)
+    let usb = try await node(store, fx, "Disks/usb")
+    await store.addFlags(.mountPoint, to: usb)
+
+    let actions = RecordingDiskActions(trash: bin.root.path)
+    let outcome = await store.trash([usb], actions: actions, packages: noPackages, openFiles: nothingOpen)
+    #expect(outcome.skipped.map(\.reason) == [.refused])
+    #expect(actions.moved.isEmpty)
+}
+
+@Test func folderHoldingMountPointOrUnreadableFolderIsUnverified() async throws {
+    let fx = try Fixture(); defer { fx.cleanup() }
+    let bin = try Fixture(); defer { bin.cleanup() }
+    try fx.file("Disks/usb/f", bytes: 10_000)
+    try fx.file("Locked/inside/f", bytes: 10_000)
+    try fx.file("Partial/sub/f", bytes: 10_000)
+    #expect(chmod(fx.root.path + "/Locked/inside", 0) == 0)
+    let store = try await scanned(fx)
+    let disks = try await node(store, fx, "Disks")
+    let locked = try await node(store, fx, "Locked")
+    let partial = try await node(store, fx, "Partial")
+    let lockedInside = try await node(store, fx, "Locked/inside")
+    #expect(await store.row(lockedInside).flags.contains(.unreadable))
+    await store.addFlags(.mountPoint, to: try node(store, fx, "Disks/usb"))
+    // As if a cancelled scan never listed `Partial/sub`.
+    await store.markScanFinished(allowedDevices: try ScanBoundary.forFolder(fx.root.path).allowedDevices,
+                                 unverifiedDirectories: [try node(store, fx, "Partial/sub")])
+
+    let actions = RecordingDiskActions(trash: bin.root.path)
+    let outcome = await store.trash([disks, locked, partial, lockedInside], actions: actions,
+                                    packages: noPackages, openFiles: nothingOpen)
+    #expect(Set(outcome.skipped.map(\.node)) == [disks, locked, partial])   // lockedInside is below Locked
+    #expect(outcome.skipped.allSatisfy { $0.reason == .containsUnverified })
+    let alone = await store.trash([lockedInside], actions: actions, packages: noPackages, openFiles: nothingOpen)
+    #expect(alone.skipped.map(\.reason) == [.containsUnverified])   // its own contents are unknown
+    #expect(actions.moved.isEmpty)
+}
+
+@Test func otherDeviceIsChanged() async throws {
+    let fx = try Fixture(); defer { fx.cleanup() }
+    let bin = try Fixture(); defer { bin.cleanup() }
+    try fx.file("Projects/a", bytes: 10_000)
+    let store = try await scanned(fx)
+    let a = try await node(store, fx, "Projects/a")
+    let real = try DirectoryReader.stat(path: fx.root.path + "/Projects/a")
+    // The scan was confined to some other volume: the item is not where it was scanned.
+    await store.markScanFinished(allowedDevices: [real.device &+ 1])
+
+    let actions = RecordingDiskActions(trash: bin.root.path)
+    let outcome = await store.trash([a], actions: actions, packages: noPackages, openFiles: nothingOpen)
+    #expect(outcome.skipped.map(\.reason) == [.changed])
+    #expect(actions.moved.isEmpty)
+}
+
+@Test func onDiskChangePredicate() {
+    func entry(_ kind: NodeKind, device: Int32 = 7, mount: Bool = false) -> DirectoryEntry {
+        DirectoryEntry(name: "x", kind: kind, allocatedSize: 0, device: device, inode: 1, linkCount: 1,
+                       isMountPoint: mount, isDataless: false)
+    }
+    #expect(ScanStore.onDiskChange(entry(.directory), kind: .directory, devices: [7]) == nil)
+    #expect(ScanStore.onDiskChange(entry(.file), kind: .file, devices: [3, 7]) == nil)
+    #expect(ScanStore.onDiskChange(entry(.symlink), kind: .directory, devices: [7]) == .changed)
+    #expect(ScanStore.onDiskChange(entry(.directory, mount: true), kind: .directory, devices: [7]) == .changed)
+    #expect(ScanStore.onDiskChange(entry(.directory, device: 8), kind: .directory, devices: [7]) == .changed)
+    #expect(ScanStore.onDiskChange(entry(.file), kind: .file, devices: []) == .changed)
+}
+
+@Test func onDiskChecksRunLast() async throws {
+    let fx = try Fixture(); defer { fx.cleanup() }
+    let bin = try Fixture(); defer { bin.cleanup() }
+    let file = try fx.file("Projects/a.log", bytes: 10_000)
+    let store = try await scanned(fx)
+    let id = try await node(store, fx, "Projects/a.log")
+    #expect(unlink(file.path) == 0)
+    let actions = RecordingDiskActions(trash: bin.root.path)
+    // Gone from disk and open: the open check comes first, the disk check right before the move.
+    let outcome = await store.trash([id], actions: actions, packages: noPackages,
+                                    openFiles: { OpenFileSet(paths: [file.path]) })
+    #expect(outcome.skipped.map(\.reason) == [.openNow])
+}
+
+@Test func folderHoldingTrashesIsProtected() async throws {
+    let fx = try Fixture(); defer { fx.cleanup() }
+    let bin = try Fixture(); defer { bin.cleanup() }
+    try fx.file("Projects/disk/.Trashes/501/x", bytes: 10_000)
+    let store = try await scanned(fx)
+    let disk = try await node(store, fx, "Projects/disk")
+    let actions = RecordingDiskActions(trash: bin.root.path)
+    let outcome = await store.trash([disk], actions: actions, packages: noPackages, openFiles: nothingOpen)
+    #expect(outcome.skipped.map(\.reason) == [.protected(.trash)])
+    #expect(actions.moved.isEmpty)
+}
+
+@Test func packageAndReadOnlyFoldersInsideDoNotBlock() async throws {
+    let fx = try Fixture(); defer { fx.cleanup() }
+    let bin = try Fixture(); defer { bin.cleanup() }
+    try fx.file("Projects/mixed/Foo.app/Contents/MacOS/foo", bytes: 10_000)
+    try fx.file("Projects/mixed/ro/inner/f", bytes: 10_000)
+    #expect(chmod(fx.root.path + "/Projects/mixed/ro", 0o555) == 0)
+    let store = try await scanned(fx)
+    let mixed = try await node(store, fx, "Projects/mixed")
+    let inner = try await node(store, fx, "Projects/mixed/ro/inner")
+    #expect(await store.verdict(inner).reason == .notWritable)
+
+    let actions = RecordingDiskActions(trash: bin.root.path)
+    let outcome = await store.trash([mixed], actions: actions, packages: noPackages, openFiles: nothingOpen)
+    #expect(outcome.moved.map(\.node) == [mixed] && outcome.skipped.isEmpty)
+    #expect(actions.moved == [fx.root.path + "/Projects/mixed"])
 }

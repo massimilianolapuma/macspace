@@ -68,6 +68,8 @@ public struct Scanner: Sendable {
         var files = 0, directories = 0, unreadable = 0
         var bytes: UInt64 = 0
         var cancelled = false
+        /// Directories whose listing is missing or partial because the scan was cancelled.
+        var unverified: [NodeID] = []
         let boundary = self.boundary
 
         await withTaskGroup(of: DirectoryResult.self) { group in
@@ -86,11 +88,13 @@ public struct Scanner: Sendable {
                 guard let result = await group.next() else { break }
                 inFlight -= 1
                 switch result {
-                case .skipped:
+                case .skipped(let id):
                     cancelled = true
+                    unverified.append(id)
                 case .unreadable:
                     unreadable += 1
-                case let .read(children, fileCount, directoryCount, byteCount):
+                case let .read(id, children, fileCount, directoryCount, byteCount, partial):
+                    if partial { unverified.append(id) }
                     pending.append(contentsOf: children)
                     files += fileCount
                     directories += directoryCount
@@ -103,6 +107,8 @@ public struct Scanner: Sendable {
                 }
             }
         }
+        unverified += pending.map(\.id)
+        await store.markScanFinished(allowedDevices: boundary.allowedDevices, unverifiedDirectories: unverified)
         progress?(ScanProgress(filesSeen: files, bytesSeen: bytes, directoriesPending: 0))
 
         return ScanSummary(files: files, directories: directories, unreadable: unreadable,
@@ -111,15 +117,17 @@ public struct Scanner: Sendable {
     }
 
     private enum DirectoryResult: Sendable {
-        case read(children: [(id: NodeID, path: String)], files: Int, directories: Int, bytes: UInt64)
+        /// `partial`: the listing was cut short by cancellation.
+        case read(id: NodeID, children: [(id: NodeID, path: String)], files: Int, directories: Int, bytes: UInt64,
+                  partial: Bool)
         case unreadable
-        case skipped
+        case skipped(NodeID)
     }
 
     /// Reads one directory and inserts its entries: one actor hop either way.
     private static func process(_ id: NodeID, path: String, store: ScanStore,
                                 boundary: ScanBoundary) async -> DirectoryResult {
-        guard !Task.isCancelled else { return .skipped }
+        guard !Task.isCancelled else { return .skipped(id) }
         let entries: [DirectoryEntry]
         do {
             entries = try DirectoryReader.read(path: path)
@@ -131,7 +139,10 @@ public struct Scanner: Sendable {
         for entry in entries {
             if entry.kind == .directory { directories += 1 } else { files += 1 }
         }
+        // `read` stops early without throwing once the task is cancelled.
+        let partial = Task.isCancelled
         let inserted = await store.insert(entries, under: id, parentPath: path, boundary: boundary)
-        return .read(children: inserted.descend, files: files, directories: directories, bytes: inserted.bytes)
+        return .read(id: id, children: inserted.descend, files: files, directories: directories,
+                     bytes: inserted.bytes, partial: partial)
     }
 }
