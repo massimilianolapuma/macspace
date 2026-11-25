@@ -250,8 +250,11 @@ private let old: UInt32 = 1_000_000_000
 // MARK: - Rule 10–12: cloud, developer caches
 
 @Test func cloudRows() {
-    #expect(v("/Users/u/Documents/x.mov", kind: .file, flags: [.dataless])
+    #expect(v("/Users/u/Movies/x.mov", kind: .file, flags: [.dataless])
             == SafetyVerdict(level: .normal, reason: .cloudOnly, owner: nil))
+    // In Documents a cloud-only item is iCloud Drive's even when the sync was not detected.
+    #expect(v("/Users/u/Documents/x.mov", kind: .file, flags: [.dataless])
+            == SafetyVerdict(level: .caution, reason: .cloudSynced, owner: "iCloud Drive"))
     #expect(v(lib + "/Caches/com.spotify.client/x", kind: .file, flags: [.dataless]).reason == .cloudOnly)
     #expect(v(lib + "/Mobile Documents/com~apple~CloudDocs/Notes").owner == "iCloud Drive")
     #expect(v(lib + "/CloudStorage/Box/x", kind: .file) == SafetyVerdict(level: .caution, reason: .cloudSynced, owner: "Box"))
@@ -774,4 +777,34 @@ private func synced(_ path: String, kind: NodeKind = .directory, flags: NodeFlag
     #expect(v(lib + "/autosave information/a/b.txt", kind: .file) == autosave)   // case-insensitive
     #expect(v(lib + "/Autosave Informationx").reason == .libraryInternal)
     #expect(v(lib + "/Autosave Information/a", kind: .file, writable: false).reason == .notWritable)
+}
+
+// MARK: - iCloud Desktop and Documents fail closed
+
+@Test func datalessItemsInDesktopAndDocumentsAreICloudEvenWhenNotDetected() {
+    let iCloud = SafetyVerdict(level: .caution, reason: .cloudSynced, owner: "iCloud Drive")
+    #expect(synced("/Users/u/Desktop/old.mov", kind: .file, flags: [.dataless], folders: []) == iCloud)
+    #expect(synced("/Users/u/Documents/Taxes", flags: [.dataless], folders: []) == iCloud)
+    #expect(synced("/Users/u/documents/Taxes/2025.pdf", kind: .file, flags: [.dataless], folders: []) == iCloud)
+    // Downloaded items there stay ordinary without sync; dataless items elsewhere stay cloud-only.
+    #expect(synced("/Users/u/Documents/Taxes/2025.pdf", kind: .file, folders: []).reason == .ordinary)
+    #expect(synced("/Users/u/Downloads/a.zip", kind: .file, flags: [.dataless], folders: []).reason == .cloudOnly)
+    #expect(synced("/Users/u/Documentsx/a", kind: .file, flags: [.dataless], folders: []).reason == .cloudOnly)
+    // The folders themselves stay essential.
+    #expect(synced("/Users/u/Desktop", flags: [.dataless], folders: []).reason == .essentialFolder)
+}
+
+@Test func iCloudFolderOfTheSameNameMarksAHomeFolderSynced() throws {
+    let fx = try Fixture(); defer { fx.cleanup() }
+    try fx.write("Desktop/a.txt", data: Data("a".utf8))
+    try fx.write("Documents/b.txt", data: Data("b".utf8))
+    try fx.write("Library/Mobile Documents/com~apple~CloudDocs/Desktop/a.txt", data: Data("a".utf8))
+    let home = fx.root.path
+    // The local Desktop is not reported ubiquitous, but iCloud Drive holds a Desktop: synced.
+    #expect(SafetyEnvironment.iCloudSyncedHomeFolders(home: home) == [home + "/Desktop"])
+    #expect(SafetyEnvironment.iCloudSyncedHomeFolders(home: home + "/") == [home + "/Desktop"])
+    try fx.write("Library/Mobile Documents/com~apple~CloudDocs/Documents/b.txt", data: Data("b".utf8))
+    #expect(SafetyEnvironment.iCloudSyncedHomeFolders(home: home) == [home + "/Desktop", home + "/Documents"])
+    #expect(SafetyEnvironment.system(home: home, apps: nil).syncedHomeFolders
+            == [home + "/Desktop", home + "/Documents"])
 }

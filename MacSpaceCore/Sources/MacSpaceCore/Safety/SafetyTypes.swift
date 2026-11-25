@@ -116,22 +116,19 @@ public struct SafetyEnvironment: Sendable {
     }
 
     /// Which of `SafetyTables.iCloudSyncableHomeFolders` iCloud Drive syncs ("Desktop and Documents
-    /// Folders"), as absolute paths: those the system reports as ubiquitous. When that cannot be
-    /// read, one is counted as synced if iCloud Drive holds a folder of that name (fail closed: its
-    /// items then only get a warning). A few file-system calls.
+    /// Folders"), as absolute paths. Either signal is enough (fail closed: a folder counted as
+    /// synced only gets its items a warning): the system reports the folder as ubiquitous, or iCloud
+    /// Drive holds a folder of that name. A few file-system calls.
     public static func iCloudSyncedHomeFolders(home: String) -> Set<String> {
         let h = SafetyTables.normalized(home)
         var result: Set<String> = []
         for name in SafetyTables.iCloudSyncableHomeFolders {
             let path = h + "/" + name
-            do {
-                let values = try URL(filePath: path, directoryHint: .isDirectory)
-                    .resourceValues(forKeys: [.isUbiquitousItemKey])
-                if values.isUbiquitousItem == true { result.insert(path) }
-            } catch {
-                if FileManager.default.fileExists(atPath: h + "/Library/Mobile Documents/com~apple~CloudDocs/" + name) {
-                    result.insert(path)
-                }
+            let ubiquitous = (try? URL(filePath: path, directoryHint: .isDirectory)
+                .resourceValues(forKeys: [.isUbiquitousItemKey]))?.isUbiquitousItem == true
+            if ubiquitous
+                || FileManager.default.fileExists(atPath: h + "/Library/Mobile Documents/com~apple~CloudDocs/" + name) {
+                result.insert(path)
             }
         }
         return result

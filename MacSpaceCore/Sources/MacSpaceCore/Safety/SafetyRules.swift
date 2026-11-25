@@ -80,9 +80,11 @@ public enum SafetyRules {
         // 9. The user may not remove it from its folder.
         if !env.isWritable(parent(of: path)) { return SafetyVerdict(level: .protected, reason: .notWritable) }
         // 10. Synced by iCloud Drive (its folder, or the Desktop and Documents it syncs) or a File
-        //     Provider: deleting it deletes it everywhere, downloaded or not (ruling R42).
+        //     Provider: deleting it deletes it everywhere, downloaded or not (ruling R42). A cloud-only
+        //     item in Desktop or Documents counts as synced even when the sync was not detected.
         if SafetyPaths.isUnder(key, t.mobileDocuments)
-            || env.syncedFolderKeys.contains(where: { SafetyPaths.isUnder(key, $0) }) {
+            || env.syncedFolderKeys.contains(where: { SafetyPaths.isUnder(key, $0) })
+            || (f.flags.contains(.dataless) && t.iCloudSyncableFolders.contains { SafetyPaths.isUnder(key, $0) }) {
             return SafetyVerdict(level: .caution, reason: .cloudSynced, owner: SafetyTables.iCloudDriveName)
         }
         if let folder = SafetyPaths.component(below: t.cloudStorage, path: path, key: key) {
@@ -246,6 +248,8 @@ struct SafetyPaths: Sendable {
     let libraryKnownChildren: Set<String>
     /// Lowercased name of the `~/Library` child holding unsaved document versions (rule 12b).
     let autosaveFolder: String
+    /// The home folders iCloud Drive can sync (`SafetyTables.iCloudSyncableHomeFolders`), as keys.
+    let iCloudSyncableFolders: [String]
 
     init(home rawHome: String) {
         let h = SafetyTables.normalized(rawHome)
@@ -266,6 +270,7 @@ struct SafetyPaths: Sendable {
         libraryKnownChildren = Set((LibraryLocation.allCases.map(\.rawValue) + SafetyTables.libraryInternalExceptions)
             .map(Self.key))
         autosaveFolder = Self.key(SafetyTables.autosaveFolder)
+        iCloudSyncableFolders = SafetyTables.iCloudSyncableHomeFolders.map { Self.key(h + "/" + $0) }
     }
 
     /// The `L/<location>/<name>` folder `path` is at or below, if any.
