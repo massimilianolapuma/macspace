@@ -60,10 +60,10 @@ extension ScanStore {
     ///
     /// `expectedLevels`: the level each item had when the user confirmed it. With a map, an item
     /// absent from it was never confirmed and is skipped `.verdictChanged` (fail closed); a nil map
-    /// compares nothing.
+    /// compares nothing. It has no default: a caller that confirms no levels says so with `nil`.
     public func trash(_ ids: Set<NodeID>, actions: any DiskActions, packages: any PackageProbe,
                       openFiles: @Sendable () -> OpenFileSet,
-                      expectedLevels: [NodeID: SafetyLevel]? = nil) -> TrashOutcome {
+                      expectedLevels: [NodeID: SafetyLevel]?) -> TrashOutcome {
         trash(ids, actions: actions, packages: packages, openFiles: openFiles, expectedLevels: expectedLevels,
               mountPoints: MountTable.current)
     }
@@ -71,7 +71,7 @@ extension ScanStore {
     /// `trash` with the mount table injectable for tests: `mountPoints` returns every mount-on
     /// path, or nil when they cannot be read.
     func trash(_ ids: Set<NodeID>, actions: any DiskActions, packages: any PackageProbe,
-               openFiles: @Sendable () -> OpenFileSet, expectedLevels: [NodeID: SafetyLevel]? = nil,
+               openFiles: @Sendable () -> OpenFileSet, expectedLevels: [NodeID: SafetyLevel]?,
                mountPoints: () -> [String]?) -> TrashOutcome {
         defer { verdictCache.removeAll() }
         let items = topMost(ids, keepingRemoved: true)

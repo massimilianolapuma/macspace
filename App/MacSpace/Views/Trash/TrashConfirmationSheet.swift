@@ -540,11 +540,17 @@ private struct TrashCandidateRow: View {
         .padding(.vertical, 9)
         .help(Text(verbatim: candidate.path))
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(Text(verbatim: [candidate.name, candidate.verdict.level.spokenTitle,
+        .accessibilityLabel(Text(verbatim: [candidate.name, spokenLevel,
                                             isUpdated ? String(localized: "Aggiornato") : nil]
             .compactMap { $0 }.joined(separator: ", ")))
         .accessibilityValue(Text(verbatim: [Formatters.bytes(candidate.size), folder, note].compactMap { $0 }
             .joined(separator: ", ")))
+    }
+
+    /// The level as VoiceOver says it: the same state the marker shows, so a withdrawn row that is
+    /// not now protected (gone, no longer selectable) speaks no level; its note says why it stays.
+    private var spokenLevel: String? {
+        isWithdrawn && candidate.verdict.level != .protected ? nil : candidate.verdict.level.spokenTitle
     }
 
     /// The level's swatch; a hollow ring for an ordinary item, or a withdrawn one that is not now
