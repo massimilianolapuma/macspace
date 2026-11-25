@@ -26,13 +26,15 @@ private func isInstalled(_ ownership: Ownership) -> Bool {
 }
 
 @Test func runningIdentifierIsInstalled() {
-    #expect(isInstalled(own("com.acme.tool", .applicationSupport, running: ["com.acme.tool"])))
-    #expect(isInstalled(own("com.acme.tool.helper", .caches, running: ["com.acme.tool"])))
+    let record = AppRecord(bundleID: "com.acme.tool", name: "", teamID: nil, path: "")
+    #expect(own("com.acme.tool", .applicationSupport, running: ["com.acme.tool"]) == .installed(record))
+    #expect(own("com.acme.tool.helper", .caches, running: ["com.acme.tool"]) == .installed(record))
+    // Several related running IDs: the lowest one is reported.
+    #expect(own("com.acme.tool.x", .caches, running: ["com.acme.tool.x", "com.acme.tool"]) == .installed(record))
     #expect(own("com.acme.tool", .applicationSupport) == .unmatchedIdentifier("com.acme.tool"))
 }
 
 @Test func suffixesAndApple() {
-    #expect(own("com.spotify.client.plist", .preferences) != .unknownName)
     #expect(isInstalled(own("com.spotify.client.plist", .preferences)))
     #expect(own("com.apple.Safari.savedState", .savedState) == .apple)
     #expect(own("COM.APPLE.dock.plist", .preferences) == .apple)
@@ -44,8 +46,8 @@ private func isInstalled(_ ownership: Ownership) -> Bool {
 }
 
 @Test func suffixesOnlyStrippedInTheirLocation() {
-    #expect(OwnerMatcher.identifier(from: "com.gone.app.plist", in: .caches) == "com.gone.app.plist")
-    #expect(OwnerMatcher.identifier(from: "com.gone.app.plist", in: .preferences) == "com.gone.app")
+    #expect(OwnerMatcher.identifier(from: "com.gone.app.savedState", in: .caches) == "com.gone.app.savedState")
+    #expect(OwnerMatcher.identifier(from: "com.gone.app.savedState", in: .savedState) == "com.gone.app")
 }
 
 @Test func groupContainerPrefixes() {
@@ -80,4 +82,39 @@ private func isInstalled(_ ownership: Ownership) -> Bool {
     let index = AppsIndex.build(roots: [], extraAppPaths: [fx.root.path + "/Elsewhere/Qux.app"], readTeamIDs: false)
     #expect(isInstalled(OwnerMatcher.ownership(of: "net.qux.app", in: .caches, apps: index, running: [])))
     #expect(isInstalled(OwnerMatcher.ownership(of: "net.qux.app.plist", in: .preferences, apps: index, running: [])))
+}
+
+@Test func teamAloneLinksGroupContainerToRealRecord() throws {
+    let slack = try #require(apps.app(named: "Slack"))
+    #expect(own("BQR82RBBHL.com.other.thing", .groupContainers) == .installed(slack))
+    #expect(own("bqr82rbbhl.com.other.thing", .groupContainers) == .unmatchedIdentifier("bqr82rbbhl.com.other.thing"))
+    #expect(own("BQR82RBBH.com.other.thing", .groupContainers) == .unmatchedIdentifier("BQR82RBBH.com.other.thing"))
+    #expect(own("BQR82RBBHLX.com.other.thing", .groupContainers) == .unmatchedIdentifier("BQR82RBBHLX.com.other.thing"))
+    #expect(own("UNKNOWN123.com.other.thing", .groupContainers) == .unmatchedIdentifier("com.other.thing"))
+    // The team link only exists in Group Containers.
+    #expect(own("BQR82RBBHL.com.other.thing", .caches) == .unmatchedIdentifier("BQR82RBBHL.com.other.thing"))
+}
+
+@Test func appleGroupContainers() {
+    #expect(own("243LU875E5.groups.com.apple.podcasts", .groupContainers) == .apple)
+    #expect(own("243LU875E5.whatever", .groupContainers) == .apple)
+    #expect(own("group.is.workflow.my.workflows", .groupContainers) == .apple)
+    #expect(own("ABCDE12345.com.apple.x", .groupContainers) == .apple)
+    #expect(own("group.com.gone.apple", .groupContainers) == .unmatchedIdentifier("com.gone.apple"))
+}
+
+@Test func fileExtensionsAreNotIdentifierLabels() {
+    #expect(own("app.log", .logs) == .unknownName)
+    #expect(own("it.db", .caches) == .unknownName)
+    #expect(own("foo.bar.cache", .caches) == .unknownName)
+    #expect(own("com.gone.app.log", .logs) == .unmatchedIdentifier("com.gone.app"))
+    #expect(isInstalled(own("com.spotify.client.log", .logs)))
+    #expect(OwnerMatcher.identifier(from: "com.foo.app.LOG", in: .logs) == "com.foo.app")
+}
+
+@Test func suffixAndPrefixEdgeCases() {
+    #expect(own("com.gone.app.PLIST", .preferences) == .unmatchedIdentifier("com.gone.app"))
+    #expect(own("group.", .groupContainers) == .unknownName)
+    #expect(own("com.gone.app.SAVEDSTATE", .savedState) == .unmatchedIdentifier("com.gone.app"))
+    #expect(own("GROUP.com.gone.app", .groupContainers) == .unmatchedIdentifier("com.gone.app"))
 }

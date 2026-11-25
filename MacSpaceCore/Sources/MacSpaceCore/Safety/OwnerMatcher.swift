@@ -27,6 +27,7 @@ public enum LibraryLocation: String, CaseIterable, Sendable {
 /// Who a `~/Library` entry belongs to.
 public enum Ownership: Sendable, Hashable {
     case apple
+    /// An empty `name` on the record means a running app whose name is unknown (only `bundleID` is set).
     case installed(AppRecord)
     /// Looks like a reverse-DNS identifier but matches no installed or running app: a potential leftover.
     case unmatchedIdentifier(String)
@@ -47,42 +48,43 @@ public enum OwnerMatcher {
         of name: String, in location: LibraryLocation, apps: AppsIndex, running: Set<String>
     ) -> Ownership {
         let parsed = parse(name, in: location)
-        if isApple(parsed.text) { return .apple }
-        guard isIdentifierLike(parsed.text) else {
-            return apps.app(named: parsed.text).map(Ownership.installed) ?? .unknownName
+        if isApple(parsed.text) || parsed.team?.lowercased() == SafetyTables.appleTeamID.lowercased() {
+            return .apple
         }
-        if let app = apps.app(forIdentifier: parsed.text) { return .installed(app) }
-        if !running.isEmpty {
-            // Reuse AppsIndex's prefix rule over the running IDs.
-            let runningIndex = AppsIndex(records: running.map {
-                AppRecord(bundleID: $0, name: parsed.text, teamID: nil, path: "")
-            })
-            if let app = runningIndex.app(forIdentifier: parsed.text) { return .installed(app) }
+        let core = withoutFileExtension(parsed.text)
+        guard isIdentifierLike(core) else {
+            return apps.app(named: parsed.text).map(Ownership.installed)
+                ?? apps.app(named: core).map(Ownership.installed) ?? .unknownName
         }
-        if location == .groupContainers, let team = parsed.team, apps.hasTeam(team) {
-            // AppsIndex answers team membership only, so report a placeholder record carrying the team.
-            return .installed(AppRecord(bundleID: "", name: parsed.text, teamID: team, path: ""))
+        if let app = apps.app(forIdentifier: core) { return .installed(app) }
+        // Running apps may live outside every scanned root. Built per call (only reached when nothing
+        // else matched), reusing AppsIndex's prefix rule one running ID at a time, lowest ID first.
+        for id in running.sorted() {
+            let single = AppsIndex(records: [AppRecord(bundleID: id, name: "", teamID: nil, path: "")])
+            if single.app(forIdentifier: core) != nil {
+                return .installed(AppRecord(bundleID: id, name: "", teamID: nil, path: ""))
+            }
         }
-        return .unmatchedIdentifier(parsed.text)
+        if location == .groupContainers, let team = parsed.team, let app = apps.app(forTeam: team) {
+            return .installed(app)
+        }
+        return .unmatchedIdentifier(core)
     }
 
-    /// The identifier `name` stands for in `location` (suffix, `group.` and team prefix removed),
-    /// or nil when it is not identifier-like.
+    /// The identifier `name` stands for in `location` (suffix, `group.`, team prefix and a trailing
+    /// file extension removed), or nil when it is not identifier-like.
     public static func identifier(from name: String, in location: LibraryLocation) -> String? {
-        let text = parse(name, in: location).text
-        return isIdentifierLike(text) ? text : nil
+        let core = withoutFileExtension(parse(name, in: location).text)
+        return isIdentifierLike(core) ? core : nil
     }
 
     // MARK: - Parsing
 
     private static func parse(_ name: String, in location: LibraryLocation) -> (text: String, team: String?) {
         var text = name
-        if let suffix = location.suffix, text.lowercased().hasSuffix(suffix) {
-            text.removeLast(suffix.count)
-        }
+        if let suffix = location.suffix, hasSuffix(text, suffix) { text.removeLast(suffix.utf16.count) }
         guard location == .groupContainers else { return (text, nil) }
-        let lowered = text.lowercased()
-        for prefix in ["group.", "systemgroup."] where lowered.hasPrefix(prefix) && text.count > prefix.count {
+        for prefix in ["group.", "systemgroup."] where hasPrefix(text, prefix) && text.utf16.count > prefix.utf16.count {
             return (String(text.dropFirst(prefix.count)), nil)
         }
         let chars = Array(text.utf8)
@@ -93,8 +95,28 @@ public enum OwnerMatcher {
         return (text, nil)
     }
 
+    private static func hasPrefix(_ text: String, _ prefix: String) -> Bool {
+        text.range(of: prefix, options: [.anchored, .caseInsensitive]) != nil
+    }
+
+    private static func hasSuffix(_ text: String, _ suffix: String) -> Bool {
+        text.range(of: suffix, options: [.anchored, .backwards, .caseInsensitive]) != nil
+    }
+
+    /// Apple's: `com.apple` as the first labels or right after any `.`, or a listed Apple prefix.
     private static func isApple(_ text: String) -> Bool {
-        text.lowercased().hasPrefix("com.apple.")
+        let labels = text.lowercased().split(separator: ".", omittingEmptySubsequences: false)
+        for index in labels.indices.dropLast() where labels[index] == "com" && labels[index + 1] == "apple" {
+            return true
+        }
+        return SafetyTables.appleIdentifierPrefixes.contains { hasPrefix(text, $0) }
+    }
+
+    /// Drops one trailing label that is a file extension (`com.foo.app.log` -> `com.foo.app`).
+    private static func withoutFileExtension(_ text: String) -> String {
+        guard let dot = text.lastIndex(of: "."), dot != text.startIndex else { return text }
+        let last = text[text.index(after: dot)...].lowercased()
+        return SafetyTables.fileExtensionLabels.contains(last) ? String(text[..<dot]) : text
     }
 
     /// No spaces, at least 2 labels of `[A-Za-z0-9_-]+`, and either 3+ labels or a common TLD first.

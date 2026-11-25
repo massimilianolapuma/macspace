@@ -108,3 +108,12 @@ func appsIndexTiming() {
     let elapsed = clock.measure { idx = AppsIndex.build(extraAppPaths: AppsIndex.spotlightAppPaths()) }
     print("APPSINDEX records=\(idx.count) seconds=\(elapsed)")
 }
+
+@Test func appForTeamIsCaseInsensitiveAndDeterministic() {
+    let idx = AppsIndex(records: [
+        AppRecord(bundleID: "com.b.app", name: "B", teamID: "ABCDE12345", path: "/Applications/B.app"),
+        AppRecord(bundleID: "com.a.app", name: "A", teamID: "ABCDE12345", path: "/Applications/A.app"),
+    ])
+    #expect(idx.app(forTeam: "abcde12345")?.name == "A")
+    #expect(idx.app(forTeam: "ZZZZZ99999") == nil)
+}

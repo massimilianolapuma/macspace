@@ -7,4 +7,16 @@ public enum SafetyTables {
         "fcpbundle", "imovielibrary", "logicx", "band", "xcarchive", "xcodeproj", "xcworkspace", "playground",
         "rtfd", "pages", "key", "numbers", "sparsebundle", "dsym", "mlmodelc", "docc",
     ]
+
+    /// Identifier prefixes (lowercase) that belong to Apple although they do not contain `com.apple`.
+    public static let appleIdentifierPrefixes = ["is.workflow."]
+
+    /// Team ID of Apple's own Group Containers.
+    public static let appleTeamID = "243LU875E5"
+
+    /// Trailing labels (lowercase) that are file extensions, not part of an identifier (`com.foo.app.log`).
+    public static let fileExtensionLabels: Set<String> = [
+        "log", "txt", "json", "db", "sqlite", "sqlite3", "plist", "cache", "tmp", "lock", "xml", "dat", "bak",
+        "old", "crash", "ips", "diag", "gz", "zip",
+    ]
 }

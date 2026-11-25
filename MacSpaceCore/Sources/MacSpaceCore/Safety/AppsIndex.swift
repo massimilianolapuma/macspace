@@ -35,6 +35,7 @@ public struct AppsIndex: Sendable {
     private let byIDPrefix: [String: AppRecord]
     private let byName: [String: AppRecord]
     private let teams: Set<String>
+    private let byTeam: [String: AppRecord]
 
     /// Builds an index over `records`; the first record wins when keys collide.
     public init(records: [AppRecord]) {
@@ -42,6 +43,7 @@ public struct AppsIndex: Sendable {
         var byIDPrefix: [String: AppRecord] = [:]
         var byName: [String: AppRecord] = [:]
         var teams: Set<String> = []
+        var byTeam: [String: AppRecord] = [:]
         for record in records {
             let id = Self.lower(record.bundleID)
             if !id.isEmpty {   // "" means "no bundle ID": never reachable through identifier lookups
@@ -54,13 +56,18 @@ public struct AppsIndex: Sendable {
                 let key = Self.lower(name)
                 if byName[key] == nil { byName[key] = record }
             }
-            if let team = record.teamID, !team.isEmpty { teams.insert(Self.lower(team)) }
+            if let team = record.teamID, !team.isEmpty {
+                let key = Self.lower(team)
+                teams.insert(key)
+                if let current = byTeam[key], current.path <= record.path {} else { byTeam[key] = record }
+            }
         }
         self.records = records
         self.byID = byID
         self.byIDPrefix = byIDPrefix
         self.byName = byName
         self.teams = teams
+        self.byTeam = byTeam
     }
 
     /// The app whose bundle ID equals `id`, or where one is a prefix of the other on a `.` boundary
@@ -90,6 +97,11 @@ public struct AppsIndex: Sendable {
     /// Whether any installed app is signed by `teamID`.
     public func hasTeam(_ teamID: String) -> Bool {
         teams.contains(Self.lower(teamID))
+    }
+
+    /// The app signed by `teamID` (case-insensitive); when several are, the one with the lowest `path`.
+    public func app(forTeam teamID: String) -> AppRecord? {
+        byTeam[Self.lower(teamID)]
     }
 
     // MARK: - Building
