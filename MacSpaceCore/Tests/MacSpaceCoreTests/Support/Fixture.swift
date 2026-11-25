@@ -24,7 +24,7 @@ struct Fixture {
             let chunk = [UInt8](repeating: 0xA5, count: 64 * 1024)
             var remaining = bytes
             while remaining > 0 {
-                let n = chunk.withUnsafeBytes { write(fd, $0.baseAddress, min(remaining, $0.count)) }
+                let n = chunk.withUnsafeBytes { Darwin.write(fd, $0.baseAddress, min(remaining, $0.count)) }
                 if n < 0 {
                     if errno == EINTR { continue }
                     throw Self.posixError()
@@ -33,6 +33,33 @@ struct Fixture {
             }
         }
         return root.appendingPathComponent(rel, isDirectory: false)
+    }
+
+    /// Creates a regular file holding `data`, creating missing parent directories.
+    @discardableResult
+    func write(_ rel: String, data: Data) throws -> URL {
+        try withParent(of: rel) { parent, name in
+            let fd = openat(parent, name, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0o644)
+            guard fd >= 0 else { throw Self.posixError() }
+            defer { close(fd) }
+            var offset = 0
+            while offset < data.count {
+                let n = data.withUnsafeBytes { Darwin.write(fd, $0.baseAddress! + offset, data.count - offset) }
+                if n < 0 {
+                    if errno == EINTR { continue }
+                    throw Self.posixError()
+                }
+                offset += n
+            }
+        }
+        return root.appendingPathComponent(rel, isDirectory: false)
+    }
+
+    /// Creates a property list file from `dict` (XML format), creating missing parent directories.
+    @discardableResult
+    func plist(_ rel: String, _ dict: [String: Any]) throws -> URL {
+        let data = try PropertyListSerialization.data(fromPropertyList: dict, format: .xml, options: 0)
+        return try write(rel, data: data)
     }
 
     /// Creates a directory (and any missing ancestors). Works beyond `PATH_MAX`.
