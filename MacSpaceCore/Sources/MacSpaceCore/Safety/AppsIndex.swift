@@ -35,7 +35,8 @@ public struct AppsIndex: Sendable {
     private let byIDPrefix: [String: AppRecord]
     private let byName: [String: AppRecord]
     private let teams: Set<String>
-    private let byTeam: [String: AppRecord]
+    /// Every record signed by a team, by lowest path first.
+    private let byTeam: [String: [AppRecord]]
     /// Lowest-path app per vendor (first two bundle-ID labels), `com.apple` excluded.
     private let byVendor: [String: AppRecord]
 
@@ -45,7 +46,7 @@ public struct AppsIndex: Sendable {
         var byIDPrefix: [String: AppRecord] = [:]
         var byName: [String: AppRecord] = [:]
         var teams: Set<String> = []
-        var byTeam: [String: AppRecord] = [:]
+        var byTeam: [String: [AppRecord]] = [:]
         var byVendor: [String: AppRecord] = [:]
         for record in records {
             let id = Self.lower(record.bundleID)
@@ -65,8 +66,14 @@ public struct AppsIndex: Sendable {
             if let team = record.teamID, !team.isEmpty {
                 let key = Self.lower(team)
                 teams.insert(key)
-                if let current = byTeam[key], current.path <= record.path {} else { byTeam[key] = record }
+                byTeam[key, default: []].append(record)
             }
+        }
+        // Stable: of records with the same path, the first one stays first.
+        for key in byTeam.keys {
+            byTeam[key] = byTeam[key]!.enumerated()
+                .sorted { $0.element.path != $1.element.path ? $0.element.path < $1.element.path : $0.offset < $1.offset }
+                .map(\.element)
         }
         self.records = records
         self.byID = byID
@@ -116,7 +123,12 @@ public struct AppsIndex: Sendable {
 
     /// The app signed by `teamID` (case-insensitive); when several are, the one with the lowest `path`.
     public func app(forTeam teamID: String) -> AppRecord? {
-        byTeam[Self.lower(teamID)]
+        apps(forTeam: teamID).first
+    }
+
+    /// Every app signed by `teamID` (case-insensitive), lowest `path` first.
+    func apps(forTeam teamID: String) -> [AppRecord] {
+        byTeam[Self.lower(teamID)] ?? []
     }
 
     /// The app whose bundle ID has the same vendor (first two labels, `com.openai` for

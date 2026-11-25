@@ -135,3 +135,47 @@ private func isInstalled(_ ownership: Ownership) -> Bool {
     #expect(!running.isRunning(path: "/Applications/Tool.app/Contents"))
     #expect(!RunningApps(bundleIDs: [], paths: []).isRunning(path: "/Applications/Tool.app"))
 }
+
+// MARK: - Shared team containers (final review I2)
+
+private let office = AppsIndex(records: [
+    AppRecord(bundleID: "com.microsoft.Excel", name: "Microsoft Excel", teamID: "UBF8T346G9",
+              path: "/Applications/Microsoft Excel.app"),
+    AppRecord(bundleID: "com.microsoft.Outlook", name: "Microsoft Outlook", teamID: "UBF8T346G9",
+              path: "/Applications/Microsoft Outlook.app"),
+    AppRecord(bundleID: "com.microsoft.Outlook.helper", name: "Microsoft Outlook", teamID: nil,
+              path: "/Applications/Microsoft Outlook.app"),
+])
+
+private func officeOwner(_ name: String, _ location: LibraryLocation = .groupContainers,
+                         running: Set<String> = []) -> String? {
+    if case let .installed(app) = OwnerMatcher.ownership(of: name, in: location, apps: office, running: running) {
+        return app.name
+    }
+    return nil
+}
+
+@Test func teamContainerPrefersARunningTeamMember() {
+    // Not running: the lowest-path app of the team, as before.
+    #expect(officeOwner("UBF8T346G9.com.microsoft.oneauth") == "Microsoft Excel")
+    // Outlook running: the shared container is its data too.
+    #expect(officeOwner("UBF8T346G9.com.microsoft.oneauth", running: ["com.microsoft.Outlook"]) == "Microsoft Outlook")
+    #expect(officeOwner("UBF8T346G9.com.microsoft.oneauth", running: ["com.microsoft.Outlook.helper"])
+            == "Microsoft Outlook")
+    // Even when the name itself matches the app that is not running.
+    #expect(officeOwner("UBF8T346G9.com.microsoft.Excel", running: ["com.microsoft.Outlook"]) == "Microsoft Outlook")
+    #expect(officeOwner("UBF8T346G9.com.microsoft.Excel") == "Microsoft Excel")
+}
+
+@Test func teamPrefixedPlainNamesUseTheTeam() {
+    #expect(officeOwner("UBF8T346G9.Office") == "Microsoft Excel")
+    #expect(officeOwner("UBF8T346G9.Office", running: ["com.microsoft.Outlook"]) == "Microsoft Outlook")
+    #expect(officeOwner("UBF8T346G9.OfficeOsfWebHost") == "Microsoft Excel")
+    // A plain name matching an app still names it; an unknown team stays unknown.
+    #expect(own("BQR82RBBHL.Slack", .groupContainers) == .installed(apps.app(named: "Slack")!))
+    #expect(OwnerMatcher.ownership(of: "ZZZZZ99999.Office", in: .groupContainers, apps: office, running: [])
+            == .unknownName)
+    // The team link only exists in Group Containers.
+    #expect(OwnerMatcher.ownership(of: "UBF8T346G9.Office", in: .applicationSupport, apps: office, running: [])
+            == .unknownName)
+}

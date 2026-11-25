@@ -578,3 +578,38 @@ private let installerApps = AppsIndex(records: [
     // An ASCII home is unaffected by non-ASCII names below it.
     #expect(verdict(home: "/Users/u", path: "/Users/u/Caf\u{E9}").reason == .ordinary)
 }
+
+// MARK: - Shared team containers (final review I2)
+
+private let officeApps = AppsIndex(records: [
+    AppRecord(bundleID: "com.microsoft.Excel", name: "Microsoft Excel", teamID: "UBF8T346G9",
+              path: "/Applications/Microsoft Excel.app"),
+    AppRecord(bundleID: "com.microsoft.Outlook", name: "Microsoft Outlook", teamID: "UBF8T346G9",
+              path: "/Applications/Microsoft Outlook.app"),
+])
+
+@Test func runningTeamMemberProtectsSharedContainers() {
+    let gc = lib + "/Group Containers/"
+    for name in ["UBF8T346G9.com.microsoft.oneauth", "UBF8T346G9.Office"] {
+        #expect(v(gc + name, apps: officeApps)
+                == SafetyVerdict(level: .caution, reason: .appData, owner: "Microsoft Excel"), "\(name)")
+        let running = SafetyVerdict(level: .protected, reason: .runningAppData, owner: "Microsoft Outlook")
+        #expect(v(gc + name, apps: officeApps, running: ["com.microsoft.Outlook"]) == running, "\(name)")
+        #expect(v(gc + name + "/Library/x", kind: .file, apps: officeApps, running: ["com.microsoft.Outlook"])
+                == running, "\(name)")
+        // Running known only by its bundle path.
+        #expect(v(gc + name, apps: officeApps, runningPaths: ["/Applications/Microsoft Outlook.app"]) == running,
+                "\(name)")
+    }
+}
+
+@Test func teamPrefixedLeftoverOfAnInstalledVendorIsCaution() {   // R36 in Group Containers
+    let apps = AppsIndex(records: [
+        AppRecord(bundleID: "com.openai.codex", name: "ChatGPT", teamID: "2DC432GLL2", path: "/Applications/ChatGPT.app"),
+    ])
+    #expect(v(lib + "/Group Containers/ABCDE12345.com.openai.chat", lastUsed: old, apps: apps)
+            == SafetyVerdict(level: .caution, reason: .vendorLeftover, owner: "ChatGPT"))
+    // The app's own team: its data, not a leftover.
+    #expect(v(lib + "/Group Containers/2DC432GLL2.com.openai.shared", lastUsed: old, apps: apps)
+            == SafetyVerdict(level: .caution, reason: .appData, owner: "ChatGPT"))
+}

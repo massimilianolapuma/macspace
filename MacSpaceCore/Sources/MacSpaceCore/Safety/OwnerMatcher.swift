@@ -58,19 +58,22 @@ public enum OwnerMatcher {
         if isApple(parsed.text) || parsed.team?.lowercased() == SafetyTables.appleTeamID.lowercased() {
             return .apple
         }
+        // A team-prefixed Group Container is shared by the apps of that team: while any of them runs,
+        // it is that app's data, whatever the rest of the name says.
+        let team = location == .groupContainers ? parsed.team.map { apps.apps(forTeam: $0) } ?? [] : []
+        if let app = team.first(where: running.isRunning) { return .installed(app) }
         let core = withoutFileExtension(parsed.text)
         guard isIdentifierLike(core) else {
             return apps.app(named: parsed.text).map(Ownership.installed)
-                ?? apps.app(named: core).map(Ownership.installed) ?? .unknownName
+                ?? apps.app(named: core).map(Ownership.installed)
+                ?? team.first.map(Ownership.installed) ?? .unknownName
         }
         if let app = apps.app(forIdentifier: core) { return .installed(app) }
         // Running apps may live outside every scanned root: the lowest related running ID.
         if let id = running.id(relatedTo: core) {
             return .installed(AppRecord(bundleID: id, name: "", teamID: nil, path: ""))
         }
-        if location == .groupContainers, let team = parsed.team, let app = apps.app(forTeam: team) {
-            return .installed(app)
-        }
+        if let app = team.first { return .installed(app) }
         return .unmatchedIdentifier(core)
     }
 
