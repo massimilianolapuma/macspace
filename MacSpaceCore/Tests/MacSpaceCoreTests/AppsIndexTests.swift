@@ -10,7 +10,7 @@ import Testing
     try fx.plist("Apps/Utilities/Bar.app/Contents/Info.plist", ["CFBundleIdentifier": "org.bar.app"])
     try fx.dir("Apps/NoPlist.app")
     let idx = AppsIndex.build(roots: [fx.root.path + "/Apps"], readTeamIDs: false)
-    #expect(idx.count == 3)
+    #expect(idx.count == 4)   // NoPlist.app is kept by name (R7)
     #expect(idx.app(forIdentifier: "com.foo.helper")?.name == "Foo")
     #expect(idx.app(forIdentifier: "COM.FOO.FOOBAR") == nil)   // not a dot-boundary prefix
     #expect(idx.app(forIdentifier: "COM.FOO.FOO.savedState")?.bundleID == "com.foo.Foo")   // dot-boundary prefix
@@ -35,6 +35,32 @@ import Testing
     #expect(idx.app(forIdentifier: "com.baz.svc")?.name == "Baz Pro")
     #expect(idx.app(forIdentifier: "com.baz.hlp")?.path == apps + "/Baz.app")
     #expect(idx.app(forIdentifier: "net.qux.app") != nil)
+}
+
+@Test func launchServicesHelpersAreIndexedByFileName() throws {
+    let fx = try Fixture(); defer { fx.cleanup() }
+    try fx.plist("Apps/Foo.app/Contents/Info.plist", ["CFBundleIdentifier": "com.foo.app", "CFBundleName": "Foo"])
+    try fx.file("Apps/Foo.app/Contents/Library/LaunchServices/com.foo.PrivHelper", bytes: 8)
+    try fx.file("Apps/Foo.app/Contents/Library/LaunchServices/README", bytes: 8)
+    let idx = AppsIndex.build(roots: [fx.root.path + "/Apps/"], readTeamIDs: false)
+    #expect(idx.count == 2)
+    #expect(idx.app(forIdentifier: "com.foo.privhelper")?.name == "Foo")
+    #expect(idx.app(forIdentifier: "README") == nil)
+}
+
+@Test func appsWithoutBundleIDAreStillIndexed() throws {
+    let fx = try Fixture(); defer { fx.cleanup() }
+    try fx.plist("Apps/Odd.app/Contents/Info.plist", ["CFBundleName": "Odd Name"])
+    try fx.plist("Apps/Odd.app/Contents/PlugIns/X.appex/Contents/Info.plist", ["CFBundleIdentifier": "org.odd.ext"])
+    try fx.dir("Apps/Broken.APP")
+    let idx = AppsIndex.build(roots: [fx.root.path + "/Apps"], readTeamIDs: false)
+    #expect(idx.app(named: "odd name")?.path.hasSuffix("Odd.app") == true)
+    #expect(idx.app(named: "Odd")?.name == "Odd Name")
+    #expect(idx.app(named: "broken")?.bundleID == "")
+    #expect(idx.app(forIdentifier: "org.odd.ext")?.name == "Odd Name")
+    #expect(idx.app(forIdentifier: "") == nil)
+    #expect(AppsIndex(records: [AppRecord(bundleID: "", name: "N", teamID: "TEAM123456", path: "/A/N.app")])
+        .app(forIdentifier: "") == nil)
 }
 
 @Test func binaryPlistsAreRead() throws {
@@ -63,7 +89,7 @@ import Testing
 }
 
 @Test func spotlightHelpersDoNotCrash() {
-    #expect(AppsIndex.spotlightAppPaths().allSatisfy { $0.hasSuffix(".app") })
+    #expect(AppsIndex.spotlightAppPaths().allSatisfy { $0.lowercased().hasSuffix(".app") })
     #expect(SpotlightLastUsed.lastUsed(path: "/nonexistent/x") == nil)
 }
 

@@ -17,21 +17,24 @@ public enum SpotlightLastUsed {
 
 extension AppsIndex {
     /// Paths of every application bundle Spotlight knows about (`kMDItemContentType ==
-    /// "com.apple.application-bundle"`), queried synchronously. Empty when Spotlight is off.
+    /// "com.apple.application-bundle"`), queried synchronously. Sorted, so duplicate resolution is deterministic. Empty when Spotlight is off.
     public static func spotlightAppPaths() -> [String] {
         let query = "kMDItemContentType == \"com.apple.application-bundle\""
         guard let mdQuery = MDQueryCreate(kCFAllocatorDefault, query as CFString, nil, nil),
               MDQueryExecute(mdQuery, CFOptionFlags(kMDQuerySynchronous.rawValue)) else { return [] }
         var paths: [String] = []
-        let count = MDQueryGetResultCount(mdQuery)
-        paths.reserveCapacity(count)
-        for index in 0..<count {
-            guard let raw = MDQueryGetResultAtIndex(mdQuery, index) else { continue }
-            let item = Unmanaged<MDItem>.fromOpaque(raw).takeUnretainedValue()
-            if let path = MDItemCopyAttribute(item, kMDItemPath) as? String, path.hasSuffix(".app") {
-                paths.append(path)
+        withExtendedLifetime(mdQuery) {
+            let count = MDQueryGetResultCount(mdQuery)
+            paths.reserveCapacity(count)
+            for index in 0..<count {
+                guard let raw = MDQueryGetResultAtIndex(mdQuery, index) else { continue }
+                let item = Unmanaged<MDItem>.fromOpaque(raw).takeUnretainedValue()
+                if let path = MDItemCopyAttribute(item, kMDItemPath) as? String,
+                   path.lowercased().hasSuffix(".app") {
+                    paths.append(path)
+                }
             }
         }
-        return paths
+        return paths.sorted()
     }
 }

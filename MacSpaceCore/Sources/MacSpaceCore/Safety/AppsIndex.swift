@@ -26,7 +26,7 @@ public struct AppsIndex: Sendable {
     /// An index with no apps.
     public static let empty = AppsIndex(records: [])
 
-    /// Number of records (apps plus embedded bundles).
+    /// Number of records (apps, including those without a bundle ID, plus embedded bundles).
     public var count: Int { records.count }
 
     private let records: [AppRecord]
@@ -44,13 +44,13 @@ public struct AppsIndex: Sendable {
         var teams: Set<String> = []
         for record in records {
             let id = Self.lower(record.bundleID)
-            if byID[id] == nil { byID[id] = record }
-            for prefix in Self.dotPrefixes(of: id) where byIDPrefix[prefix] == nil {
-                byIDPrefix[prefix] = record
+            if !id.isEmpty {   // "" means "no bundle ID": never reachable through identifier lookups
+                if byID[id] == nil { byID[id] = record }
+                for prefix in Self.dotPrefixes(of: id) where byIDPrefix[prefix] == nil {
+                    byIDPrefix[prefix] = record
+                }
             }
-            let fileName = (record.path as NSString).lastPathComponent
-            let baseName = fileName.hasSuffix(".app") ? String(fileName.dropLast(4)) : fileName
-            for name in [record.name, baseName] {
+            for name in [record.name, Self.baseName(ofPath: record.path)] {
                 let key = Self.lower(name)
                 if byName[key] == nil { byName[key] = record }
             }
@@ -67,6 +67,7 @@ public struct AppsIndex: Sendable {
     /// and they share at least 2 labels (`com.foo.helper` and `com.foo`, never `com` and anything).
     public func app(forIdentifier id: String) -> AppRecord? {
         let key = Self.lower(id)
+        guard !key.isEmpty else { return nil }
         if let exact = byID[key] { return exact }
         // An app ID that is a dot-prefix of the identifier, longest first.
         var end = key.endIndex
@@ -94,8 +95,13 @@ public struct AppsIndex: Sendable {
     // MARK: - Building
 
     /// Scans `roots` (up to 2 levels below each, never into apps) plus `extraAppPaths` for apps and
-    /// their embedded bundles. Apps without a bundle ID are skipped; duplicates by path are ignored.
+    /// their embedded bundles. An app whose Info.plist is unreadable or lacks a bundle ID is still
+    /// indexed by name and team ID with an empty `bundleID` (which never matches an identifier
+    /// lookup), and its embedded bundles are still walked. Duplicates by path are ignored.
     /// Team IDs are read from the code signature of top-level apps only.
+    ///
+    /// Synchronous file-system and code-signature work: it blocks the caller, so keep it off the
+    /// main actor.
     public static func build(
         roots: [String] = AppsIndex.defaultRoots,
         extraAppPaths: [String] = [],
@@ -104,10 +110,11 @@ public struct AppsIndex: Sendable {
         var appPaths: [String] = []
         var seenApps: Set<String> = []
         func add(_ path: String) {
-            let clean = path.count > 1 && path.hasSuffix("/") ? String(path.dropLast()) : path
+            let clean = normalized(path)
             if seenApps.insert(clean).inserted { appPaths.append(clean) }
         }
-        for root in roots {
+        for rawRoot in roots {
+            let root = normalized(rawRoot)
             for entry in names(in: root) {
                 let path = root + "/" + entry
                 if isApp(entry) {
@@ -123,15 +130,14 @@ public struct AppsIndex: Sendable {
         var records: [AppRecord] = []
         var seenBundles: Set<String> = []
         for appPath in appPaths {
-            guard let info = readInfo(bundle: appPath), let id = info.id else { continue }
-            let fileName = (appPath as NSString).lastPathComponent
-            let name = info.displayName ?? info.name ?? String(fileName.dropLast(4))
-            let team = teams[appPath]
+            let info = readInfo(bundle: appPath)
+            let name = info?.displayName ?? info?.name ?? baseName(ofPath: appPath)
             if seenBundles.insert(appPath).inserted {
-                records.append(AppRecord(bundleID: id, name: name, teamID: team, path: appPath))
+                records.append(AppRecord(bundleID: info?.id ?? "", name: name, teamID: teams[appPath], path: appPath))
             }
-            for embedded in embeddedBundles(inApp: appPath) where seenBundles.insert(embedded).inserted {
-                guard let childID = readInfo(bundle: embedded)?.id else { continue }
+            for embedded in embeddedBundles(inApp: appPath) where seenBundles.insert(embedded.path).inserted {
+                guard let childID = embedded.isBundle ? readInfo(bundle: embedded.path)?.id : embedded.fileID
+                else { continue }
                 records.append(AppRecord(bundleID: childID, name: name, teamID: nil, path: appPath))
             }
         }
@@ -158,6 +164,25 @@ public struct AppsIndex: Sendable {
             end = dot
         }
         return result
+    }
+
+    /// File name of `path` without a (case-insensitive) `.app` suffix.
+    static func baseName(ofPath path: String) -> String {
+        let fileName = (path as NSString).lastPathComponent
+        return fileName.lowercased().hasSuffix(".app") && fileName.count > 4 ? String(fileName.dropLast(4)) : fileName
+    }
+
+    private static func normalized(_ path: String) -> String {
+        var result = path
+        while result.count > 1 && result.hasSuffix("/") { result.removeLast() }
+        return result
+    }
+
+    /// Whether `name` looks like a reverse-DNS identifier (privileged helpers are named by it).
+    private static func isIdentifierLike(_ name: String) -> Bool {
+        name.contains(".") && !name.hasPrefix(".") && !name.hasSuffix(".")
+            && name.utf8.allSatisfy { ($0 >= 0x30 && $0 <= 0x39) || ($0 | 0x20 >= 0x61 && $0 | 0x20 <= 0x7A)
+                || $0 == 0x2E || $0 == 0x2D || $0 == 0x5F }
     }
 
     private static func isApp(_ name: String) -> Bool {
@@ -195,19 +220,32 @@ public struct AppsIndex: Sendable {
         return nil
     }
 
+    private struct Embedded {
+        var path: String
+        var isBundle: Bool
+        /// For launch-services helpers (plain executables): the file name, used as bundle ID.
+        var fileID: String?
+    }
+
     /// Helper apps, extensions, XPC services and launch-services helpers inside an app.
-    private static func embeddedBundles(inApp appPath: String) -> [String] {
+    private static func embeddedBundles(inApp appPath: String) -> [Embedded] {
         let places: [(dir: String, ext: String?)] = [
             ("Contents/Library/LoginItems", "app"), ("Contents/Helpers", "app"),
             ("Contents/PlugIns", "appex"), ("Contents/XPCServices", "xpc"),
             ("Contents/Library/LaunchServices", nil),
         ]
-        var result: [String] = []
+        var result: [Embedded] = []
         for place in places {
             let dir = appPath + "/" + place.dir
             for name in names(in: dir) {
-                if let ext = place.ext, (name as NSString).pathExtension.lowercased() != ext { continue }
-                result.append(dir + "/" + name)
+                if let ext = place.ext {
+                    if (name as NSString).pathExtension.lowercased() == ext {
+                        result.append(Embedded(path: dir + "/" + name, isBundle: true, fileID: nil))
+                    }
+                } else if isIdentifierLike(name) {
+                    // Privileged helpers are Mach-O files named by their bundle ID, not bundles.
+                    result.append(Embedded(path: dir + "/" + name, isBundle: false, fileID: name))
+                }
             }
         }
         return result
