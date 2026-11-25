@@ -94,9 +94,10 @@ extension ScanModel {
     /// Moves `ids` to the Trash through `ScanStore.trash`, which re-checks each one right before
     /// moving it (still there and unchanged, not open, not protected, not inside a package, and at
     /// the level in `expectedLevels`: what the user saw and confirmed; an item missing from it is
-    /// skipped) and skips with a reason whatever fails. The store first gets the apps running at
-    /// this moment (ruling R41), not the debounced environment the views show: an app launched
-    /// since protects its data and bundle, and a level that changed with it skips `.verdictChanged`.
+    /// skipped) and skips with a reason whatever fails. The store gets the apps running at this
+    /// moment with the move itself (ruling R41), not the debounced environment the views show: an
+    /// app launched since protects its data and bundle, and a level that changed with it skips
+    /// `.verdictChanged`.
     /// Then: the history gains what moved, the selection, ticks and outlines lose it, the views and
     /// suggestions are refreshed (the tree was updated in place).
     /// Refused while another move runs or while the Trash is unavailable: nothing is moved then.
@@ -116,16 +117,17 @@ extension ScanModel {
         isTrashing = true
         defer { isTrashing = false }
         // The running apps (and iCloud sync) read now. Kept as the model's environment too, so an
-        // update queued meanwhile cannot hand the store an older one before the move.
+        // update queued meanwhile hands the store this one, not an older one, after the move.
         let live = SafetyEnvironmentProvider.environment(apps: environment.apps)
         let changed = live.runningBundleIDs != environment.runningBundleIDs
             || live.runningAppPaths != environment.runningAppPaths
             || live.syncedHomeFolders != environment.syncedHomeFolders
         self.environment = live
-        await store.setEnvironment(live)
-        // On the store's actor: blocking file system calls, off the main actor.
-        let outcome = await store.trash(Set(ids), actions: SystemDiskActions(), packages: SystemPackageProbe(),
-                                        openFiles: { OpenFileSet.current() }, expectedLevels: expectedLevels)
+        // On the store's actor: blocking file system calls, off the main actor. The store takes the
+        // live environment and moves in one actor call, so no queued update can slip in between.
+        let outcome = await store.trash(Set(ids), environment: live, actions: SystemDiskActions(),
+                                        packages: SystemPackageProbe(), openFiles: { OpenFileSet.current() },
+                                        expectedLevels: expectedLevels)
         // Whatever happened to the scan meanwhile, these really are in the Trash now.
         let now = Date.now
         history.insert(contentsOf: outcome.moved.map {

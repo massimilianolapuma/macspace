@@ -67,8 +67,8 @@ extension ScanStore {
     ///   directory whose name was not decoded exactly fails the reader, so it is `.unreadable` in the
     ///   tree and its folder is `.containsUnverified`.
     /// - Environment: the store judges against the environment it was last given; the app hands it
-    ///   the apps running right before calling (ruling R41), so only the window between that read
-    ///   and the move remains.
+    ///   the apps running right before the move, in the same actor call (`trash(_:environment:…)`,
+    ///   ruling R41), so only the window between that read and the move remains.
     /// Verdicts are dropped afterwards, since sizes and contents moved.
     ///
     /// `expectedLevels`: the level each item had when the user confirmed it. With a map, an item
@@ -79,6 +79,16 @@ extension ScanStore {
                       expectedLevels: [NodeID: SafetyLevel]?) -> TrashOutcome {
         trash(ids, actions: actions, packages: packages, openFiles: openFiles, expectedLevels: expectedLevels,
               mountPoints: MountTable.current)
+    }
+
+    /// `trash` judged against `environment`, which the store keeps from then on: set and used in
+    /// this one actor call, so no environment handed over meanwhile (an update queued before it)
+    /// can take its place between the two. The app passes the apps running right now (ruling R41).
+    public func trash(_ ids: Set<NodeID>, environment: SafetyEnvironment, actions: any DiskActions,
+                      packages: any PackageProbe, openFiles: @Sendable () -> OpenFileSet,
+                      expectedLevels: [NodeID: SafetyLevel]?) -> TrashOutcome {
+        setEnvironment(environment)
+        return trash(ids, actions: actions, packages: packages, openFiles: openFiles, expectedLevels: expectedLevels)
     }
 
     /// `trash` with the mount table injectable for tests: `mountPoints` returns every mount-on

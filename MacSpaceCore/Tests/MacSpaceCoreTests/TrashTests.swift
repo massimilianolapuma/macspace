@@ -671,3 +671,33 @@ private func exists(_ path: String) -> Bool {
     #expect(outcome.moved.isEmpty && outcome.skipped.isEmpty)
     #expect(calls.value == 0)
 }
+
+@Test func trashJudgesAgainstTheEnvironmentHandedToIt() async throws {
+    let fx = try Fixture(); defer { fx.cleanup() }
+    let bin = try Fixture(); defer { bin.cleanup() }
+    try fx.file("Library/Application Support/com.example.app/data.db", bytes: 80_000)
+    try fx.file("Projects/a.bin", bytes: 10_000)
+    let store = ScanStore(rootName: "home", rootPath: fx.root.path, home: fx.root.path, now: fixedNow)
+    _ = await Scanner(rootPath: fx.root.path, boundary: try .forFolder(fx.root.path)).scan(into: store)
+    let apps = AppsIndex(records: [AppRecord(bundleID: "com.example.app", name: "Example", teamID: nil,
+                                             path: "/Applications/Example.app")])
+    // The store holds an older environment, without the app running.
+    await store.setEnvironment(.system(home: fx.root.path, apps: apps))
+    let id = try await node(store, fx, "Library/Application Support/com.example.app")
+    let other = try await node(store, fx, "Projects/a.bin")
+    let shown = try #require(await store.verdict(id))
+    #expect(shown == SafetyVerdict(level: .caution, reason: .appData, owner: "Example"))
+    let otherLevel = try #require(await store.verdict(other)).level
+
+    // The live environment, handed with the move: the app runs now, so its data is protected.
+    let live = SafetyEnvironment.system(home: fx.root.path, apps: apps, runningBundleIDs: ["com.example.app"])
+    let actions = RecordingDiskActions(trash: bin.root.path)
+    let outcome = await store.trash([id, other], environment: live, actions: actions, packages: noPackages,
+                                    openFiles: nothingOpen, expectedLevels: [id: shown.level, other: otherLevel])
+    #expect(outcome.skipped == [TrashOutcome.Skipped(node: id, name: "com.example.app",
+                                                     reason: .protected(.runningAppData))])
+    #expect(outcome.moved.map(\.node) == [other])
+    #expect(actions.moved == [fx.root.path + "/Projects/a.bin"])
+    // The store keeps judging against the environment it was handed.
+    #expect(await store.verdict(id) == SafetyVerdict(level: .protected, reason: .runningAppData, owner: "Example"))
+}
