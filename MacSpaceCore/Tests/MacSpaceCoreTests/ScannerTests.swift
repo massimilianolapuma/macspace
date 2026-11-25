@@ -211,7 +211,17 @@ func scanFixture(_ fx: Fixture) async throws -> (ScanStore, ScanSummary) {
     let app = try #require(rows.first { $0.name == "Foo.app" })
     #expect(app.flags.contains(.package) && !app.flags.contains(.insidePackage))
     let inner = await store.rows(childrenOf: app.id, limit: 10)
+    try #require(!inner.isEmpty)
     #expect(inner.allSatisfy { $0.flags.contains(.insidePackage) })
+    let contents = try #require(inner.first { $0.name == "Contents" })
+    let deeper = await store.rows(childrenOf: contents.id, limit: 10)
+    try #require(!deeper.isEmpty)
+    #expect(deeper.allSatisfy { $0.flags.contains(.insidePackage) })
+    let lib = try #require(rows.first { $0.name == "Lib.photoslibrary" })
+    #expect(lib.flags.contains(.package) && !lib.flags.contains(.insidePackage))
+    let libKids = await store.rows(childrenOf: lib.id, limit: 10)
+    let db = try #require(libKids.first { $0.name == "db" })
+    #expect(db.flags.contains(.insidePackage))
     #expect(rows.first { $0.name == "plain" }?.flags.isDisjoint(with: [.package, .insidePackage]) == true)
     #expect(await store.installerCount() == 1)
 }
@@ -224,4 +234,16 @@ func scanFixture(_ fx: Fixture) async throws -> (ScanStore, ScanSummary) {
     _ = await Scanner(rootPath: root, boundary: try .forFolder(root)).scan(into: store)
     #expect(await store.row(FileTree.root).flags.contains(.insidePackage))
     #expect(await store.categoryTotals(of: FileTree.root).keys.allSatisfy { $0 == .app })
+}
+
+@Test func nestedPackageIsPackageAndInsidePackage() async throws {
+    let fx = try Fixture(); defer { fx.cleanup() }
+    try fx.file("Foo.app/Contents/PlugIns/Bar.appex/x", bytes: 10)
+    let store = ScanStore(rootName: "fx", rootPath: fx.root.path, home: "/nonexistent")
+    _ = await Scanner(rootPath: fx.root.path, boundary: try .forFolder(fx.root.path)).scan(into: store)
+    var row = try #require(await store.rows(childrenOf: FileTree.root, limit: 10).first)
+    for name in ["Contents", "PlugIns", "Bar.appex"] {
+        row = try #require(await store.rows(childrenOf: row.id, limit: 10).first { $0.name == name })
+    }
+    #expect(row.flags.contains(.package) && row.flags.contains(.insidePackage))
 }
