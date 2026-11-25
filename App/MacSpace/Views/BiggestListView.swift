@@ -90,7 +90,40 @@ private struct BiggestRow: View {
         }
         .onHover(perform: hover)
         .accessibilityElement(children: .combine)
+        // Spelled out, so VoiceOver says the level and its reason whatever the color mode.
+        .accessibilityLabel(Text(verbatim: spokenLabel))
+        .accessibilityValue(Text(verbatim: spokenValue))
     }
+
+    private var verdict: SafetyVerdict? { model.verdicts[row.id] }
+
+    /// Name, the safety level unless normal, and "Non leggibile".
+    private var spokenLabel: String {
+        var parts = [row.name]
+        if let level = verdict?.level.spokenTitle ?? row.safety.spokenTitle { parts.append(level) }
+        if row.flags.contains(.unreadable) { parts.append(String(localized: "Non leggibile")) }
+        return parts.joined(separator: ", ")
+    }
+
+    /// Size, the detail line in words (type or last use; nothing extra in "Eliminabili") and the
+    /// safety reason.
+    private var spokenValue: String {
+        var parts = [Formatters.bytes(row.size)]
+        switch colorMode {
+        case .deletable:
+            break
+        case .category:
+            parts.append(String(localized: "Tipo: \(String(localized: row.category.title))"))
+        case .lastUse where isFolderWithContents:
+            parts.append(String(localized: "Per lo più: \(String(localized: row.ageBucket.title))"))
+        case .lastUse:
+            parts.append(String(localized: "Ultimo uso (stimato): \(Formatters.lastUsedAge(row.lastUsed))"))
+        }
+        if let sentence = verdict?.sentence { parts.append(sentence) }
+        return parts.joined(separator: ", ")
+    }
+
+    private var isFolderWithContents: Bool { row.kind == .directory && row.hasChildren }
 
     private var content: some View {
         HStack(spacing: 8) {
@@ -125,26 +158,30 @@ private struct BiggestRow: View {
         .contentShape(Rectangle())
     }
 
-    /// The row's file type (by type), or by last use a folder's dominant age bucket and a file's
-    /// relative last use, with its chart color; nothing in neutral mode. Worded as the hover card
-    /// words it: a folder with contents says "Per lo più: <bucket>"; an empty folder, like a file,
-    /// its own last use.
+    /// The row's safety level and reason (Eliminabili), file type (by type), or by last use a
+    /// folder's dominant age bucket and a file's relative last use, each with its chart mark.
+    /// Worded as the hover card words it: a folder with contents says "Per lo più: <bucket>"; an
+    /// empty folder, like a file, its own last use. An ordinary item has no reason: no line.
     @ViewBuilder
     private var detail: some View {
         switch colorMode {
-        case .neutral:
-            EmptyView()
+        case .deletable:
+            if let verdict, let sentence = verdict.sentence {
+                // One line keeps the rows even; the whole reason is in the help tag, the hover card
+                // and VoiceOver.
+                RowDetail(text: sentence) { SafetySwatch(level: verdict.level, diameter: ColorDot.size) }
+                    .help(Text(verbatim: sentence))
+            }
         case .category:
             RowDetail(color: FusionPalette.swatch(row.category, scheme: scheme),
                       text: String(localized: row.category.title))
-        case .lastUse where row.kind == .directory && row.hasChildren:
+        case .lastUse where isFolderWithContents:
             // A folder: the age of most of its bytes, not of its latest touch.
             RowDetail(color: FusionPalette.swatch(row.ageBucket, scheme: scheme),
                       text: String(localized: "Per lo più: \(String(localized: row.ageBucket.title))"))
         case .lastUse:
-            let age = Formatters.lastUsedAge(row.lastUsed)
-            RowDetail(color: FusionPalette.swatch(row.ageBucket, scheme: scheme), text: age)
-                .accessibilityLabel(Text("Ultimo uso (stimato): \(age)"))
+            RowDetail(color: FusionPalette.swatch(row.ageBucket, scheme: scheme),
+                      text: Formatters.lastUsedAge(row.lastUsed))
         }
     }
 
@@ -173,24 +210,44 @@ private struct BiggestRow: View {
     }
 }
 
-/// A small color dot and the words it stands for, under a row's name.
-private struct RowDetail: View {
-    let color: Color
+/// A small mark (a color dot, or a safety level's marker) and the words it stands for, under a
+/// row's name.
+private struct RowDetail<Marker: View>: View {
     let text: String
+    @ViewBuilder let marker: Marker
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         HStack(spacing: 5) {
-            Circle()
-                .fill(color)
-                .overlay(Circle().strokeBorder(FusionPalette.swatchRing(scheme), lineWidth: 0.5))
-                .frame(width: 7, height: 7)
+            marker
                 .accessibilityHidden(true)
             Text(verbatim: text)
                 .font(.caption)
                 .foregroundStyle(FusionPalette.secondaryText(scheme))
                 .lineLimit(1)
+                .truncationMode(.tail)
         }
+    }
+}
+
+extension RowDetail where Marker == ColorDot {
+    init(color: Color, text: String) {
+        self.init(text: text) { ColorDot(color: color) }
+    }
+}
+
+/// A chart color as a small dot with a hairline ring.
+private struct ColorDot: View {
+    static let size = 7.0
+
+    let color: Color
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        Circle()
+            .fill(color)
+            .overlay(Circle().strokeBorder(FusionPalette.swatchRing(scheme), lineWidth: 0.5))
+            .frame(width: Self.size, height: Self.size)
     }
 }
 

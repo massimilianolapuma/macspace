@@ -1,14 +1,16 @@
 import MacSpaceCore
 import SwiftUI
 
-/// What the chart colors mean, under the chart: one chip per category (by file type) or age
-/// bucket (by last use) present in the current folder, with how much it takes, plus "Altri
+/// What the chart colors mean, under the chart: in "Eliminabili" the three marked levels (safe,
+/// caution, protected; normal is the neutral rest); otherwise one chip per category (by file type)
+/// or age bucket (by last use) present in the current folder, with how much it takes, plus "Altri
 /// (misti)" when the chart shows merged elements. Categories run largest first, buckets in age
-/// order. Empty in neutral mode and before a scan.
+/// order. Empty before a scan.
 ///
 /// Ruling AE: the legend always keeps the room the fullest legend could need at the current
-/// width (every category, "Altri (misti)" and every bucket, each with the widest figure, in the
-/// order that wraps worst), so a scan, a drill, a mode or chart switch never resizes the chart.
+/// width (every category, "Altri (misti)", every bucket, each with the widest figure, in the order
+/// that wraps worst, and the safety levels), so a scan, a drill, a mode or chart switch never
+/// resizes the chart.
 struct ChartLegend: View {
     let model: ScanModel
     let mode: ColorMode
@@ -16,13 +18,20 @@ struct ChartLegend: View {
 
     /// Wider than any figure `Formatters.bytes` writes (digits are monospaced).
     private static let widestFigure = "888,88 GB"
+    /// The levels "Eliminabili" marks; normal elements are the neutral rest of the chart.
+    private static let safetyLevels: [SafetyLevel] = [.safe, .caution, .protected]
 
     var body: some View {
         LegendFlow(horizontalSpacing: 16, verticalSpacing: 6,
-                   reservedGroups: [FileCategory.allCases.count + 1, AgeBucket.allCases.count]) {
+                   reservedGroups: [FileCategory.allCases.count + 1, AgeBucket.allCases.count,
+                                    Self.safetyLevels.count]) {
             reserve
-            if mode != .neutral, !model.breadcrumb.isEmpty {
+            if !model.breadcrumb.isEmpty {
                 switch mode {
+                case .deletable:
+                    ForEach(Self.safetyLevels, id: \.self) { level in
+                        LegendChip(title: level.title, detail: nil) { SafetySwatch(level: level) }
+                    }
                 case .category:
                     ForEach(categories, id: \.category) { entry in
                         LegendChip(color: FusionPalette.swatch(entry.category, scheme: scheme),
@@ -38,8 +47,6 @@ struct ChartLegend: View {
                         LegendChip(color: FusionPalette.swatch(entry.bucket, scheme: scheme),
                                    title: entry.bucket.title, detail: Formatters.bytes(entry.bytes))
                     }
-                case .neutral:
-                    EmptyView()
                 }
             }
         }
@@ -47,7 +54,7 @@ struct ChartLegend: View {
     }
 
     /// The fullest legends, invisible, for `LegendFlow` to measure: every category and "Altri
-    /// (misti)", then every age bucket (`reservedGroups`).
+    /// (misti)", then every age bucket, then the safety levels (`reservedGroups`).
     @ViewBuilder
     private var reserve: some View {
         Group {
@@ -57,6 +64,9 @@ struct ChartLegend: View {
             LegendChip(color: .clear, title: "Altri (misti)", detail: nil)
             ForEach(AgeBucket.allCases, id: \.self) { bucket in
                 LegendChip(color: .clear, title: bucket.title, detail: Self.widestFigure)
+            }
+            ForEach(Self.safetyLevels, id: \.self) { level in
+                LegendChip(color: .clear, title: level.title, detail: nil)
             }
         }
         .hidden()
@@ -75,32 +85,21 @@ struct ChartLegend: View {
     }
 }
 
-/// A color dot, its meaning and an optional figure. The merged "Altri (misti)" dot is drawn as
-/// merged elements are: its recessive fill inside a dashed outline.
-private struct LegendChip: View {
-    static let font = Font.callout
-    private static let dot = 9.0
+/// A mark, its meaning and an optional figure. The mark is a color dot (the merged "Altri
+/// (misti)" one drawn as merged elements are: its recessive fill inside a dashed outline) or a
+/// safety level's marker.
+private struct LegendChip<Mark: View>: View {
+    static var font: Font { .callout }
 
-    let color: Color
-    var dashedOutline: Color?
     let title: LocalizedStringResource
     let detail: String?
+    @ViewBuilder let mark: Mark
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         HStack(spacing: 6) {
-            Circle()
-                .fill(color)
-                .overlay {
-                    if let dashedOutline {
-                        // The line's center runs 0.5 pt inside the dot's edge.
-                        Circle().strokeBorder(dashedOutline,
-                                              style: MergedOutline.style(perimeter: .pi * (Self.dot - 1)))
-                    } else {
-                        Circle().strokeBorder(FusionPalette.swatchRing(scheme), lineWidth: 0.5)
-                    }
-                }
-                .frame(width: Self.dot, height: Self.dot)
+            mark
+                .frame(width: LegendDot.size, height: LegendDot.size)
                 .accessibilityHidden(true)
             Text(title)
                 .foregroundStyle(FusionPalette.primaryText(scheme))
@@ -114,6 +113,35 @@ private struct LegendChip: View {
         .lineLimit(1)
         .fixedSize()
         .accessibilityElement(children: .combine)
+    }
+}
+
+extension LegendChip where Mark == LegendDot {
+    init(color: Color, dashedOutline: Color? = nil, title: LocalizedStringResource, detail: String?) {
+        self.init(title: title, detail: detail) { LegendDot(color: color, dashedOutline: dashedOutline) }
+    }
+}
+
+/// A legend color dot with a hairline ring, or a dashed outline for "Altri (misti)".
+private struct LegendDot: View {
+    static let size = 9.0
+
+    let color: Color
+    var dashedOutline: Color?
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        Circle()
+            .fill(color)
+            .overlay {
+                if let dashedOutline {
+                    // The line's center runs 0.5 pt inside the dot's edge.
+                    Circle().strokeBorder(dashedOutline,
+                                          style: MergedOutline.style(perimeter: .pi * (Self.size - 1)))
+                } else {
+                    Circle().strokeBorder(FusionPalette.swatchRing(scheme), lineWidth: 0.5)
+                }
+            }
     }
 }
 

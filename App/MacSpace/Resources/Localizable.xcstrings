@@ -16,6 +16,9 @@
     "Altro" : {
 
     },
+    "Analisi delle app in corso…" : {
+
+    },
     "Analisi in corso…" : {
 
     },
@@ -31,6 +34,12 @@
     "App" : {
 
     },
+    "App in esecuzione" : {
+
+    },
+    "App: %@" : {
+
+    },
     "Apri" : {
 
     },
@@ -40,16 +49,79 @@
     "Archivi e installer" : {
 
     },
+    "Avanzo di un'app non più installata" : {
+
+    },
+    "Avvio automatico di un programma non trovato: controlla prima di rimuoverlo" : {
+
+    },
+    "Cache di %@, app non in esecuzione: si rigenera da sola" : {
+
+    },
+    "Cache di %@, che è in esecuzione: chiudila prima" : {
+
+    },
+    "Cache di sistema: si rigenera, ma alcuni servizi la usano di continuo" : {
+
+    },
+    "Cache di un'app in esecuzione: chiudila prima" : {
+
+    },
+    "Cache per sviluppatori (%@): si rigenera da sola" : {
+
+    },
+    "Cache per sviluppatori: si rigenera da sola" : {
+
+    },
+    "Cache: si rigenera da sola" : {
+
+    },
+    "Cartella essenziale del Mac o dell'utente" : {
+
+    },
     "Colori" : {
 
     },
     "Continua senza" : {
 
     },
+    "Da controllare" : {
+
+    },
     "Dati delle app e cache" : {
 
     },
+    "Dati di %@, che è in esecuzione" : {
+
+    },
+    "Dati di %@: rimuoverli azzera documenti o impostazioni" : {
+
+    },
+    "Dati di sistema di Apple: rimuoverli rompe le app" : {
+
+    },
+    "Dati di un'app in esecuzione" : {
+
+    },
+    "Dati di un'app installata" : {
+
+    },
     "Documenti" : {
+
+    },
+    "Eliminabili" : {
+
+    },
+    "Fa parte di un pacchetto: si può spostare solo il pacchetto intero" : {
+
+    },
+    "File d'installazione" : {
+
+    },
+    "File d'installazione: %@ è già installata" : {
+
+    },
+    "File di sistema protetto da macOS" : {
 
     },
     "Foto e immagini" : {
@@ -61,13 +133,22 @@
     "Interrompi" : {
 
     },
+    "Libreria di Foto: libera spazio da Foto › Impostazioni › «Ottimizza spazio»" : {
+
+    },
     "Musica e audio" : {
 
     },
-    "Neutri" : {
+    "Non hai i permessi per spostarlo" : {
 
     },
     "Non leggibile" : {
+
+    },
+    "Non usato da oltre 2 anni (stima)" : {
+
+    },
+    "Normale" : {
 
     },
     "Oltre 2 anni" : {
@@ -85,10 +166,16 @@
     "Per vedere tutto lo spazio, MacSpace deve poter leggere anche le cartelle di sistema e la Libreria. Puoi analizzare anche senza: le cartelle non leggibili saranno segnate." : {
 
     },
+    "Percorso insolito: per sicurezza non si può spostare" : {
+
+    },
     "Più pesanti in %@" : {
 
     },
     "Privacy e sicurezza › Accesso completo al disco › MacSpace" : {
+
+    },
+    "Protetto" : {
 
     },
     "Raggiera" : {
@@ -103,10 +190,28 @@
     "Sconosciuto" : {
 
     },
+    "Sembra un avanzo, ma è stato usato di recente: forse appartiene a un'app non trovata" : {
+
+    },
     "Serve l'accesso completo al disco" : {
 
     },
+    "Sicurezza: %@" : {
+
+    },
+    "Sicuro da eliminare" : {
+
+    },
+    "Sincronizzato con %@: verrà eliminato anche da %@ e dagli altri dispositivi." : {
+
+    },
+    "Sincronizzato nel cloud: verrà eliminato anche dagli altri dispositivi." : {
+
+    },
     "Sistema" : {
+
+    },
+    "Solo nel cloud: non occupa spazio su questo Mac" : {
 
     },
     "Sviluppo" : {
@@ -133,6 +238,9 @@
     "Ultimo uso (stimato): %@" : {
 
     },
+    "Ultimo uso: %@" : {
+
+    },
     "Uso più recente (stimato): %@" : {
 
     },
@@ -143,6 +251,12 @@
 
     },
     "di %@" : {
+
+    },
+    "È il Cestino: svuotalo dal Finder" : {
+
+    },
+    "È la cartella analizzata" : {
 
     }
   },

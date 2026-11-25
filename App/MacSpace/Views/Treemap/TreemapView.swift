@@ -78,13 +78,13 @@ struct TreemapView: View {
         GeometryReader { proxy in
             let canvas = TreemapCanvas(size: proxy.size, layoutSize: motion.size)
             ForEach(LargestElements.of(model.tiles) { $0.size }) { tile in
-                let subject = SegmentTooltip.Subject(tile: tile)
+                let subject = SegmentTooltip.Subject(tile: tile, verdict: tile.node.flatMap { model.verdicts[$0] })
                 let slot = canvas.slot(tile.slot)
                 Color.clear
                     .frame(width: slot.width, height: slot.height)
                     .position(x: slot.midX, y: slot.midY)
                     .accessibilityElement()
-                    .accessibilityLabel(Text(verbatim: subject.title))
+                    .accessibilityLabel(Text(verbatim: subject.spokenTitle))
                     .accessibilityValue(Text(verbatim: subject.spokenValue))
                     .chartOpenAction(node: tile.node, hasChildren: tile.hasChildren) { model.drill(into: $0) }
             }
@@ -130,19 +130,23 @@ struct TreemapView: View {
             return
         }
         labels.prepare(generation: generation, size: canvas.size, mode: colorMode, scheme: scheme)
+        var locks = SafetyDecor.Locks()
         for (item, pose) in poses where item.isVisible {
             guard pose.alpha > 0.01, let rect = canvas.drawn(pose.rect) else { continue }
             Self.drawTile(item, pose: pose, rect: rect, canvas: canvas, motion: motion, labels: labels,
-                          mode: colorMode, lift: 0, scheme: scheme, scale: displayScale, in: context)
+                          mode: colorMode, lift: 0, scheme: scheme, scale: displayScale, locks: &locks, in: context)
         }
     }
 
     /// One tile at `rect` (its drawn rect): a section's surface and header, or a block's fill and
-    /// label; a merged "altri" block in "by file type" mode also gets its dashed outline. The hover
-    /// layer draws the hovered tile again with `lift`. `scale` is the display's pixels per point.
+    /// label; a merged "altri" block in "by file type" mode also gets its dashed outline. In
+    /// "Eliminabili" a caution block is hatched, and a protected tile carries the lock: in its label
+    /// or header when it has one, else at its center when it is big enough. The hover layer draws
+    /// the hovered tile again with `lift`. `scale` is the display's pixels per point.
     static func drawTile(_ item: TreemapMotion.Item, pose: TilePose, rect: CGRect, canvas: TreemapCanvas,
                          motion: TreemapMotion, labels: TileLabelPlanner, mode: ColorMode, lift: Double,
-                         scheme: ColorScheme, scale: Double, in context: GraphicsContext) {
+                         scheme: ColorScheme, scale: Double, locks: inout SafetyDecor.Locks,
+                         in context: GraphicsContext) {
         let tile = item.tile
         let subject = FusionPalette.FillSubject(tile)
         let shape = Self.shape(rect, depth: tile.depth)
@@ -159,16 +163,22 @@ struct TreemapView: View {
             let fill = FusionPalette.fill(subject, mode: mode, depth: pose.shadeDepth, step: pose.shadeStep,
                                           lift: lift, on: base, scheme: scheme)
             context.fill(shape, with: .color(fill.opacity(alpha)))
+            if subject.isHatched(in: mode) {
+                SafetyDecor.hatch(in: shape, color: FusionPalette.hatch(scheme).opacity(alpha), in: context)
+            }
             if base != nil {
                 let outline = labels.mergedOutline(for: item, hovered: lift > 0, motion: motion)
                 MergedOutline.strokeTile(rect, radius: cornerRadius(rect, depth: tile.depth),
                                          color: outline.opacity(alpha), scale: scale, in: context)
             }
+            let ink = FusionPalette.label(subject, mode: mode, depth: pose.shadeDepth, step: pose.shadeStep,
+                                          lift: lift, on: base, scheme: scheme)
             if rect.width >= TileLabelPlanner.minLabelWidth, rect.height >= TileLabelPlanner.minLabelHeight,
                let label = labels.leaf(for: item, canvas: canvas, in: context), label.fits(rect.width) {
-                let ink = FusionPalette.label(subject, mode: mode, depth: pose.shadeDepth, step: pose.shadeStep,
-                                              lift: lift, on: base, scheme: scheme)
                 drawLabel(label, in: rect, ink: ink, alpha: alpha, context: context)
+            } else if subject.isLocked(in: mode), alpha > 0.5,
+                      SafetyDecor.fitsLock(width: rect.width, height: rect.height) {
+                locks.lock(at: CGPoint(x: rect.midX, y: rect.midY), ink: ink.opacity(alpha), in: context)
             }
         }
     }
@@ -191,8 +201,8 @@ struct TreemapView: View {
         var x = rect.minX + TileLabelPlanner.padding
         let y = rect.minY + TileLabelPlanner.labelTop
         if label.locked {
-            c.draw(Text(Image(systemName: "lock.fill")).font(.system(size: 9, weight: .semibold)).foregroundStyle(ink),
-                   at: CGPoint(x: x + 5, y: y + TileLabelPlanner.nameHeight / 2), anchor: .center)
+            c.draw(SafetyDecor.lockText(ink), at: CGPoint(x: x + 5, y: y + TileLabelPlanner.nameHeight / 2),
+                   anchor: .center)
             x += TileLabelPlanner.lockRoom
         }
         c.draw(Text(verbatim: label.name.string).font(TileLabelPlanner.nameFont).foregroundStyle(ink),
@@ -213,8 +223,13 @@ struct TreemapView: View {
         c.clip(to: Path(rect))
         let ink = FusionPalette.secondaryText(scheme)
         let midY = rect.minY + band / 2 + 0.5
+        var x = rect.minX + TileLabelPlanner.padding
+        if header.locked {
+            c.draw(SafetyDecor.lockText(ink), at: CGPoint(x: x + 5, y: midY), anchor: .center)
+            x += TileLabelPlanner.lockRoom
+        }
         c.draw(TileLabelPlanner.headerText(header.name.string).foregroundStyle(ink),
-               at: CGPoint(x: rect.minX + TileLabelPlanner.padding, y: midY), anchor: .leading)
+               at: CGPoint(x: x, y: midY), anchor: .leading)
         if let size = header.size {
             c.draw(Text(verbatim: size.string).font(TileLabelPlanner.headerSizeFont).foregroundStyle(ink),
                    at: CGPoint(x: rect.maxX - TileLabelPlanner.padding, y: midY), anchor: .trailing)

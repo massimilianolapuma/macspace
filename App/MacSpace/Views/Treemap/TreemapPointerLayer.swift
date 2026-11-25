@@ -44,7 +44,10 @@ struct TreemapPointerLayer: View {
     private var tooltip: some View {
         if let pointer, let hovered = model.hoveredTile {
             let size = canvas.size
-            SegmentTooltip(tile: hovered, total: total)
+            let node = hovered.node
+            SegmentTooltip(subject: .init(tile: hovered, verdict: node.flatMap { model.verdicts[$0] },
+                                          spotlightLastUsed: node.flatMap { model.spotlightLastUsed[$0] }),
+                           total: total)
                 .fixedSize()
                 .alignmentGuide(.leading) { d in
                     pointer.x + 16 + d.width > size.width ? d.width + 10 - pointer.x : -(pointer.x + 16)

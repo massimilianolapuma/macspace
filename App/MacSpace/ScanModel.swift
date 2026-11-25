@@ -40,10 +40,20 @@ final class ScanModel {
     var ageTotals: [AgeBucket: UInt64] = [:]
     /// Whether the active chart shows a merged "Altri N elementi" element (for the legend).
     var showsMerged = false
+    /// The safety verdict of every node in `segments`, `tiles`, `biggest` and `breadcrumb`.
+    /// Provisional while scanning (sizes and last uses still grow); recomputed when the scan ends.
+    var verdicts: [NodeID: SafetyVerdict] = [:]
+    /// Spotlight's last-used date (seconds since 1970) of hovered files, looked up once per file
+    /// and scan (`lookUpLastUsed`); a file Spotlight has no date for is absent.
+    private(set) var spotlightLastUsed: [NodeID: UInt32] = [:]
     /// The hovered sunburst segment (sunburst chart only).
-    var hovered: ArcSegment?
+    var hovered: ArcSegment? {
+        didSet { if let node = hovered?.node, node != oldValue?.node { lookUpLastUsed(node) } }
+    }
     /// The hovered treemap tile (treemap chart only).
-    var hoveredTile: TreemapTile?
+    var hoveredTile: TreemapTile? {
+        didSet { if let node = hoveredTile?.node, node != oldValue?.node { lookUpLastUsed(node) } }
+    }
     /// Which chart is on screen; only that one is laid out. Mirrors `@AppStorage(ChartKind.storageKey)`.
     /// Changing it relays out the current folder: the scan, `center` and the hovered node stay.
     var chart: ChartKind = .sunburst {
@@ -67,6 +77,37 @@ final class ScanModel {
 
     @ObservationIgnored private var store: ScanStore?
     @ObservationIgnored private var scanTask: Task<Void, Never>?
+    /// What verdicts are judged against (`updateEnvironment`); nil until the provider's first one.
+    @ObservationIgnored private var environment: SafetyEnvironment?
+    /// Nodes whose Spotlight last use was asked for in this scan (found or not).
+    @ObservationIgnored private var lastUsedRequested: Set<NodeID> = []
+
+    /// Judges verdicts against `env` from now on (the apps index became ready, an app launched or
+    /// quit): hands it to the current store, and to every store a later scan creates, and refreshes.
+    func updateEnvironment(_ env: SafetyEnvironment) {
+        environment = env
+        guard let store else { return }
+        Task {
+            // Read when the task runs, so of two quick updates the store ends with the latest.
+            guard let latest = environment else { return }
+            await store.setEnvironment(latest)
+            guard store === self.store else { return }
+            await refreshViews()
+        }
+    }
+
+    /// Looks up Spotlight's last-used date of `node`, once per scan, off the main actor; only files
+    /// (a folder's date says nothing about its contents). The result lands in `spotlightLastUsed`.
+    private func lookUpLastUsed(_ node: NodeID) {
+        guard let store, lastUsedRequested.insert(node).inserted else { return }
+        Task {
+            guard await store.row(node).kind == .file else { return }
+            let path = await store.path(of: node)
+            let date = await Task.detached(priority: .utility) { SpotlightLastUsed.lastUsed(path: path) }.value
+            guard store === self.store, let date else { return }
+            spotlightLastUsed[node] = date
+        }
+    }
 
     /// Starts scanning `target`, cancelling any running scan first.
     func start(_ target: ScanTarget) {
@@ -152,6 +193,7 @@ final class ScanModel {
             tiles = snapshot.tiles
             biggest = snapshot.biggest
             breadcrumb = snapshot.breadcrumb
+            if verdicts != snapshot.verdicts { verdicts = snapshot.verdicts }
             if categoryTotals != snapshot.categoryTotals { categoryTotals = snapshot.categoryTotals }
             if ageTotals != snapshot.ageTotals { ageTotals = snapshot.ageTotals }
             let merged = switch chart {
@@ -183,9 +225,20 @@ final class ScanModel {
 
         let store = ScanStore(rootName: rootName, rootPath: rootPath)
         self.store = store
+        if let environment {
+            // The same apps, judged at the current time (rules measure ages from `now`).
+            let fresh = SafetyEnvironment.system(home: environment.home, apps: environment.apps,
+                                                 runningBundleIDs: environment.runningBundleIDs,
+                                                 runningAppPaths: environment.runningAppPaths)
+            self.environment = fresh
+            await store.setEnvironment(fresh)
+        }
         center = FileTree.root
         hovered = nil
         hoveredTile = nil
+        verdicts = [:]
+        spotlightLastUsed = [:]
+        lastUsedRequested = []
         capacity = if case .startupDisk = target { Self.startupDiskCapacity() } else { nil }
         segments = []
         tiles = []
@@ -211,7 +264,9 @@ final class ScanModel {
         await ticker.value
 
         phase = .done(summary)
-        // The last timer refresh predates the final inserts: show the finished tree.
+        // Verdicts judged mid-scan saw partial sizes and last uses; the last timer refresh also
+        // predates the final inserts: judge and show the finished tree.
+        await store.invalidateVerdicts()
         await refreshViews()
     }
 

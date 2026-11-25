@@ -146,8 +146,7 @@ enum RingLabel {
         let name = c.resolve(Text(verbatim: plan.name.string).font(nameFont).foregroundStyle(ink))
         if plan.locked {
             // Lock glyph before the name; the pair stays centered.
-            let lock = c.resolve(Text(Image(systemName: "lock.fill")).font(.system(size: 9, weight: .semibold))
-                .foregroundStyle(ink))
+            let lock = c.resolve(SafetyDecor.lockText(ink))
             c.draw(lock, at: CGPoint(x: -(plan.name.width + plan.lockRoom) / 2 + 5, y: nameY), anchor: .center)
             c.draw(name, at: CGPoint(x: plan.lockRoom / 2, y: nameY), anchor: .center)
         } else {
@@ -170,16 +169,19 @@ final class LabelPlanner {
 
     private var generation = -1
     private var size = CGSize.zero
+    /// Labels of protected arcs carry the lock in "Eliminabili" only.
+    private var mode = ColorMode.deletable
     private var plans: [String: LabelPlan?] = [:]
     private let fitter = TextFitter<Line>(
         text: { string, line in Text(verbatim: string).font(line == .name ? RingLabel.nameFont : RingLabel.sizeFont) },
         truncates: { $0 == .name })
 
-    /// Starts a new generation when the arcs or the chart size changed.
-    func prepare(generation: Int, size: CGSize) {
-        guard generation != self.generation || size != self.size else { return }
+    /// Starts a new generation when the arcs, the chart size or the color mode changed.
+    func prepare(generation: Int, size: CGSize, mode: ColorMode) {
+        guard generation != self.generation || size != self.size || mode != self.mode else { return }
         self.generation = generation
         self.size = size
+        self.mode = mode
         plans.removeAll(keepingCapacity: true)
         fitter.newGeneration()
     }
@@ -195,7 +197,8 @@ final class LabelPlanner {
     private func makePlan(_ segment: ArcSegment, target: ArcPose, geometry: ChartGeometry,
                           context: GraphicsContext) -> LabelPlan? {
         guard let room = RingLabel.Room(target, geometry: geometry) else { return nil }
-        let locked = segment.flags.contains(.unreadable)
+        // Unreadable in every mode; protected in "Eliminabili", where the lock is the level's mark.
+        let locked = segment.flags.contains(.unreadable) || FusionPalette.FillSubject(segment).isLocked(in: mode)
         let lockRoom = locked ? 14.0 : 0
         let title = SunburstView.title(of: segment)
         if geometry.ringWidth >= 34,

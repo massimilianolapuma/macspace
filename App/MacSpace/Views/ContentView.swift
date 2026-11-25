@@ -9,7 +9,8 @@ struct ContentView: View {
     @State private var chosenFolder: (url: URL, name: String)?
     @State private var choosingFolder = false
     @State private var showOnboarding = false
-    @AppStorage(ColorMode.storageKey) private var colorMode: ColorMode = .neutral
+    @State private var safety = SafetyEnvironmentProvider()
+    @AppStorage(ColorMode.storageKey) private var colorMode: ColorMode = .deletable
     @AppStorage(ChartKind.storageKey) private var chart: ChartKind = .sunburst
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -59,6 +60,10 @@ struct ContentView: View {
             // Only relays out the current folder: a running scan carries on.
             model.chart = chart
         }
+        .onChange(of: safety.revision, initial: true) {
+            model.updateEnvironment(safety.environment)
+        }
+        .task { safety.start() }
         .navigationTitle(Text(verbatim: model.breadcrumb.last?.name ?? "MacSpace"))
         .toolbar(removing: .title)
         .toolbar { toolbar }

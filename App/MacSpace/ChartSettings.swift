@@ -9,10 +9,11 @@ enum ChartKind: String {
 }
 
 /// How chart fills are colored; remembered across launches (`@AppStorage(ColorMode.storageKey)`).
-/// Changing it only redraws: the scan and the current folder stay as they are.
+/// Changing it only redraws: the scan and the current folder stay as they are. A stored value
+/// this build does not know (plan 2's `"neutral"`) reads as the default, `.deletable`.
 enum ColorMode: String, CaseIterable, Identifiable {
-    /// Plain Fusion neutrals (until plan 3 makes "deletable" the default).
-    case neutral
+    /// By safety level (spec §5.2): what can be removed lights up in orange, the rest is neutral.
+    case deletable
     /// By file type (`FileCategory`).
     case category
     /// By estimated last use (`AgeBucket`).
@@ -24,7 +25,7 @@ enum ColorMode: String, CaseIterable, Identifiable {
 
     var title: LocalizedStringResource {
         switch self {
-        case .neutral: "Neutri"
+        case .deletable: "Eliminabili"
         case .category: "Per tipo di file"
         case .lastUse: "Per ultimo uso"
         }

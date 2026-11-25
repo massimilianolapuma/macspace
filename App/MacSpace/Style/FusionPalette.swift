@@ -40,32 +40,44 @@ struct FusionPalette {
         scheme == .dark ? Contrast.hsl(240, 4, lightness) : Contrast.hsl(30, 10, lightness)
     }
 
-    /// What a chart element's color depends on: its dominant category and age bucket, and
-    /// whether it is a merged "Altri N elementi" element (`node == nil`).
+    /// What a chart element's color depends on: its dominant category, age bucket and safety
+    /// level, and whether it is a merged "Altri N elementi" element (`node == nil`).
     struct FillSubject {
         var category: FileCategory
         var ageBucket: AgeBucket
+        var safety: SafetyLevel
         var isMerged: Bool
 
         init(_ segment: ArcSegment) {
-            self.init(category: segment.category, ageBucket: segment.ageBucket, isMerged: segment.node == nil)
+            self.init(category: segment.category, ageBucket: segment.ageBucket, safety: segment.safety,
+                      isMerged: segment.node == nil)
         }
 
         init(_ tile: TreemapTile) {
-            self.init(category: tile.category, ageBucket: tile.ageBucket, isMerged: tile.node == nil)
+            self.init(category: tile.category, ageBucket: tile.ageBucket, safety: tile.safety,
+                      isMerged: tile.node == nil)
         }
 
-        init(category: FileCategory, ageBucket: AgeBucket, isMerged: Bool) {
+        init(category: FileCategory, ageBucket: AgeBucket, safety: SafetyLevel = .normal, isMerged: Bool) {
             self.category = category
             self.ageBucket = ageBucket
+            self.safety = safety
             self.isMerged = isMerged
         }
+
+        /// Drawn with `hatch` lines over its fill in `mode`: a caution element in "Eliminabili".
+        func isHatched(in mode: ColorMode) -> Bool { mode == .deletable && !isMerged && safety == .caution }
+
+        /// Marked with the lock glyph in `mode`: a protected element in "Eliminabili".
+        func isLocked(in mode: ColorMode) -> Bool { mode == .deletable && !isMerged && safety == .protected }
     }
 
     /// Fill of a chart element in color mode `mode`; `depth` is 1 for the innermost ring (or
     /// top-level tile) and `index` the element's position among its siblings. Used by both charts.
     ///
-    /// - Neutral: the plan-1 ring palette, unchanged.
+    /// - Eliminabili: `ChartPalette.safetyFill` for safe (solid accent) and caution (soft accent,
+    ///   which the charts hatch with `hatch`); normal and protected elements, and merged "altri"
+    ///   (which mix levels), take the plan-1 neutral ring palette, unchanged.
     /// - By type: the category's `ChartPalette.categoryFill`, up to 6 lightness points lighter per
     ///   level below the first. Merged "altri" elements mix types, so they take
     ///   `ChartPalette.mergedFill` instead (Rulings AG, AI): a recessive tone close to the surface
@@ -149,8 +161,8 @@ struct FusionPalette {
     private static func coloredRGB(_ subject: FillSubject, mode: ColorMode, depth: Double, lift: Double,
                                    surface: Contrast.RGB?, scheme: ColorScheme) -> Contrast.RGB? {
         switch mode {
-        case .neutral:
-            nil
+        case .deletable:
+            subject.isMerged ? nil : ChartPalette.safetyFill(subject.safety, scheme: paletteScheme(scheme), lift: lift)
         case .category:
             subject.isMerged
                 ? ChartPalette.mergedFill(on: surface ?? backgroundRGB(scheme), scheme: paletteScheme(scheme),
@@ -195,8 +207,17 @@ struct FusionPalette {
     static let primaryText: @Sendable (ColorScheme) -> Color = { $0 == .dark ? rgb(0xFFFFFF) : rgb(0x1F1B16) }
     static let secondaryText: @Sendable (ColorScheme) -> Color = { color(secondaryTextRGB($0)) }
 
-    /// Highlight for removable items. Not used until safety levels exist (Plan 3).
-    static let accent = hsl(16, 88, 57)
+    /// Highlight for removable items: the safe fill (`ChartPalette.accent`).
+    static func accent(_ scheme: ColorScheme) -> Color { color(ChartPalette.accent(paletteScheme(scheme))) }
+
+    /// The caution fill at rest, for legend and list markers.
+    static func cautionFill(_ scheme: ColorScheme) -> Color {
+        color(ChartPalette.safetyFill(.caution, scheme: paletteScheme(scheme)) ?? ChartPalette.accent(paletteScheme(scheme)))
+    }
+
+    /// Color of the hatch lines on caution elements (`ChartPalette.hatch`), per scheme.
+    static func hatch(_ scheme: ColorScheme) -> Color { hatchColors[scheme == .dark ? 1 : 0] }
+    private static let hatchColors = [ChartPalette.hatch(.light), ChartPalette.hatch(.dark)].map(color)
 
     /// `h` in degrees, `s` and `l` in percent.
     static func hsl(_ h: Double, _ s: Double, _ l: Double) -> Color { color(Contrast.hsl(h, s, l)) }
