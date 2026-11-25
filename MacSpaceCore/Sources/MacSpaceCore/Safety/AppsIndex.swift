@@ -94,6 +94,14 @@ public struct AppsIndex: Sendable {
         byName[Self.lower(name)]
     }
 
+    /// The app whose display name or file name (without `.app`) starts with `prefix`; when several do,
+    /// the one whose lowercased name sorts first. An empty prefix matches nothing.
+    func app(namePrefix prefix: String) -> AppRecord? {
+        let key = Self.lower(prefix)
+        guard !key.isEmpty else { return nil }
+        return byName.keys.filter { $0.utf8.starts(with: key.utf8) }.min().flatMap { byName[$0] }
+    }
+
     /// Whether any installed app is signed by `teamID`.
     public func hasTeam(_ teamID: String) -> Bool {
         teams.contains(Self.lower(teamID))

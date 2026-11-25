@@ -41,7 +41,7 @@ public struct CategoryClassifier: Sendable {
         }
         directoryExtensions = dirExt
         packageKeys = Set(SafetyTables.packageExtensions.map { Self.key(of: Array($0.utf8)) })
-        installerKeys = Set(["dmg", "pkg", "mpkg", "xip"].map { Self.key(of: Array($0.utf8)) })
+        installerKeys = Set(SafetyTables.installerExtensions.map { Self.key(of: Array($0.utf8)) })
 
         var h = home
         while h.count > 1, h.hasSuffix("/") { h.removeLast() }
