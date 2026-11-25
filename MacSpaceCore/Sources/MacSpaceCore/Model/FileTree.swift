@@ -42,10 +42,10 @@ public final class FileTree {
     private static let categoryCount = FileCategory.allCases.count
     static let ageCount = AgeBucket.allCases.count
 
-    /// `rootCategory` is the root directory's context, `.other` for none; `now` is the time ages
+    /// `rootCategory` is the root directory's context, `.other` for none; `rootFlags` are its flags; `now` is the time ages
     /// are measured from (seconds since 1970).
     public init(rootName: String, rootPath: String, rootCategory: FileCategory = .other,
-                now: UInt32 = UInt32(clamping: Int64(Date().timeIntervalSince1970))) {
+                rootFlags: NodeFlags = [], now: UInt32 = UInt32(clamping: Int64(Date().timeIntervalSince1970))) {
         self.rootPath = rootPath
         self.now = now
         parents.append(-1)
@@ -53,7 +53,7 @@ public final class FileTree {
         nextSiblings.append(-1)
         sizes.append(0)
         kinds.append(.directory)
-        flagsStore.append([])
+        flagsStore.append(rootFlags)
         appendName(rootName)
         categories.append(rootCategory.rawValue)
         lastUsedStore.append(0)

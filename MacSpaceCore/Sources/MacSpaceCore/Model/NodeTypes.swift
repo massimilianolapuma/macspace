@@ -11,6 +11,12 @@ public struct NodeFlags: OptionSet, Sendable, Hashable {
     public static let dataless = NodeFlags(rawValue: 1 << 1)
     public static let mountPoint = NodeFlags(rawValue: 1 << 2)
     public static let hardLinkDuplicate = NodeFlags(rawValue: 1 << 3)
+    /// A directory that is a package (bundle or library).
+    public static let package = NodeFlags(rawValue: 1 << 4)
+    /// Anything below a package.
+    public static let insidePackage = NodeFlags(rawValue: 1 << 5)
+    /// Moved to the Trash since the scan.
+    public static let removed = NodeFlags(rawValue: 1 << 6)
 }
 
 public struct NodeRow: Sendable, Hashable, Identifiable {

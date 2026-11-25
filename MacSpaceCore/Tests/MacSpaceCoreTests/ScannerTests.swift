@@ -200,3 +200,28 @@ func scanFixture(_ fx: Fixture) async throws -> (ScanStore, ScanSummary) {
     #expect(await store.row(rustTarget.id).category == .development)
     #expect(await store.row(webTarget.id).category == .other)
 }
+
+@Test func packagesFlagTheirInterior() async throws {
+    let fx = try Fixture(); defer { fx.cleanup() }
+    try fx.file("Foo.app/Contents/MacOS/foo", bytes: 10_000); try fx.file("Lib.photoslibrary/db", bytes: 10)
+    try fx.file("Setup.DMG", bytes: 1_000); try fx.file("plain/x.txt", bytes: 10)
+    let store = ScanStore(rootName: "fx", rootPath: fx.root.path, home: "/nonexistent")
+    _ = await Scanner(rootPath: fx.root.path, boundary: try .forFolder(fx.root.path)).scan(into: store)
+    let rows = await store.rows(childrenOf: FileTree.root, limit: 10)
+    let app = try #require(rows.first { $0.name == "Foo.app" })
+    #expect(app.flags.contains(.package) && !app.flags.contains(.insidePackage))
+    let inner = await store.rows(childrenOf: app.id, limit: 10)
+    #expect(inner.allSatisfy { $0.flags.contains(.insidePackage) })
+    #expect(rows.first { $0.name == "plain" }?.flags.isDisjoint(with: [.package, .insidePackage]) == true)
+    #expect(await store.installerCount() == 1)
+}
+
+@Test func scanOfBundleInteriorMarksEverything() async throws {
+    let fx = try Fixture(); defer { fx.cleanup() }
+    try fx.file("Foo.app/Contents/Resources/a.png", bytes: 100)
+    let root = fx.root.appendingPathComponent("Foo.app/Contents").path
+    let store = ScanStore(rootName: "Contents", rootPath: root, home: "/nonexistent")
+    _ = await Scanner(rootPath: root, boundary: try .forFolder(root)).scan(into: store)
+    #expect(await store.row(FileTree.root).flags.contains(.insidePackage))
+    #expect(await store.categoryTotals(of: FileTree.root).keys.allSatisfy { $0 == .app })
+}

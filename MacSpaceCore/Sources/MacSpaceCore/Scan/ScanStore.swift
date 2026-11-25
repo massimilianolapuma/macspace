@@ -15,6 +15,11 @@ public actor ScanStore {
     private let classifier: CategoryClassifier
     /// `(device, inode)` of every multiply-linked file already counted.
     private var seenHardLinks = Set<HardLinkKey>()
+    /// Installer files (`dmg pkg mpkg xip`) found so far.
+    private var installerIDs: [NodeID] = []
+
+    /// How many installer files the scan has found.
+    func installerCount() -> Int { installerIDs.count }
 
     /// `home` is the user's home folder, for the classifier's `~/Library` rules. The root's own
     /// context comes from `rootPath` (scanning an `.app` bundle directly makes everything App).
@@ -22,10 +27,10 @@ public actor ScanStore {
     public init(rootName: String, rootPath: String, home: String = NSHomeDirectory(),
                 now: UInt32 = UInt32(clamping: Int64(Date().timeIntervalSince1970))) {
         let classifier = CategoryClassifier(home: home)
-        let rootContext = classifier.context(forDirectory: (rootPath as NSString).lastPathComponent,
-                                             path: rootPath, parent: nil)
+        let root = RootContext.resolve(rootPath: rootPath, classifier: classifier)
         self.classifier = classifier
-        tree = FileTree(rootName: rootName, rootPath: rootPath, rootCategory: rootContext ?? .other, now: now)
+        tree = FileTree(rootName: rootName, rootPath: rootPath, rootCategory: root.context ?? .other,
+                        rootFlags: root.flags, now: now)
     }
 
     /// What `insert` added.
@@ -49,12 +54,14 @@ public actor ScanStore {
                        boundary: ScanBoundary) -> Inserted {
         let prefix = parentPath.hasSuffix("/") ? parentPath : parentPath + "/"
         let parentContext = tree.context(parent)
+        let parentFlags = tree.flags(parent)
+        let interior: NodeFlags = parentFlags.isDisjoint(with: [.package, .insidePackage]) ? [] : .insidePackage
         var descend: [(id: NodeID, path: String)] = []
         var bytes: UInt64 = 0
         /// Whether the listing holds a `Cargo.toml`, looked up only once a `target` folder needs it.
         var hasCargoToml: Bool?
         for entry in entries {
-            var flags: NodeFlags = []
+            var flags = interior
             if entry.isDataless { flags.insert(.dataless) }
             if entry.isMountPoint { flags.insert(.mountPoint) }
             var size = entry.allocatedSize
@@ -65,10 +72,11 @@ public actor ScanStore {
             }
             bytes &+= size
             guard entry.kind == .directory else {
-                tree.addChild(of: parent, name: entry.name, kind: entry.kind, allocatedSize: size, flags: flags,
+                let id = tree.addChild(of: parent, name: entry.name, kind: entry.kind, allocatedSize: size, flags: flags,
                               category: classifier.category(forFile: entry.name, context: parentContext),
                               lastUsed: Self.lastUse(modification: entry.modificationTime,
                                                      access: entry.accessTime, now: tree.now))
+                if classifier.isInstaller(fileName: entry.name) { installerIDs.append(id) }
                 continue
             }
             let path = prefix + entry.name
@@ -77,6 +85,7 @@ public actor ScanStore {
             }
             let context = classifier.context(forDirectory: entry.name, path: path, parent: parentContext,
                                              siblingHasCargoToml: hasCargoToml ?? false)
+            if classifier.isPackage(directoryName: entry.name) { flags.insert(.package) }
             let id = tree.addChild(of: parent, name: entry.name, kind: entry.kind, allocatedSize: size,
                                    flags: flags, category: context ?? .other)
             guard !entry.isDataless else { continue }
