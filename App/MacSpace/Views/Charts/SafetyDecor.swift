@@ -57,6 +57,24 @@ enum SafetyDecor {
         return lines
     }
 
+    /// How a chart element is marked: picked for the Trash, or one of the items of the suggestion
+    /// whose header was clicked.
+    enum Mark {
+        case selected, highlighted
+
+        /// 2 pt for a selected element, the same line lighter for a highlighted one: 1.5 pt (at 1 pt
+        /// it reads as one more separator) and toned down, so the two never look alike.
+        var lineWidth: Double { self == .selected ? 2 : 1.5 }
+        var opacity: Double { self == .selected ? 1 : 0.6 }
+    }
+
+    /// Strokes `path`'s outline in the primary text color, the same in both charts.
+    static func selectionOutline(_ path: Path, mark: Mark, alpha: Double = 1, scheme: ColorScheme,
+                                 in context: GraphicsContext) {
+        context.stroke(path, with: .color(FusionPalette.primaryText(scheme).opacity(alpha * mark.opacity)),
+                       style: StrokeStyle(lineWidth: mark.lineWidth, lineJoin: .round))
+    }
+
     /// Whether an element `width` × `height` pt has room for a standalone lock.
     static func fitsLock(width: Double, height: Double) -> Bool {
         width >= lockMinSide && height >= lockMinSide

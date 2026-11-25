@@ -8,7 +8,8 @@ import SwiftUI
 /// there is room.
 ///
 /// Layers, bottom to top: the tiles canvas, which redraws only when the tiles change or animate;
-/// the hover layer, which exists only while a tile is hovered; and the pointer layer. `body`
+/// the hover layer, which exists only while a tile is hovered; the selection layer, which exists
+/// only while something is selected or highlighted; and the pointer layer. `body`
 /// never reads `model.hoveredTile`, so hovering redraws only the small layer that shows it.
 struct TreemapView: View {
     let model: ScanModel
@@ -42,6 +43,7 @@ struct TreemapView: View {
                 }
                 TreemapHoverLayer(model: model, motion: motion, labels: labels, generation: generation,
                                   canvas: canvas, colorMode: colorMode, moving: animating)
+                TreemapSelectionLayer(model: model, motion: motion, canvas: canvas, moving: animating)
                 if model.breadcrumb.isEmpty && !model.isScanning {
                     Text("Scegli cosa analizzare e premi Analizza")
                         .font(.title3)
@@ -87,6 +89,7 @@ struct TreemapView: View {
                     .accessibilityLabel(Text(verbatim: subject.spokenTitle))
                     .accessibilityValue(Text(verbatim: subject.spokenValue))
                     .chartOpenAction(node: tile.node, hasChildren: tile.hasChildren) { model.drill(into: $0) }
+                    .selectionAction(node: tile.node, model: model)
             }
         }
     }

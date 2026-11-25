@@ -4,6 +4,28 @@
     "%@ file" : {
 
     },
+    "%lld selezionati" : {
+      "localizations" : {
+        "it" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld selezionato"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld selezionati"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "1–2 anni fa" : {
 
     },
@@ -31,6 +53,9 @@
     "Analizza" : {
 
     },
+    "Analizza per vedere i suggerimenti" : {
+
+    },
     "App" : {
 
     },
@@ -40,6 +65,9 @@
     "App: %@" : {
 
     },
+    "Apre la conferma prima di spostare" : {
+
+    },
     "Apri" : {
 
     },
@@ -47,6 +75,9 @@
 
     },
     "Archivi e installer" : {
+
+    },
+    "Avanzi di app disinstallate" : {
 
     },
     "Avanzo di un'app non più installata" : {
@@ -73,6 +104,9 @@
     "Cache per sviluppatori: si rigenera da sola" : {
 
     },
+    "Cache rigenerabili" : {
+
+    },
     "Cache: si rigenera da sola" : {
 
     },
@@ -97,6 +131,9 @@
     "Dati di %@: rimuoverli azzera documenti o impostazioni" : {
 
     },
+    "Dati di app che non sono più su questo Mac." : {
+
+    },
     "Dati di sistema di Apple: rimuoverli rompe le app" : {
 
     },
@@ -106,10 +143,22 @@
     "Dati di un'app installata" : {
 
     },
+    "Deseleziona" : {
+
+    },
     "Documenti" : {
 
     },
+    "Elementi" : {
+
+    },
     "Eliminabili" : {
+
+    },
+    "Evidenzia nel grafico" : {
+
+    },
+    "Fa già parte di una cartella selezionata" : {
 
     },
     "Fa parte di un pacchetto: si può spostare solo il pacchetto intero" : {
@@ -130,13 +179,28 @@
     "Gli elementi più pesanti appariranno qui" : {
 
     },
+    "Immagini disco e pacchetti che servivano per installare." : {
+
+    },
     "Interrompi" : {
+
+    },
+    "Le app le ricreano da sole quando servono." : {
 
     },
     "Libreria di Foto: libera spazio da Foto › Impostazioni › «Ottimizza spazio»" : {
 
     },
+    "Mostra meno" : {
+
+    },
+    "Mostra tutti (%lld)" : {
+
+    },
     "Musica e audio" : {
+
+    },
+    "Nessun suggerimento: qui è tutto in ordine" : {
 
     },
     "Non hai i permessi per spostarlo" : {
@@ -190,6 +254,9 @@
     "Sconosciuto" : {
 
     },
+    "Seleziona" : {
+
+    },
     "Sembra un avanzo, ma è stato usato di recente: forse appartiene a un'app non trovata" : {
 
     },
@@ -214,10 +281,19 @@
     "Solo nel cloud: non occupa spazio su questo Mac" : {
 
     },
+    "Sposta nel Cestino…" : {
+
+    },
+    "Suggerimenti" : {
+
+    },
     "Sviluppo" : {
 
     },
     "Tipo: %@" : {
+
+    },
+    "Togli l'evidenziazione" : {
 
     },
     "Torna su" : {

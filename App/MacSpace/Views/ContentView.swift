@@ -43,8 +43,8 @@ struct ContentView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             Divider()
-            BiggestListView(model: model, colorMode: colorMode)
-                .frame(width: 260)
+            SidebarView(model: model, colorMode: colorMode)
+                .frame(width: 300)
                 .frame(maxHeight: .infinity)
         }
         .frame(minWidth: 760, minHeight: 520)

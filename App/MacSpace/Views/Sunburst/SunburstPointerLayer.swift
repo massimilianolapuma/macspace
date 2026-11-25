@@ -99,8 +99,15 @@ struct SunburstPointerLayer: View {
         }
     }
 
+    /// A click drills into a folder (the center goes up); a ⌘-click selects or deselects a segment.
     private func click(at point: CGPoint) {
-        switch target(at: point) {
+        let target = target(at: point)
+        if ChartSelection.isSelectClick {
+            guard case let .segment(segment) = target else { return }
+            ChartSelection.toggle(segment.node, in: model)
+            return
+        }
+        switch target {
         case .center:
             if canGoUp { model.goUp() }
         case let .segment(segment):

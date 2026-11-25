@@ -71,11 +71,33 @@ final class ScanModel {
     /// Total capacity of the scanned volume; set only when scanning the startup disk.
     var capacity: UInt64?
 
+    // Selection and suggestions (`ScanModel+Selection.swift`).
+
+    /// Items picked for the Trash, as `ScanStore.resolveSelection` keeps them: top-most, never the
+    /// root or protected. Change it with `toggleSelection` and `clearSelection`.
+    var selection: Set<NodeID> = []
+    /// Bytes in `selection`, each counted once.
+    var selectionTotal: UInt64 = 0
+    /// The items of the suggestion whose header was clicked, outlined wherever they are on screen.
+    var highlighted: Set<NodeID> = []
+    /// The store's suggestions, recomputed when a scan ends, when the environment changes and after
+    /// each trash (`refreshSuggestions`); empty while scanning.
+    var suggestions: [Suggestion] = []
+    /// Ticks the user changed in the suggestions; every other item is ticked when `preselected`.
+    var suggestionTicks: [NodeID: Bool] = [:]
+    /// Items "Sposta nel Cestino…" asked to move; the confirmation sheet shows them (nil: none).
+    var pendingTrash: [NodeID]?
+    /// Whether the installed apps index is ready, so `~/Library` items have been judged.
+    private(set) var appsReady = false
+
     static let ringDepth = 3
     static let biggestLimit = 20
     static let refreshInterval: Duration = .milliseconds(250)
 
-    @ObservationIgnored private var store: ScanStore?
+    /// Internal, not private, for the `ScanModel+…` extensions.
+    @ObservationIgnored private(set) var store: ScanStore?
+    /// Selection changes run one after the other, each against the outcome of the previous one.
+    @ObservationIgnored var selectionWork: Task<Void, Never>?
     @ObservationIgnored private var scanTask: Task<Void, Never>?
     /// What verdicts are judged against (`updateEnvironment`); nil until the provider's first one.
     @ObservationIgnored private var environment: SafetyEnvironment?
@@ -91,8 +113,10 @@ final class ScanModel {
 
     /// Judges verdicts against `env` from now on (the apps index became ready, an app launched or
     /// quit): hands it to the current store, and to every store a later scan creates, and refreshes.
+    /// Suggestions and the selection follow (a running app's data becomes protected, and leaves both).
     func updateEnvironment(_ env: SafetyEnvironment) {
         environment = env
+        if appsReady != (env.apps != nil) { appsReady = env.apps != nil }
         guard let store else { return }
         Task {
             // Read when the task runs, so of two quick updates the store ends with the latest.
@@ -100,6 +124,7 @@ final class ScanModel {
             await store.setEnvironment(latest)
             guard store === self.store else { return }
             await refreshViews()
+            await refreshSuggestions()
         }
     }
 
@@ -234,6 +259,8 @@ final class ScanModel {
                 if tile != hoveredTile { hoveredTile = tile }
             }
         }
+        // Sizes grow while scanning and verdicts move with the environment: re-judge the selection.
+        if !selection.isEmpty { changeSelection { $0 } }
     }
 
     private func run(_ target: ScanTarget) async {
@@ -268,6 +295,14 @@ final class ScanModel {
         categoryTotals = [:]
         ageTotals = [:]
         showsMerged = false
+        selectionWork?.cancel()
+        selectionWork = nil
+        selection = []
+        selectionTotal = 0
+        highlighted = []
+        suggestions = []
+        suggestionTicks = [:]
+        pendingTrash = nil
         phase = .scanning(ScanProgress(filesSeen: 0, bytesSeen: 0, directoriesPending: 1))
         if let environment {
             // The same apps, judged at the current time (rules measure ages from `now`).
@@ -297,6 +332,7 @@ final class ScanModel {
         // predates the final inserts: judge and show the finished tree.
         await store.invalidateVerdicts()
         await refreshViews()
+        await refreshSuggestions()
     }
 
     /// The startup volume's name as Finder shows it ("Macintosh HD" unless renamed).

@@ -13,7 +13,8 @@ final class ChartHover {
 ///
 /// Layers, bottom to top: the rings canvas (fills, separators, labels), which redraws only when
 /// the arcs change or animate; the hover layer, which exists only while a sector is hovered or
-/// the center disc is a target, and draws just that; the center label; and the pointer layer, which tracks the
+/// the center disc is a target, and draws just that; the selection layer, which exists only while
+/// something is selected or highlighted; the center label; and the pointer layer, which tracks the
 /// mouse. `body` reads neither `model.hovered` nor `hover`, so hovering redraws only the small
 /// layers that show it.
 struct SunburstView: View {
@@ -49,6 +50,7 @@ struct SunburstView: View {
                 SunburstHoverLayer(model: model, hover: hover, motion: motion, labels: labels,
                                    generation: generation, geometry: geometry, canGoUp: canGoUp,
                                    colorMode: colorMode, moving: moving)
+                SunburstSelectionLayer(model: model, motion: motion, geometry: geometry, moving: moving)
                 centerLabel(geometry)
                     .position(geometry.center)
                     .allowsHitTesting(false)
@@ -99,6 +101,7 @@ struct SunburstView: View {
                     .accessibilityLabel(Text(verbatim: subject.spokenTitle))
                     .accessibilityValue(Text(verbatim: subject.spokenValue))
                     .chartOpenAction(node: segment.node, hasChildren: segment.hasChildren) { model.drill(into: $0) }
+                    .selectionAction(node: segment.node, model: model)
             }
         }
     }

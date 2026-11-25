@@ -78,24 +78,59 @@ private struct BiggestRow: View {
     private var highlighted: Bool { model.hoveredNode == row.id }
 
     var body: some View {
-        // Folders are buttons, so they take keyboard focus and VoiceOver can open them.
-        Group {
+        HStack(spacing: 0) {
+            selectionSlot
+            // Folders are buttons, so they take keyboard focus and VoiceOver can open them.
             if canOpen {
                 Button(action: open) { content }
-                    .buttonStyle(RowButtonStyle(highlighted: highlighted))
+                    .buttonStyle(RowButtonStyle())
                     .pointerStyle(.link)
             } else {
-                content.background(RowButtonStyle.fill(highlighted: highlighted, pressed: false, scheme: scheme))
+                content
             }
         }
+        .background(RowButtonStyle.fill(highlighted: highlighted, pressed: false, scheme: scheme))
         .onHover(perform: hover)
         .accessibilityElement(children: .combine)
         // Spelled out, so VoiceOver says the level and its reason whatever the color mode.
         .accessibilityLabel(Text(verbatim: spokenLabel))
         .accessibilityValue(Text(verbatim: spokenValue))
+        .selectionAction(node: row.id, model: model)
     }
 
     private var verdict: SafetyVerdict? { model.verdicts[row.id] }
+
+    private var isProtected: Bool { (verdict?.level ?? row.safety) == .protected }
+
+    /// The row's checkbox; none for a protected row, which keeps its lock: the one on its detail line
+    /// in "Eliminabili", here otherwise. Inside a selected folder the box is ticked and disabled.
+    @ViewBuilder
+    private var selectionSlot: some View {
+        Group {
+            if isProtected {
+                if colorMode != .deletable {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(FusionPalette.secondaryText(scheme))
+                        .help(Text(SafetyLevel.protected.title))
+                } else {
+                    Color.clear.frame(height: 1)
+                }
+            } else {
+                let inFolder = !model.selection.contains(row.id) && model.isCoveredBySelection(row.id)
+                Toggle(isOn: Binding(get: { model.isCoveredBySelection(row.id) },
+                                     set: { _ in model.toggleSelection(row.id) })) { EmptyView() }
+                    .toggleStyle(.checkbox)
+                    .labelsHidden()
+                    .disabled(inFolder)
+                    .help(inFolder ? Text("Fa già parte di una cartella selezionata") : Text("Seleziona"))
+            }
+        }
+        .frame(width: 24)
+        .padding(.leading, 4)
+        // The row's own "Seleziona"/"Deseleziona" action stands for it.
+        .accessibilityHidden(true)
+    }
 
     /// Name, the safety level unless normal, and "Non leggibile".
     private var spokenLabel: String {
@@ -153,7 +188,8 @@ private struct BiggestRow: View {
                 share
             }
         }
-        .padding(.horizontal, 10)
+        .padding(.leading, 2)
+        .padding(.trailing, 10)
         .padding(.vertical, 6)
         .contentShape(Rectangle())
     }
@@ -257,14 +293,13 @@ private struct ColorDot: View {
     }
 }
 
-/// Row chrome: hover/linked highlight and pressed state.
+/// Row chrome: the pressed state (the hover/linked highlight is the whole row's, `fill`).
 private struct RowButtonStyle: ButtonStyle {
-    let highlighted: Bool
     @Environment(\.colorScheme) private var scheme
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .background(Self.fill(highlighted: highlighted, pressed: configuration.isPressed, scheme: scheme))
+            .background(Self.fill(highlighted: false, pressed: configuration.isPressed, scheme: scheme))
     }
 
     static func fill(highlighted: Bool, pressed: Bool, scheme: ColorScheme) -> some View {

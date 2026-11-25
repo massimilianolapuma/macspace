@@ -1,3 +1,4 @@
+import AppKit
 import MacSpaceCore
 import SwiftUI
 
@@ -56,7 +57,36 @@ extension SegmentTooltip.Subject {
     }
 }
 
+/// Selecting chart elements and list rows for the Trash.
+enum ChartSelection {
+    /// Whether the click being handled was a ⌘-click: the click event's own modifiers, not the keys
+    /// held by the time the gesture fires.
+    @MainActor
+    static var isSelectClick: Bool {
+        (NSApp.currentEvent?.modifierFlags ?? NSEvent.modifierFlags).contains(.command)
+    }
+
+    /// Selects or deselects `node` (nil: a merged "altri" element, never selectable); the Mac beeps
+    /// when the store refuses it (the root, a protected item, or one inside a selected folder).
+    @MainActor
+    static func toggle(_ node: NodeID?, in model: ScanModel) {
+        guard let node, model.isSelectable(node) else {
+            NSSound.beep()
+            return
+        }
+        let change = model.toggleSelection(node)
+        Task { if await !change.value { NSSound.beep() } }
+    }
+}
+
 extension View {
+    /// "Seleziona" or "Deseleziona" on a segment, tile or list row that may be selected, and the
+    /// selected trait while it is. The selection is read in the modifier, so a change to it
+    /// re-evaluates only the elements, not the chart around them.
+    func selectionAction(node: NodeID?, model: ScanModel) -> some View {
+        modifier(SelectionAction(node: node, model: model))
+    }
+
     /// "Torna su" on the chart itself; registered only while there is a level above.
     @ViewBuilder
     func chartUpAction(enabled: Bool, _ goUp: @escaping () -> Void) -> some View {
@@ -67,5 +97,23 @@ extension View {
     @ViewBuilder
     func chartOpenAction(node: NodeID?, hasChildren: Bool, _ open: @escaping (NodeID) -> Void) -> some View {
         if let node, hasChildren { accessibilityAction(named: Text("Apri")) { open(node) } } else { self }
+    }
+}
+
+private struct SelectionAction: ViewModifier {
+    let node: NodeID?
+    let model: ScanModel
+
+    func body(content: Content) -> some View {
+        if let node, model.isSelectable(node) {
+            let selected = model.selection.contains(node)
+            content
+                .accessibilityAction(named: selected ? Text("Deseleziona") : Text("Seleziona")) {
+                    model.toggleSelection(node)
+                }
+                .accessibilityAddTraits(selected ? .isSelected : [])
+        } else {
+            content
+        }
     }
 }
