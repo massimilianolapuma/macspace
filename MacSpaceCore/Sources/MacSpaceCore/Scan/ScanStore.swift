@@ -146,6 +146,10 @@ public actor ScanStore {
     /// `id`'s row, with its safety level.
     public func row(_ id: NodeID) -> NodeRow { stamped(tree.row(id)) }
 
+    /// Whether `id` names a node of this store's tree. IDs are per store: one kept from an earlier
+    /// scan's store may be out of range here (every other query traps on it) or name another node.
+    public func contains(_ id: NodeID) -> Bool { id >= 0 && Int(id) < tree.count }
+
     /// The largest `limit` children of `id`, by size descending then name, with their safety levels.
     public func rows(childrenOf id: NodeID, limit: Int) -> [NodeRow] {
         tree.largestChildren(of: id, limit: limit).map { stamped(tree.row($0)) }
@@ -225,6 +229,11 @@ public actor ScanStore {
     /// Lays out only the chart `chart` asks for, so the other one costs nothing. Each node's
     /// verdict comes from the cache when it has one, so none is evaluated twice.
     public func snapshot(center: NodeID, chart: ChartRequest, biggestLimit: Int) -> Snapshot {
+        // A center from another store (a stale request racing a new scan) shows nothing.
+        guard contains(center) else {
+            return Snapshot(segments: [], tiles: [], biggest: [], breadcrumb: [], categoryTotals: [:], ageTotals: [:],
+                            verdicts: [:])
+        }
         var segments: [ArcSegment] = []
         var tiles: [TreemapTile] = []
         switch chart {

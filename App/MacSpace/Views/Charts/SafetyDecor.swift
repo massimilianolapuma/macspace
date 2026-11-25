@@ -1,4 +1,5 @@
 import MacSpaceCore
+import Synchronization
 import SwiftUI
 
 /// The marks "Eliminabili" adds on top of the fills, shared by both charts: hatch lines on caution
@@ -9,25 +10,51 @@ enum SafetyDecor {
     /// The lock is drawn only on an element at least this big in both directions (or in its label).
     static let lockMinSide = 18.0
 
-    /// Strokes hatch lines over `path`, clipped to it. The lines lie on one grid for the whole
-    /// canvas (`x + y` a multiple of `spacing·√2`), so neighbouring caution elements, and an element
-    /// redrawn by a hover layer, line up. Builds lines only across `path`'s bounding box.
-    static func hatch(in path: Path, color: Color, spacing: Double = hatchSpacing, lineWidth: Double = hatchWidth,
-                      in context: GraphicsContext) {
+    /// Strokes the chart hatch over `path`, clipped to it: the canvas-wide line field for `canvas`
+    /// (built once per canvas size, then reused by every caution element and frame), so neighbouring
+    /// caution elements, and an element redrawn by a hover layer, line up.
+    static func hatch(in path: Path, color: Color, canvas: CGSize, in context: GraphicsContext) {
+        var clipped = context
+        clipped.clip(to: path)
+        clipped.stroke(hatchField(canvas), with: .color(color), lineWidth: hatchWidth)
+    }
+
+    /// The canvas-wide hatch lines (`x + y` a multiple of `hatchSpacing·√2`) covering `size`, cached
+    /// for the last size asked for. Charts draw asynchronously, off the main thread: hence the lock.
+    private static func hatchField(_ size: CGSize) -> Path {
+        fieldCache.withLock { cache in
+            if let cache, cache.size == size { return cache.path }
+            let path = lines(across: CGRect(origin: .zero, size: size), spacing: hatchSpacing, lineWidth: hatchWidth)
+            cache = (size, path)
+            return path
+        }
+    }
+    private static let fieldCache = Mutex<(size: CGSize, path: Path)?>(nil)
+
+    /// Strokes hatch lines `spacing` apart over `path`, clipped to it, built across its bounding box:
+    /// for one-off small marks (legend and list swatches).
+    static func hatch(in path: Path, color: Color, spacing: Double, lineWidth: Double, in context: GraphicsContext) {
         let box = path.boundingRect
         guard box.width >= 1, box.height >= 1, spacing > 0 else { return }
+        var clipped = context
+        clipped.clip(to: path)
+        clipped.stroke(lines(across: box, spacing: spacing, lineWidth: lineWidth), with: .color(color),
+                       lineWidth: lineWidth)
+    }
+
+    /// Lines at 45° (`x + y` a multiple of `spacing·√2`, so `spacing` apart) across `box`.
+    private static func lines(across box: CGRect, spacing: Double, lineWidth: Double) -> Path {
         let step = spacing * 2.squareRoot()  // along x, between lines `spacing` apart
         let first = Int(((box.minX + box.minY) / step).rounded(.down))
         let last = Int(((box.maxX + box.maxY) / step).rounded(.up))
         var lines = Path()
+        guard first <= last else { return lines }
         for k in first...last {
             let d = Double(k) * step
             lines.move(to: CGPoint(x: d - box.minY + lineWidth, y: box.minY - lineWidth))
             lines.addLine(to: CGPoint(x: d - box.maxY - lineWidth, y: box.maxY + lineWidth))
         }
-        var clipped = context
-        clipped.clip(to: path)
-        clipped.stroke(lines, with: .color(color), lineWidth: lineWidth)
+        return lines
     }
 
     /// Whether an element `width` × `height` pt has room for a standalone lock.
@@ -41,15 +68,17 @@ enum SafetyDecor {
     }
 
     /// Draws standalone locks for one canvas pass, resolving the glyph once per ink (a chart has
-    /// two or three inks), so a frame with many protected elements does not re-resolve it each time.
+    /// two or three), so a frame with many protected elements does not re-resolve it each time.
     struct Locks {
         private var resolved: [Color: GraphicsContext.ResolvedText] = [:]
 
-        /// Draws the lock centered at `point` in `ink` (its opacity included).
-        mutating func lock(at point: CGPoint, ink: Color, in context: GraphicsContext) {
+        /// Draws the lock centered at `point` in `ink` (opaque), faded to `alpha`.
+        mutating func lock(at point: CGPoint, ink: Color, alpha: Double, in context: GraphicsContext) {
             let glyph = resolved[ink] ?? context.resolve(SafetyDecor.lockText(ink))
             resolved[ink] = glyph
-            context.draw(glyph, at: point, anchor: .center)
+            var faded = context
+            faded.opacity *= alpha
+            faded.draw(glyph, at: point, anchor: .center)
         }
     }
 }

@@ -70,14 +70,11 @@ extension SafetyVerdict {
         }
     }
 
-    /// The owning app, for the tooltip's "App: <owner>" line: nil when unknown, and for reasons
-    /// whose sentence already names the owner (cloud providers, developer caches) or that name no
-    /// app at all.
+    /// The owning app, for the tooltip's "App: <owner>" line: only for a running app's own bundle,
+    /// whose sentence ("App in esecuzione") does not name it. Every other sentence with an owner
+    /// already names it (apps, cloud providers, developer caches); nil when unknown.
     var appName: String? {
-        guard let owner, !owner.isEmpty else { return nil }
-        return switch reason {
-        case .runningApp, .runningAppData, .cacheOfRunningApp, .cacheOfApp, .appData, .installer: owner
-        default: nil
-        }
+        guard reason == .runningApp, let owner, !owner.isEmpty else { return nil }
+        return owner
     }
 }

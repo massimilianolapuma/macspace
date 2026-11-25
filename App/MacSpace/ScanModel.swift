@@ -44,15 +44,15 @@ final class ScanModel {
     /// Provisional while scanning (sizes and last uses still grow); recomputed when the scan ends.
     var verdicts: [NodeID: SafetyVerdict] = [:]
     /// Spotlight's last-used date (seconds since 1970) of hovered files, looked up once per file
-    /// and scan (`lookUpLastUsed`); a file Spotlight has no date for is absent.
+    /// and scan (`scheduleLastUsedLookup`); a file Spotlight has no date for is absent.
     private(set) var spotlightLastUsed: [NodeID: UInt32] = [:]
     /// The hovered sunburst segment (sunburst chart only).
     var hovered: ArcSegment? {
-        didSet { if let node = hovered?.node, node != oldValue?.node { lookUpLastUsed(node) } }
+        didSet { if hovered?.node != oldValue?.node { scheduleLastUsedLookup() } }
     }
     /// The hovered treemap tile (treemap chart only).
     var hoveredTile: TreemapTile? {
-        didSet { if let node = hoveredTile?.node, node != oldValue?.node { lookUpLastUsed(node) } }
+        didSet { if hoveredTile?.node != oldValue?.node { scheduleLastUsedLookup() } }
     }
     /// Which chart is on screen; only that one is laid out. Mirrors `@AppStorage(ChartKind.storageKey)`.
     /// Changing it relays out the current folder: the scan, `center` and the hovered node stay.
@@ -81,6 +81,13 @@ final class ScanModel {
     @ObservationIgnored private var environment: SafetyEnvironment?
     /// Nodes whose Spotlight last use was asked for in this scan (found or not).
     @ObservationIgnored private var lastUsedRequested: Set<NodeID> = []
+    /// Waits for the pointer to rest on a node before looking it up.
+    @ObservationIgnored private var lastUsedRest: Task<Void, Never>?
+    /// A Spotlight lookup is running; at most one runs at a time.
+    @ObservationIgnored private var lastUsedInFlight = false
+
+    /// How long the pointer must rest on a file before Spotlight is asked about it.
+    static let lastUsedRestDelay: Duration = .milliseconds(150)
 
     /// Judges verdicts against `env` from now on (the apps index became ready, an app launched or
     /// quit): hands it to the current store, and to every store a later scan creates, and refreshes.
@@ -96,12 +103,32 @@ final class ScanModel {
         }
     }
 
-    /// Looks up Spotlight's last-used date of `node`, once per scan, off the main actor; only files
-    /// (a folder's date says nothing about its contents). The result lands in `spotlightLastUsed`.
-    private func lookUpLastUsed(_ node: NodeID) {
-        guard let store, lastUsedRequested.insert(node).inserted else { return }
+    /// Looks up the hovered node's Spotlight last-used date once the pointer has rested on it for
+    /// `lastUsedRestDelay`, so sweeping across the chart asks Spotlight nothing.
+    private func scheduleLastUsedLookup() {
+        lastUsedRest?.cancel()
+        guard hoveredNode != nil else { return }
+        lastUsedRest = Task {
+            try? await Task.sleep(for: Self.lastUsedRestDelay)
+            guard !Task.isCancelled else { return }
+            lookUpHoveredLastUsed()
+        }
+    }
+
+    /// Looks up the hovered node's Spotlight last-used date, once per node and scan, off the main
+    /// actor; only files (a folder's date says nothing about its contents). One lookup at a time:
+    /// when it ends, the node hovered by then (if any, and not asked yet) goes next. The result lands
+    /// in `spotlightLastUsed`.
+    private func lookUpHoveredLastUsed() {
+        guard !lastUsedInFlight, let store, let node = hoveredNode, lastUsedRequested.insert(node).inserted else { return }
+        lastUsedInFlight = true
         Task {
-            guard await store.row(node).kind == .file else { return }
+            defer {
+                lastUsedInFlight = false
+                lookUpHoveredLastUsed()
+            }
+            // A node from an earlier scan's store may not exist in this one.
+            guard await store.contains(node), await store.row(node).kind == .file else { return }
             let path = await store.path(of: node)
             let date = await Task.detached(priority: .utility) { SpotlightLastUsed.lastUsed(path: path) }.value
             guard store === self.store, let date else { return }
@@ -224,21 +251,16 @@ final class ScanModel {
         }
 
         let store = ScanStore(rootName: rootName, rootPath: rootPath)
+        // Everything that names a node of the old store goes in the same main-actor turn as the
+        // store itself, before any await: node IDs are per store.
         self.store = store
-        if let environment {
-            // The same apps, judged at the current time (rules measure ages from `now`).
-            let fresh = SafetyEnvironment.system(home: environment.home, apps: environment.apps,
-                                                 runningBundleIDs: environment.runningBundleIDs,
-                                                 runningAppPaths: environment.runningAppPaths)
-            self.environment = fresh
-            await store.setEnvironment(fresh)
-        }
         center = FileTree.root
         hovered = nil
         hoveredTile = nil
         verdicts = [:]
         spotlightLastUsed = [:]
         lastUsedRequested = []
+        lastUsedRest?.cancel()
         capacity = if case .startupDisk = target { Self.startupDiskCapacity() } else { nil }
         segments = []
         tiles = []
@@ -248,6 +270,14 @@ final class ScanModel {
         ageTotals = [:]
         showsMerged = false
         phase = .scanning(ScanProgress(filesSeen: 0, bytesSeen: 0, directoriesPending: 1))
+        if let environment {
+            // The same apps, judged at the current time (rules measure ages from `now`).
+            let fresh = SafetyEnvironment.system(home: environment.home, apps: environment.apps,
+                                                 runningBundleIDs: environment.runningBundleIDs,
+                                                 runningAppPaths: environment.runningAppPaths)
+            self.environment = fresh
+            await store.setEnvironment(fresh)
+        }
 
         let latest = LatestProgress()
         let ticker = Task {

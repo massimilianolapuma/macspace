@@ -202,27 +202,41 @@ public enum ChartPalette {
     ///   from the accent there), drawn with `hatch` lines over it. In light mode the pale soft fill
     ///   is under 3:1 from the accent: the hatch is what tells the two apart.
     ///
+    /// Like every chart tone, a lifted fill stops where it would come within 1.3:1 of the background
+    /// (only the pale light caution gets there: it lifts about 5 points instead of 12).
+    ///
     /// Checked in `ChartPaletteTests`: an AA label on both (on the hatch too), resting and hovered,
-    /// and hue 14–18°.
+    /// hue 14–18°, and 1.3:1 from the background.
     public static func safetyFill(_ level: SafetyLevel, scheme: Scheme, lift: Double = 0) -> Contrast.RGB? {
-        let base: Contrast.RGB
+        let tones = scheme == .dark ? darkSafetyTones : lightSafetyTones
         switch level {
-        case .safe: base = accent(scheme)
-        case .caution: base = mix(accent(scheme), over: surface(scheme), strength: scheme == .dark ? 0.35 : 0.4)
+        case .safe: return tones[0].shade(levels: 0, lift: lift)
+        case .caution: return tones[1].shade(levels: 0, lift: lift)
         case .normal, .protected: return nil
         }
-        guard lift != 0 else { return base }
-        let (h, s, l) = Contrast.hslComponents(base)
-        return Contrast.hsl(h, s, min(max(l + lift, 0), 100))
     }
 
-    /// Color of the hatch lines on caution elements: tone on tone, a step of the same orange, so a
-    /// large hatched area stays quiet next to the solid safe orange. Light: the accent at 75 % over
-    /// the background (about 1.5:1 on the soft fill, 2:1 hovered; the dark label keeps about 6.9:1 on
-    /// it). Dark: the accent deepened to 44 % lightness (about 2.1:1 on the soft fill), so the white
-    /// label caution takes keeps 4.5:1 where it crosses a line (on the full accent it would be 3.3:1).
-    public static func hatch(_ scheme: Scheme) -> Contrast.RGB {
-        scheme == .dark ? Contrast.hsl(16, 85, 44) : mix(accent(.light), over: surface(.light), strength: 0.75)
+    /// The resting safe and caution fills, before any lift.
+    private static func safetyBases(_ scheme: Scheme) -> [Contrast.RGB] {
+        [accent(scheme), mix(accent(scheme), over: surface(scheme), strength: scheme == .dark ? 0.35 : 0.4)]
+    }
+
+    private static let lightSafetyTones = safetyBases(.light).map { Tone($0, scheme: .light) }
+    private static let darkSafetyTones = safetyBases(.dark).map { Tone($0, scheme: .dark) }
+
+    /// Color of the hatch lines on caution elements, lifted by `lift` while the element is hovered:
+    /// tone on tone, a step of the same orange, so a large hatched area stays quiet next to the solid
+    /// safe orange.
+    /// - Light: the accent at 75 % over the background (about 1.5:1 on the soft fill at rest, 1.7:1
+    ///   hovered; the dark label keeps about 6.9:1 on it). It does not lift: the hovered fill lightens
+    ///   away from it.
+    /// - Dark: the accent at 38 % lightness (about 1.7:1 on the soft fill), lifted with the fill up to
+    ///   44.5 %, so the hovered hatch still shows (about 1.4:1) while the white label caution takes
+    ///   keeps 4.5:1 where it crosses a line (on the full accent it would be 3.3:1).
+    public static func hatch(_ scheme: Scheme, lift: Double = 0) -> Contrast.RGB {
+        scheme == .dark
+            ? Contrast.hsl(16, 85, min(38 + lift, 44.5))
+            : mix(accent(.light), over: surface(.light), strength: 0.75)
     }
 
     /// `color` laid over `base` at `strength` (0 = base, 1 = color), as an opaque color.

@@ -189,7 +189,7 @@ struct SunburstView: View {
                                           step: pose.shadeStep, scheme: scheme)
             rings.fill(path, with: .color(fill.opacity(pose.alpha)))
             if subject.isHatched(in: colorMode) {
-                SafetyDecor.hatch(in: path, color: hatch.opacity(pose.alpha), in: rings)
+                SafetyDecor.hatch(in: path, color: hatch.opacity(pose.alpha), canvas: geometry.size, in: rings)
             }
             drawn.append((path, pose, inner))
         }
@@ -263,7 +263,7 @@ struct SunburstView: View {
         guard SafetyDecor.fitsLock(width: mid * (pose.end - pose.start), height: geometry.ringWidth) else { return }
         let ink = FusionPalette.label(subject, mode: mode, depth: pose.shadeDepth, step: pose.shadeStep, lift: lift,
                                       scheme: scheme)
-        locks.lock(at: geometry.point(angle: (pose.start + pose.end) / 2, radius: mid), ink: ink.opacity(pose.alpha),
+        locks.lock(at: geometry.point(angle: (pose.start + pose.end) / 2, radius: mid), ink: ink, alpha: pose.alpha,
                    in: context)
     }
 

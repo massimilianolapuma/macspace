@@ -100,7 +100,7 @@ private struct BiggestRow: View {
     /// Name, the safety level unless normal, and "Non leggibile".
     private var spokenLabel: String {
         var parts = [row.name]
-        if let level = verdict?.level.spokenTitle ?? row.safety.spokenTitle { parts.append(level) }
+        if let level = (verdict?.level ?? row.safety).spokenTitle { parts.append(level) }
         if row.flags.contains(.unreadable) { parts.append(String(localized: "Non leggibile")) }
         return parts.joined(separator: ", ")
     }
@@ -167,9 +167,10 @@ private struct BiggestRow: View {
         switch colorMode {
         case .deletable:
             if let verdict, let sentence = verdict.sentence {
-                // One line keeps the rows even; the whole reason is in the help tag, the hover card
-                // and VoiceOver.
-                RowDetail(text: sentence) { SafetySwatch(level: verdict.level, diameter: ColorDot.size) }
+                // Up to two lines, so the consequence is not cut off; the help tag has it all.
+                RowDetail(text: sentence, lines: 2) {
+                    SafetySwatch(level: verdict.level, diameter: ColorDot.size)
+                }
                     .help(Text(verbatim: sentence))
             }
         case .category:
@@ -214,18 +215,23 @@ private struct BiggestRow: View {
 /// row's name.
 private struct RowDetail<Marker: View>: View {
     let text: String
+    /// Most lines the text may take before it is cut with "…".
+    var lines = 1
     @ViewBuilder let marker: Marker
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        HStack(spacing: 5) {
+        HStack(alignment: .firstTextBaseline, spacing: 5) {
             marker
+                // Centered on the first line's lowercase letters, also when the text wraps.
+                .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 3.5 }
                 .accessibilityHidden(true)
             Text(verbatim: text)
                 .font(.caption)
                 .foregroundStyle(FusionPalette.secondaryText(scheme))
-                .lineLimit(1)
+                .lineLimit(lines)
                 .truncationMode(.tail)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }

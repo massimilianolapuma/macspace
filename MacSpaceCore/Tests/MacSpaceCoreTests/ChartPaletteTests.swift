@@ -287,7 +287,8 @@ private func safetyFills(_ s: ChartPalette.Scheme) -> [(SafetyLevel, Double, Con
             let ink = ChartPalette.labelInk(on: fill, scheme: s)
             #expect(Contrast.ratio(ink, fill) >= 4.5, "\(s) \(level) +\(lift)")
             if level == .caution {
-                #expect(Contrast.ratio(ink, ChartPalette.hatch(s)) >= 4.5, "\(s) caution +\(lift) ink on hatch")
+                let hatch = ChartPalette.hatch(s, lift: lift)
+                #expect(Contrast.ratio(ink, hatch) >= 4.5, "\(s) caution +\(lift) ink on hatch")
             }
         }
     }
@@ -295,8 +296,9 @@ private func safetyFills(_ s: ChartPalette.Scheme) -> [(SafetyLevel, Double, Con
 
 /// Caution must not read as safe. Dark: the soft fill alone is 3:1 from the accent. Light: the
 /// pale soft fill is under 3:1 from the accent (about 1.9:1), so the hatch tells them apart; it
-/// stays visible on the caution fill (at least 1.3:1, resting and hovered) in both themes, yet quiet
-/// (tone on tone: under 2.5:1 at rest, so a large hatched area never outshouts the solid accent).
+/// stays visible on the caution fill (at least 1.3:1, resting and hovered, as each is drawn) in both
+/// themes, yet quiet: tone on tone, 1.4–1.8:1 at rest, so a large hatched area never outshouts the
+/// solid accent.
 @Test func cautionDiffersFromSafe() throws {
     let darkSafe = try #require(ChartPalette.safetyFill(.safe, scheme: .dark))
     let darkCaution = try #require(ChartPalette.safetyFill(.caution, scheme: .dark))
@@ -304,8 +306,9 @@ private func safetyFills(_ s: ChartPalette.Scheme) -> [(SafetyLevel, Double, Con
     for s in [ChartPalette.Scheme.light, .dark] {
         for lift in [0.0, 12] {
             let caution = try #require(ChartPalette.safetyFill(.caution, scheme: s, lift: lift))
-            #expect(Contrast.ratio(ChartPalette.hatch(s), caution) >= 1.3, "\(s) hatch on caution +\(lift)")
-            if lift == 0 { #expect(Contrast.ratio(ChartPalette.hatch(s), caution) < 2.5, "\(s) hatch stays quiet") }
+            let stripes = Contrast.ratio(ChartPalette.hatch(s, lift: lift), caution)
+            #expect(stripes >= 1.3, "\(s) hatch on caution +\(lift): \(stripes)")
+            if lift == 0 { #expect((1.4...1.8).contains(stripes), "\(s) hatch stays quiet: \(stripes)") }
         }
     }
 }
@@ -321,5 +324,19 @@ private func safetyFills(_ s: ChartPalette.Scheme) -> [(SafetyLevel, Double, Con
         }
         #expect((14...18).contains(Contrast.hslComponents(ChartPalette.hatch(s)).h), "\(s) hatch")
         #expect(Contrast.isReservedOrange(ChartPalette.hatch(s)))
+    }
+}
+
+/// Hovering a safe or caution element shows (CIE76 > 5), and neither fill, resting or hovered, comes
+/// within 1.3:1 of the background: the pale light caution stops lifting before it would fade into it.
+@Test func safetyFillsStayVisibleOnTheBackgroundWhenHovered() throws {
+    for s in [ChartPalette.Scheme.light, .dark] {
+        for level in [SafetyLevel.safe, .caution] {
+            let rest = try #require(ChartPalette.safetyFill(level, scheme: s))
+            let hover = try #require(ChartPalette.safetyFill(level, scheme: s, lift: 12))
+            #expect(Contrast.ratio(rest, ChartPalette.surface(s)) >= 1.3, "\(s) \(level) rest")
+            #expect(Contrast.ratio(hover, ChartPalette.surface(s)) >= 1.3, "\(s) \(level) hovered")
+            #expect(Contrast.deltaE(rest, hover) > 5, "\(s) \(level) hover shows")
+        }
     }
 }

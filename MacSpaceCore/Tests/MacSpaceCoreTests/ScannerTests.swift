@@ -457,3 +457,17 @@ private func scanLeftoverHome(_ fx: Fixture) async throws -> ScanStore {
     #expect(sun.segments.first { $0.name == "Big.dmg" }?.safety == .safe)
     #expect(tree.tiles.first { $0.name == "Big.dmg" }?.safety == .safe)
 }
+
+/// A node ID kept from another scan's store is recognised as foreign rather than trapping: the app
+/// checks `contains` before asking about it, and a snapshot centred on it is empty.
+@Test func foreignNodeIDsAreRejected() async throws {
+    let store = ScanStore(rootName: "r", rootPath: "/tmp/macspace-foreign-ids")
+    await store.markScanFinished()
+    #expect(await store.contains(FileTree.root))
+    for id: NodeID in [-1, 1, 5_000] { #expect(await !store.contains(id)) }
+    let snap = await store.snapshot(center: 5_000, chart: .sunburst(depth: 3), biggestLimit: 5)
+    #expect(snap.segments.isEmpty && snap.biggest.isEmpty && snap.breadcrumb.isEmpty && snap.verdicts.isEmpty)
+    let tiles = await store.snapshot(center: 5_000, chart: .treemap(width: 100, height: 100, depth: 2),
+                                     biggestLimit: 5)
+    #expect(tiles.tiles.isEmpty)
+}

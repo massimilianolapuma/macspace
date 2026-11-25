@@ -46,7 +46,8 @@ struct SunburstHoverLayer: View {
                                           lift: FusionPalette.hoverLift, scheme: scheme)
             ring.fill(path, with: .color(fill.opacity(pose.alpha)))
             if subject.isHatched(in: colorMode) {
-                SafetyDecor.hatch(in: path, color: FusionPalette.hatch(scheme).opacity(pose.alpha), in: ring)
+                SafetyDecor.hatch(in: path, color: FusionPalette.hatch(scheme, lift: FusionPalette.hoverLift)
+                    .opacity(pose.alpha), canvas: geometry.size, in: ring)
             }
             if geometry.hasSeparator(pose, inner: inner) {
                 ring.stroke(path, with: .color(FusionPalette.background(scheme).opacity(pose.alpha)), lineWidth: 1)

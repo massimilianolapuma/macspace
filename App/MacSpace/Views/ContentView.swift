@@ -9,7 +9,8 @@ struct ContentView: View {
     @State private var chosenFolder: (url: URL, name: String)?
     @State private var choosingFolder = false
     @State private var showOnboarding = false
-    @State private var safety = SafetyEnvironmentProvider()
+    /// Shared by every window (`MacSpaceApp`); starts itself once, on the first window.
+    @Environment(SafetyEnvironmentProvider.self) private var safety
     @AppStorage(ColorMode.storageKey) private var colorMode: ColorMode = .deletable
     @AppStorage(ChartKind.storageKey) private var chart: ChartKind = .sunburst
     @Environment(\.colorScheme) private var scheme

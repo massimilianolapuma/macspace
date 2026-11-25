@@ -164,21 +164,25 @@ struct TreemapView: View {
                                           lift: lift, on: base, scheme: scheme)
             context.fill(shape, with: .color(fill.opacity(alpha)))
             if subject.isHatched(in: mode) {
-                SafetyDecor.hatch(in: shape, color: FusionPalette.hatch(scheme).opacity(alpha), in: context)
+                SafetyDecor.hatch(in: shape, color: FusionPalette.hatch(scheme, lift: lift).opacity(alpha),
+                                  canvas: canvas.size, in: context)
             }
             if base != nil {
                 let outline = labels.mergedOutline(for: item, hovered: lift > 0, motion: motion)
                 MergedOutline.strokeTile(rect, radius: cornerRadius(rect, depth: tile.depth),
                                          color: outline.opacity(alpha), scale: scale, in: context)
             }
-            let ink = FusionPalette.label(subject, mode: mode, depth: pose.shadeDepth, step: pose.shadeStep,
-                                          lift: lift, on: base, scheme: scheme)
+            // Solved only for a tile that shows a label or a lock.
+            func ink() -> Color {
+                FusionPalette.label(subject, mode: mode, depth: pose.shadeDepth, step: pose.shadeStep, lift: lift,
+                                    on: base, scheme: scheme)
+            }
             if rect.width >= TileLabelPlanner.minLabelWidth, rect.height >= TileLabelPlanner.minLabelHeight,
                let label = labels.leaf(for: item, canvas: canvas, in: context), label.fits(rect.width) {
-                drawLabel(label, in: rect, ink: ink, alpha: alpha, context: context)
+                drawLabel(label, in: rect, ink: ink(), alpha: alpha, context: context)
             } else if subject.isLocked(in: mode), alpha > 0.5,
                       SafetyDecor.fitsLock(width: rect.width, height: rect.height) {
-                locks.lock(at: CGPoint(x: rect.midX, y: rect.midY), ink: ink.opacity(alpha), in: context)
+                locks.lock(at: CGPoint(x: rect.midX, y: rect.midY), ink: ink(), alpha: alpha, in: context)
             }
         }
     }

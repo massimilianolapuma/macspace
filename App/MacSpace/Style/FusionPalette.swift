@@ -215,9 +215,14 @@ struct FusionPalette {
         color(ChartPalette.safetyFill(.caution, scheme: paletteScheme(scheme)) ?? ChartPalette.accent(paletteScheme(scheme)))
     }
 
-    /// Color of the hatch lines on caution elements (`ChartPalette.hatch`), per scheme.
-    static func hatch(_ scheme: ColorScheme) -> Color { hatchColors[scheme == .dark ? 1 : 0] }
-    private static let hatchColors = [ChartPalette.hatch(.light), ChartPalette.hatch(.dark)].map(color)
+    /// Color of the hatch lines on caution elements (`ChartPalette.hatch`), resting or, with `lift`
+    /// > 0, hovered; solved once per scheme.
+    static func hatch(_ scheme: ColorScheme, lift: Double = 0) -> Color {
+        hatchColors[(scheme == .dark ? 2 : 0) + (lift > 0 ? 1 : 0)]
+    }
+    private static let hatchColors = [ChartPalette.Scheme.light, .dark].flatMap { scheme in
+        [0, hoverLift].map { color(ChartPalette.hatch(scheme, lift: $0)) }
+    }
 
     /// `h` in degrees, `s` and `l` in percent.
     static func hsl(_ h: Double, _ s: Double, _ l: Double) -> Color { color(Contrast.hsl(h, s, l)) }
