@@ -78,3 +78,29 @@ extension SafetyVerdict {
         return owner
     }
 }
+
+extension TrashSkip {
+    /// Why an item was not moved to the Trash, in words, as the result sheet lists it.
+    var text: String {
+        switch self {
+        case .missing: String(localized: "Non esiste più")
+        case .changed: String(localized: "È cambiato dopo l'analisi")
+        case let .protected(reason):
+            String(localized: "Ora è protetto: \(Self.lowercasingFirst(SafetyVerdict(level: .protected, reason: reason).sentence ?? String(localized: SafetyLevel.protected.title)))")
+        case .openNow: String(localized: "Aperto ora in un'app")
+        case .insidePackage: String(localized: "Fa parte di un pacchetto")
+        case .refused: String(localized: "Rifiutato per sicurezza")
+        case .cannotCheckOpenFiles: String(localized: "Impossibile verificare i file aperti")
+        case .containsUnverified: String(localized: "Contiene elementi che MacSpace non ha potuto verificare")
+        case .scanInProgress: String(localized: "Analisi in corso: riprova al termine")
+        case let .failed(message): String(localized: "Errore: \(message)")
+        }
+    }
+
+    /// A sentence continued after a colon: its first letter in lower case ("App in esecuzione" →
+    /// "app in esecuzione").
+    private static func lowercasingFirst(_ sentence: String) -> String {
+        guard let first = sentence.first else { return sentence }
+        return first.lowercased() + sentence.dropFirst()
+    }
+}

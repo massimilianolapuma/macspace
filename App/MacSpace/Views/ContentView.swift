@@ -9,6 +9,7 @@ struct ContentView: View {
     @State private var chosenFolder: (url: URL, name: String)?
     @State private var choosingFolder = false
     @State private var showOnboarding = false
+    @State private var showHistory = false
     /// Shared by every window (`MacSpaceApp`); starts itself once, on the first window.
     @Environment(SafetyEnvironmentProvider.self) private var safety
     @AppStorage(ColorMode.storageKey) private var colorMode: ColorMode = .deletable
@@ -82,6 +83,9 @@ struct ContentView: View {
         .sheet(isPresented: $showOnboarding) {
             OnboardingView(dismiss: { showOnboarding = false })
         }
+        .sheet(isPresented: trashSheetShown) {
+            TrashSheet(model: model)
+        }
         .onAppear { showOnboarding = !FullDiskAccess.isGranted }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             if FullDiskAccess.isGranted { showOnboarding = false }
@@ -128,6 +132,15 @@ struct ContentView: View {
         }
         ToolbarItem(placement: .status) {
             status
+        }
+        ToolbarItem(placement: .primaryAction) {
+            if !model.history.isEmpty {
+                Button("Cronologia", systemImage: "clock.arrow.circlepath") { showHistory.toggle() }
+                    .help(Text("Elementi spostati nel Cestino in questa sessione"))
+                    .popover(isPresented: $showHistory, arrowEdge: .bottom) {
+                        HistoryPopover(entries: model.history)
+                    }
+            }
         }
         ToolbarItem(placement: .primaryAction) {
             if model.isScanning {
@@ -191,6 +204,18 @@ struct ContentView: View {
         .monospacedDigit()
         .lineLimit(1)
         .fixedSize()
+    }
+
+    /// Up while the Trash confirmation or its result shows; closing it (never during a move)
+    /// drops both.
+    private var trashSheetShown: Binding<Bool> {
+        Binding {
+            model.pendingTrash != nil || model.trashReport != nil
+        } set: { shown in
+            guard !shown, !model.isTrashing else { return }
+            model.pendingTrash = nil
+            model.trashReport = nil
+        }
     }
 
     /// The target's name after resolving links, as the chart root shows it.

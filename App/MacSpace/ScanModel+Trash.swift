@@ -1,0 +1,99 @@
+import Foundation
+import MacSpaceCore
+
+/// One item moved to the Trash in this session (spec §5.6: name, size, date, "Mostra nel Cestino").
+struct HistoryEntry: Identifiable, Sendable {
+    let id = UUID()
+    let name: String
+    /// What it took in the tree when it was moved.
+    let size: UInt64
+    let date: Date
+    /// Where it is inside the Trash; nil when the system did not say.
+    let trashedURL: URL?
+}
+
+/// An item the confirmation sheet lists, as the store sees it when the sheet opens.
+struct TrashCandidate: Identifiable, Sendable {
+    let id: NodeID
+    let name: String
+    let path: String
+    let kind: NodeKind
+    let size: UInt64
+    let verdict: SafetyVerdict
+}
+
+/// What the sheet shows once a move ended.
+struct TrashReport: Sendable {
+    /// What moved, largest first.
+    var moved: [TrashOutcome.Moved]
+    /// What stayed: the store's skips, then the rows the sheet left out because they were open.
+    var skipped: [TrashOutcome.Skipped]
+    /// The estimate of the space each moved item frees (`PrivateSize.freed`), when the sheet had
+    /// finished it before the move; the result view estimates the others in the Trash.
+    var freed: [NodeID: UInt64]
+}
+
+/// Moving confirmed items to the Trash (spec §5.6). `ScanStore.trash` re-checks every item and is
+/// the only code that moves anything; this side refreshes what is on screen and keeps the history.
+extension ScanModel {
+    /// The items of `ids` that may still be moved, as `ScanStore.resolveSelection` keeps them now
+    /// (never protected, top-most, largest first), with what the sheet shows of each. Items that
+    /// left the tree or changed store meanwhile are dropped.
+    func trashCandidates(_ ids: [NodeID]) async -> [TrashCandidate] {
+        guard let store else { return [] }
+        let resolved = await store.resolveSelection(Set(ids))
+        var candidates: [TrashCandidate] = []
+        for id in resolved.ids {
+            guard let row = await store.row(id), let path = await store.path(of: id),
+                  let verdict = await store.verdict(id), verdict.level.isTrashable else { continue }
+            candidates.append(TrashCandidate(id: id, name: row.name, path: path, kind: row.kind, size: row.size,
+                                             verdict: verdict))
+        }
+        guard store === self.store else { return [] }
+        return candidates
+    }
+
+    /// Moves `ids` to the Trash through `ScanStore.trash`, which re-checks each one right before
+    /// moving it (still there and unchanged, not open, not protected, not inside a package) and
+    /// skips with a reason whatever fails. Then: the history gains what moved, the selection, ticks
+    /// and outlines lose it, the views and suggestions are refreshed (the tree was updated in place).
+    /// Refused while another move runs or while the Trash is unavailable: nothing is moved then.
+    func trash(_ ids: [NodeID]) async -> TrashOutcome {
+        guard let store else { return TrashOutcome() }
+        guard !isTrashing else { return TrashOutcome() }
+        guard trashUnavailableReason == nil else {
+            var names: [TrashOutcome.Skipped] = []
+            for id in ids { names.append(.init(node: id, name: await store.row(id)?.name ?? "", reason: .scanInProgress)) }
+            return TrashOutcome(skipped: names)
+        }
+        isTrashing = true
+        defer { isTrashing = false }
+        // On the store's actor: blocking file system calls, off the main actor.
+        let outcome = await store.trash(Set(ids), actions: SystemDiskActions(), packages: SystemPackageProbe(),
+                                        openFiles: { OpenFileSet.current() })
+        // Whatever happened to the scan meanwhile, these really are in the Trash now.
+        let now = Date.now
+        history.insert(contentsOf: outcome.moved.map {
+            HistoryEntry(name: $0.name, size: $0.size, date: now, trashedURL: $0.trashedPath.map { URL(filePath: $0) })
+        }, at: 0)
+        lastOutcome = outcome
+        guard store === self.store, !outcome.moved.isEmpty else { return outcome }
+
+        let moved = Set(outcome.moved.map(\.node))
+        for id in moved { suggestionTicks[id] = nil }
+        highlighted.subtract(moved)
+        hovered = nil
+        hoveredTile = nil
+        // The folder on screen may have gone too (a suggestion moved a folder above it).
+        let crumb = await store.breadcrumb(to: center)
+        if let gone = crumb.firstIndex(where: { $0.flags.contains(.removed) }) {
+            center = gone > 0 ? crumb[gone - 1].id : FileTree.root
+        }
+        // The store drops removed items itself; subtracting `moved` keeps the intent explicit.
+        changeSelection { $0.subtracting(moved) }
+        await refreshViews()
+        await selectionWork?.value
+        await refreshSuggestions()
+        return outcome
+    }
+}

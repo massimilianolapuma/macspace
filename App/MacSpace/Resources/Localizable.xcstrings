@@ -4,8 +4,33 @@
     "%@ file" : {
 
     },
+    "%@ occupati, parte condivisa con altre copie" : {
+
+    },
     "%lld di %lld" : {
 
+    },
+    "%lld elementi spostati nel Cestino" : {
+      "localizations" : {
+        "it" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld elemento spostato nel Cestino"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld elementi spostati nel Cestino"
+                }
+              }
+            }
+          }
+        }
+      }
     },
     "%lld selezionati" : {
       "localizations" : {
@@ -44,6 +69,9 @@
     "Analisi delle app in corso…" : {
 
     },
+    "Analisi in corso: riprova al termine" : {
+
+    },
     "Analisi in corso…" : {
 
     },
@@ -60,6 +88,12 @@
 
     },
     "Analizza per vedere i suggerimenti" : {
+
+    },
+    "Annulla" : {
+
+    },
+    "Aperto ora in un'app" : {
 
     },
     "App" : {
@@ -116,13 +150,25 @@
     "Cache: si rigenera da sola" : {
 
     },
+    "Calcolo…" : {
+
+    },
     "Cartella essenziale del Mac o dell'utente" : {
 
     },
     "Colori" : {
 
     },
+    "Contiene elementi che MacSpace non ha potuto verificare" : {
+
+    },
     "Continua senza" : {
+
+    },
+    "Controllo dei file aperti…" : {
+
+    },
+    "Cronologia" : {
 
     },
     "Da controllare" : {
@@ -158,13 +204,22 @@
     "Elementi" : {
 
     },
+    "Elementi spostati nel Cestino in questa sessione" : {
+
+    },
     "Eliminabili" : {
+
+    },
+    "Errore: %@" : {
 
     },
     "Evidenzia nel grafico" : {
 
     },
     "Fa già parte di una cartella selezionata" : {
+
+    },
+    "Fa parte di un pacchetto" : {
 
     },
     "Fa parte di un pacchetto: si può spostare solo il pacchetto intero" : {
@@ -179,13 +234,28 @@
     "File di sistema protetto da macOS" : {
 
     },
+    "Fine" : {
+
+    },
     "Foto e immagini" : {
+
+    },
+    "Gli elementi aperti in un'app restano dove sono." : {
 
     },
     "Gli elementi più pesanti appariranno qui" : {
 
     },
+    "Gli elementi scelti non ci sono più o ora sono protetti." : {
+
+    },
     "Immagini disco e pacchetti che servivano per installare." : {
+
+    },
+    "Impossibile verificare i file aperti" : {
+
+    },
+    "In questa sessione" : {
 
     },
     "Interrompi" : {
@@ -197,7 +267,13 @@
     "Libreria di Foto: libera spazio da Foto › Impostazioni › «Ottimizza spazio»" : {
 
     },
+    "Mostra %@ nel Cestino" : {
+
+    },
     "Mostra meno" : {
+
+    },
+    "Mostra nel Cestino" : {
 
     },
     "Mostra tutti (%lld)" : {
@@ -206,13 +282,28 @@
     "Musica e audio" : {
 
     },
+    "Nessun elemento spostato nel Cestino" : {
+
+    },
     "Nessun suggerimento: qui è tutto in ordine" : {
+
+    },
+    "Niente da spostare" : {
+
+    },
+    "Non esiste più" : {
 
     },
     "Non hai i permessi per spostarlo" : {
 
     },
     "Non leggibile" : {
+
+    },
+    "Non più nel Cestino" : {
+
+    },
+    "Non spostati" : {
 
     },
     "Non spuntato" : {
@@ -224,7 +315,13 @@
     "Normale" : {
 
     },
+    "OK" : {
+
+    },
     "Oltre 2 anni" : {
+
+    },
+    "Ora è protetto: %@" : {
 
     },
     "Pannello" : {
@@ -248,6 +345,9 @@
     "Più pesanti in %@" : {
 
     },
+    "Potrai ripristinarli dal Cestino del Finder." : {
+
+    },
     "Privacy e sicurezza › Accesso completo al disco › MacSpace" : {
 
     },
@@ -255,6 +355,9 @@
 
     },
     "Raggiera" : {
+
+    },
+    "Rifiutato per sicurezza" : {
 
     },
     "Scegli cartella…" : {
@@ -293,7 +396,44 @@
     "Solo nel cloud: non occupa spazio su questo Mac" : {
 
     },
+    "Spazio liberato:" : {
+
+    },
+    "Spazio liberato: circa %@" : {
+
+    },
+    "Sposta nel Cestino" : {
+
+    },
     "Sposta nel Cestino…" : {
+
+    },
+    "Spostamento nel Cestino…" : {
+
+    },
+    "Spostare %lld elementi nel Cestino?" : {
+      "localizations" : {
+        "it" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Spostare %lld elemento nel Cestino?"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Spostare %lld elementi nel Cestino?"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "Spostati nel Cestino" : {
 
     },
     "Spunta" : {
@@ -348,6 +488,15 @@
 
     },
     "di %@" : {
+
+    },
+    "libera circa %@" : {
+
+    },
+    "liberati circa %@" : {
+
+    },
+    "È cambiato dopo l'analisi" : {
 
     },
     "È il Cestino: svuotalo dal Finder" : {

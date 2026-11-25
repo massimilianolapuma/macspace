@@ -96,6 +96,21 @@ final class ScanModel {
     /// Environment updates still being applied (verdicts, selection, suggestions); the Trash waits.
     private(set) var environmentUpdates = 0
 
+    // Moving to the Trash (`ScanModel+Trash.swift`).
+
+    /// What the last move to the Trash did, as the store reported it; nil before the first.
+    var lastOutcome: TrashOutcome?
+    /// The finished move the sheet shows in place of the confirmation (nil: none). The sheet is up
+    /// while this or `pendingTrash` is set.
+    var trashReport: TrashReport?
+    /// Every item moved to the Trash in this session, newest first; not saved.
+    var history: [HistoryEntry] = []
+    /// A move is running; another one is refused until it ends.
+    var isTrashing = false
+    /// Bumped whenever a new store replaces the old one, so a sheet opened on the old one's items
+    /// can tell they no longer exist.
+    @ObservationIgnored var storeGeneration = 0
+
     static let ringDepth = 3
     static let biggestLimit = 20
     static let refreshInterval: Duration = .milliseconds(250)
@@ -313,6 +328,8 @@ final class ScanModel {
         suggestions = []
         suggestionTicks = [:]
         pendingTrash = nil
+        trashReport = nil
+        storeGeneration += 1
         phase = .scanning(ScanProgress(filesSeen: 0, bytesSeen: 0, directoriesPending: 1))
         if let environment {
             // The same apps, judged at the current time (rules measure ages from `now`).
