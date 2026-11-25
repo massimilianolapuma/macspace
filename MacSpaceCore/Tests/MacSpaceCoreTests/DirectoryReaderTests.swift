@@ -87,3 +87,10 @@ import Testing
     let n = try await Task { withUnsafeCurrentTask { $0?.cancel() }; return try DirectoryReader.read(path: fx.root.path).count }.value
     #expect(n == 0)
 }
+
+@Test func privateSizeReadIsOptIn() throws {
+    let fx = try Fixture(); defer { fx.cleanup() }
+    try fx.file("x", bytes: 10_000)
+    #expect(try DirectoryReader.read(path: fx.root.path).allSatisfy { $0.privateSize == nil })
+    #expect(try DirectoryReader.read(path: fx.root.path, includePrivateSize: true).first?.privateSize ?? 0 > 0)
+}

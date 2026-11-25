@@ -10,18 +10,23 @@ public enum DirectoryReader {
     /// When the calling task is cancelled, reading stops between batches and the listing so far
     /// is returned without throwing: callers must check `Task.isCancelled` before treating the
     /// result as complete.
-    public static func read(path: String) throws(DirectoryReadError) -> [DirectoryEntry] {
+    /// With `includePrivateSize`, each entry also carries `privateSize` where the volume reports
+    /// it; the scanner leaves it off, so its request stays exactly as without the option.
+    public static func read(
+        path: String, includePrivateSize: Bool = false
+    ) throws(DirectoryReadError) -> [DirectoryEntry] {
         let fd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         guard fd >= 0 else { throw DirectoryReadError(errno: errno) }
         defer { close(fd) }
 
-        var request = attributeRequest(includeError: true)
+        var request = attributeRequest(includeError: true, includePrivateSize: includePrivateSize)
+        let options = includePrivateSize ? UInt64(FSOPT_ATTR_CMN_EXTENDED) : 0
         let buffer = UnsafeMutableRawPointer.allocate(byteCount: bulkBufferSize, alignment: 8)
         defer { buffer.deallocate() }
 
         var entries: [DirectoryEntry] = []
         while !Task.isCancelled {
-            let count = getattrlistbulk(fd, &request, buffer, bulkBufferSize, 0)
+            let count = getattrlistbulk(fd, &request, buffer, bulkBufferSize, options)
             if count < 0 {
                 if errno == EINTR { continue }
                 throw DirectoryReadError(errno: errno)
@@ -43,13 +48,17 @@ public enum DirectoryReader {
 
     /// Describes the object at `path` itself (a trailing symbolic link is not followed).
     /// For a mount point this reports the mounted volume's root, so `device` is that volume's.
-    public static func stat(path: String) throws(DirectoryReadError) -> DirectoryEntry {
-        var request = attributeRequest(includeError: false)
+    /// `includePrivateSize` works as in `read(path:includePrivateSize:)`.
+    public static func stat(
+        path: String, includePrivateSize: Bool = false
+    ) throws(DirectoryReadError) -> DirectoryEntry {
+        var request = attributeRequest(includeError: false, includePrivateSize: includePrivateSize)
+        let options = UInt32(FSOPT_NOFOLLOW) | (includePrivateSize ? UInt32(FSOPT_ATTR_CMN_EXTENDED) : 0)
         // Room for the fixed attributes plus the longest possible name (255 UTF-16 units as UTF-8).
         let size = 4096
         let buffer = UnsafeMutableRawPointer.allocate(byteCount: size, alignment: 8)
         defer { buffer.deallocate() }
-        guard getattrlist(path, &request, buffer, size, UInt32(FSOPT_NOFOLLOW)) == 0 else {
+        guard getattrlist(path, &request, buffer, size, options) == 0 else {
             throw DirectoryReadError(errno: errno)
         }
         let length = min(Int(buffer.loadUnaligned(as: UInt32.self)), size)
@@ -66,19 +75,23 @@ public enum DirectoryReader {
         | attrgroup_t(ATTR_CMN_OBJTYPE) | attrgroup_t(ATTR_CMN_MODTIME) | attrgroup_t(ATTR_CMN_ACCTIME)
         | attrgroup_t(ATTR_CMN_FLAGS) | attrgroup_t(ATTR_CMN_FILEID)
 
-    private static func attributeRequest(includeError: Bool) -> attrlist {
+    /// `includePrivateSize` adds `ATTR_CMNEXT_PRIVATESIZE` to `forkattr`, which the call must
+    /// reinterpret as extended common attributes (`FSOPT_ATTR_CMN_EXTENDED`).
+    private static func attributeRequest(includeError: Bool, includePrivateSize: Bool) -> attrlist {
         var request = attrlist()
         request.bitmapcount = u_short(ATTR_BIT_MAP_COUNT)
         // ATTR_CMN_ERROR is only valid for getattrlistbulk.
         request.commonattr = commonAttributes | (includeError ? attrgroup_t(ATTR_CMN_ERROR) : 0)
         request.dirattr = attrgroup_t(ATTR_DIR_MOUNTSTATUS)
         request.fileattr = attrgroup_t(ATTR_FILE_LINKCOUNT) | attrgroup_t(ATTR_FILE_ALLOCSIZE)
+        if includePrivateSize { request.forkattr = attrgroup_t(ATTR_CMNEXT_PRIVATESIZE) }
         return request
     }
 
     /// Parses one packed record: `UInt32` length, `attribute_set_t` of returned attributes, then
     /// `ATTR_CMN_ERROR` (when returned), then each returned attribute in bit order — common, dir,
-    /// file — each starting on a 4-byte boundary. Attributes not in the returned set are absent.
+    /// file, then extended common (`forkattr`, only ever requested as such) — each starting on a
+    /// 4-byte boundary. Attributes not in the returned set are absent.
     /// Returns nil for records that report an error or are malformed.
     static func parseRecord(_ record: UnsafeRawBufferPointer) -> DirectoryEntry? {
         var cursor = Cursor(record: record, offset: MemoryLayout<UInt32>.size)
@@ -145,6 +158,12 @@ public enum DirectoryReader {
             allocatedSize = UInt64(clamping: value)
         }
 
+        var privateSize: UInt64?
+        if returned.forkattr & attrgroup_t(ATTR_CMNEXT_PRIVATESIZE) != 0 {
+            guard let value = cursor.read(off_t.self) else { return nil }
+            privateSize = UInt64(clamping: value)
+        }
+
         let kind = nodeKind(objectType)
         return DirectoryEntry(
             name: name,
@@ -156,7 +175,8 @@ public enum DirectoryReader {
             isMountPoint: mountStatus & UInt32(DIR_MNTSTATUS_MNTPOINT) != 0,
             isDataless: flags & UInt32(SF_DATALESS) != 0,
             modificationTime: modificationTime,
-            accessTime: accessTime
+            accessTime: accessTime,
+            privateSize: privateSize
         )
     }
 
