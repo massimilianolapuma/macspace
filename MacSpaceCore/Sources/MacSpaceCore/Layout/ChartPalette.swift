@@ -1,4 +1,5 @@
-/// Chart fills for the "by file type" and "by last use" color modes, per appearance.
+/// Chart fills for the "by file type" and "by last use" color modes, and the two orange safety
+/// levels of "Eliminabili" (`safetyFill`, `hatch`), per appearance.
 ///
 /// Designed to sit inside the Fusion style (spec §5.2): muted, paper-like tones in light mode
 /// and the same hues stepped for graphite in dark mode, never in the orange reserved for what
@@ -184,6 +185,50 @@ public enum ChartPalette {
     /// age, so a depth shift would make a deep recent folder read as an older one.
     public static func ageFill(_ b: AgeBucket, scheme: Scheme, lift: Double = 0) -> Contrast.RGB {
         (scheme == .dark ? darkAgeTones : lightAgeTones)[b.rawValue].shade(levels: 0, lift: lift)
+    }
+
+    // MARK: "Eliminabili" (safety levels)
+
+    /// The "deletable" accent (spec §5.2): `hsl(16, 88%, 57%)`, `hsl(16, 85%, 56%)` in dark mode.
+    public static func accent(_ scheme: Scheme) -> Contrast.RGB {
+        scheme == .dark ? Contrast.hsl(16, 85, 56) : Contrast.hsl(16, 88, 57)
+    }
+
+    /// The fill of an element at safety `level` in "Eliminabili" mode, lifted by `lift` lightness
+    /// points while hovered; nil for normal and protected, which keep the neutral ring tone.
+    ///
+    /// - Safe: the solid accent.
+    /// - Caution: the accent laid over the background (40 % light, 35 % dark, which keeps it 3:1
+    ///   from the accent there), drawn with `hatch` lines over it. In light mode the pale soft fill
+    ///   is under 3:1 from the accent: the hatch is what tells the two apart.
+    ///
+    /// Checked in `ChartPaletteTests`: an AA label on both (on the hatch too), resting and hovered,
+    /// and hue 14–18°.
+    public static func safetyFill(_ level: SafetyLevel, scheme: Scheme, lift: Double = 0) -> Contrast.RGB? {
+        let base: Contrast.RGB
+        switch level {
+        case .safe: base = accent(scheme)
+        case .caution: base = mix(accent(scheme), over: surface(scheme), strength: scheme == .dark ? 0.35 : 0.4)
+        case .normal, .protected: return nil
+        }
+        guard lift != 0 else { return base }
+        let (h, s, l) = Contrast.hslComponents(base)
+        return Contrast.hsl(h, s, min(max(l + lift, 0), 100))
+    }
+
+    /// Color of the hatch lines on caution elements: tone on tone, a step of the same orange, so a
+    /// large hatched area stays quiet next to the solid safe orange. Light: the accent at 75 % over
+    /// the background (about 1.5:1 on the soft fill, 2:1 hovered; the dark label keeps about 6.9:1 on
+    /// it). Dark: the accent deepened to 44 % lightness (about 2.1:1 on the soft fill), so the white
+    /// label caution takes keeps 4.5:1 where it crosses a line (on the full accent it would be 3.3:1).
+    public static func hatch(_ scheme: Scheme) -> Contrast.RGB {
+        scheme == .dark ? Contrast.hsl(16, 85, 44) : mix(accent(.light), over: surface(.light), strength: 0.75)
+    }
+
+    /// `color` laid over `base` at `strength` (0 = base, 1 = color), as an opaque color.
+    private static func mix(_ color: Contrast.RGB, over base: Contrast.RGB, strength: Double) -> Contrast.RGB {
+        Contrast.RGB(base.r + (color.r - base.r) * strength, base.g + (color.g - base.g) * strength,
+                     base.b + (color.b - base.b) * strength)
     }
 
     /// A palette color in HSL, with the lightest it may be drawn.

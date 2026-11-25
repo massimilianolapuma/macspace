@@ -252,3 +252,74 @@ private func mergedSurfaces(_ s: ChartPalette.Scheme) -> [Contrast.RGB] {
         }
     }
 }
+
+// MARK: "Eliminabili" (safety levels)
+
+/// The fills the "Eliminabili" mode draws for the two orange levels, resting and hovered (+12).
+private func safetyFills(_ s: ChartPalette.Scheme) -> [(SafetyLevel, Double, Contrast.RGB)] {
+    [SafetyLevel.safe, .caution].flatMap { level in
+        [0.0, 12].compactMap { lift in ChartPalette.safetyFill(level, scheme: s, lift: lift).map { (level, lift, $0) } }
+    }
+}
+
+/// Safe is the spec's solid accent (`hsl(16, 88%, 57%)`, dark `hsl(16, 85%, 56%)`); normal and
+/// protected take no safety fill, so they keep the neutral ring tone.
+@Test func safetyFillsAreTheAccentAndNeutralElsewhere() throws {
+    let light = try #require(ChartPalette.safetyFill(.safe, scheme: .light))
+    let dark = try #require(ChartPalette.safetyFill(.safe, scheme: .dark))
+    #expect(Contrast.deltaE(light, Contrast.hsl(16, 88, 57)) < 0.01)
+    #expect(Contrast.deltaE(dark, Contrast.hsl(16, 85, 56)) < 0.01)
+    for s in [ChartPalette.Scheme.light, .dark] {
+        #expect(ChartPalette.safetyFill(.caution, scheme: s) != nil)
+        for lift in [0.0, 12] {
+            #expect(ChartPalette.safetyFill(.normal, scheme: s, lift: lift) == nil)
+            #expect(ChartPalette.safetyFill(.protected, scheme: s, lift: lift) == nil)
+        }
+    }
+}
+
+/// A label on a safe or caution element reaches 4.5:1, resting and hovered, in both themes. A
+/// caution label also crosses the hatch lines, so the same ink reaches 4.5:1 on them too (which is
+/// why the dark hatch is a deeper accent: white on the full accent is only about 3.3:1).
+@Test func safetyFillsTakeAnAALabelIncludingTheHatch() {
+    for s in [ChartPalette.Scheme.light, .dark] {
+        for (level, lift, fill) in safetyFills(s) {
+            let ink = ChartPalette.labelInk(on: fill, scheme: s)
+            #expect(Contrast.ratio(ink, fill) >= 4.5, "\(s) \(level) +\(lift)")
+            if level == .caution {
+                #expect(Contrast.ratio(ink, ChartPalette.hatch(s)) >= 4.5, "\(s) caution +\(lift) ink on hatch")
+            }
+        }
+    }
+}
+
+/// Caution must not read as safe. Dark: the soft fill alone is 3:1 from the accent. Light: the
+/// pale soft fill is under 3:1 from the accent (about 1.9:1), so the hatch tells them apart; it
+/// stays visible on the caution fill (at least 1.3:1, resting and hovered) in both themes, yet quiet
+/// (tone on tone: under 2.5:1 at rest, so a large hatched area never outshouts the solid accent).
+@Test func cautionDiffersFromSafe() throws {
+    let darkSafe = try #require(ChartPalette.safetyFill(.safe, scheme: .dark))
+    let darkCaution = try #require(ChartPalette.safetyFill(.caution, scheme: .dark))
+    #expect(Contrast.ratio(darkSafe, darkCaution) >= 3)
+    for s in [ChartPalette.Scheme.light, .dark] {
+        for lift in [0.0, 12] {
+            let caution = try #require(ChartPalette.safetyFill(.caution, scheme: s, lift: lift))
+            #expect(Contrast.ratio(ChartPalette.hatch(s), caution) >= 1.3, "\(s) hatch on caution +\(lift)")
+            if lift == 0 { #expect(Contrast.ratio(ChartPalette.hatch(s), caution) < 2.5, "\(s) hatch stays quiet") }
+        }
+    }
+}
+
+/// The two orange levels and the hatch stay in the accent's hue (14–18°), resting and hovered;
+/// the safe fill and the hatch are the reserved orange itself (the dark soft fill, at about 48 %
+/// saturation, sits just below it, which is fine: it only has to stay orange in hue).
+@Test func safetyColorsStayInTheAccentHue() {
+    for s in [ChartPalette.Scheme.light, .dark] {
+        for (level, lift, fill) in safetyFills(s) {
+            #expect((14...18).contains(Contrast.hslComponents(fill).h), "\(s) \(level) +\(lift)")
+            if level == .safe { #expect(Contrast.isReservedOrange(fill), "\(s) safe +\(lift)") }
+        }
+        #expect((14...18).contains(Contrast.hslComponents(ChartPalette.hatch(s)).h), "\(s) hatch")
+        #expect(Contrast.isReservedOrange(ChartPalette.hatch(s)))
+    }
+}
