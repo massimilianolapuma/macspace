@@ -1,0 +1,60 @@
+/// Why `ScanStore.trash` left an item where it was.
+public enum TrashSkip: Sendable, Hashable {
+    /// No longer on disk, or already moved to the Trash.
+    case missing
+    /// On disk it is no longer what was scanned (a folder now a symbolic link, a file now a folder,
+    /// or a folder above it replaced).
+    case changed
+    /// The safety rules, re-evaluated right before moving, protect it (or something inside it).
+    case protected(SafetyReason)
+    /// It, or a file inside it, is open in some process.
+    case openNow
+    /// A folder above it is a package (per LaunchServices), so only the package as a whole may move.
+    case insidePackage
+    /// `TrashGuard` refused it.
+    case refused
+    /// The list of open files could not be read in full, so nothing was moved.
+    case cannotCheckOpenFiles
+    /// Checking or moving it failed; the message says why.
+    case failed(String)
+}
+
+/// What `ScanStore.trash` did with each top-most selected item.
+public struct TrashOutcome: Sendable {
+    public struct Moved: Sendable, Hashable {
+        public var node: NodeID
+        public var name: String
+        /// Its size in the tree right before it was removed.
+        public var size: UInt64
+        /// Where it is now inside the Trash; nil when the system reported no resulting path.
+        public var trashedPath: String?
+
+        public init(node: NodeID, name: String, size: UInt64, trashedPath: String?) {
+            self.node = node
+            self.name = name
+            self.size = size
+            self.trashedPath = trashedPath
+        }
+    }
+
+    public struct Skipped: Sendable, Hashable {
+        public var node: NodeID
+        public var name: String
+        public var reason: TrashSkip
+
+        public init(node: NodeID, name: String, reason: TrashSkip) {
+            self.node = node
+            self.name = name
+            self.reason = reason
+        }
+    }
+
+    /// In the order they were moved (largest first).
+    public var moved: [Moved]
+    public var skipped: [Skipped]
+
+    public init(moved: [Moved] = [], skipped: [Skipped] = []) {
+        self.moved = moved
+        self.skipped = skipped
+    }
+}

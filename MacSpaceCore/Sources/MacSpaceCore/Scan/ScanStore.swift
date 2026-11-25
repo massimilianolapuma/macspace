@@ -11,7 +11,7 @@ public enum ChartRequest: Sendable {
 /// Owns the `FileTree` being filled by a scan and answers queries about it.
 /// All mutation happens here, so the non-Sendable tree never leaves the actor.
 public actor ScanStore {
-    /// Internal (not private) for `ScanStore+Safety.swift`.
+    /// Internal (not private) for the `ScanStore+…` extensions.
     let tree: FileTree
     private let classifier: CategoryClassifier
     /// `(device, inode)` of every multiply-linked file already counted.

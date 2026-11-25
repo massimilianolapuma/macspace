@@ -114,6 +114,72 @@ public final class FileTree {
         return id
     }
 
+    /// Takes `id` out of the tree after it was moved to the Trash: unlinks it from its parent's
+    /// children, subtracts its size, per-category bytes and per-age bytes from every ancestor
+    /// (exactly what `addChild` added for it and its subtree), and marks it and its whole
+    /// subtree `.removed`, so stale ids below it are recognised too. Ancestors' `lastUsed` is not
+    /// lowered (it would need a subtree rescan). O(depth + siblings + subtree).
+    /// Precondition: `id` exists, is not the root and is not already removed.
+    public func remove(_ id: NodeID) {
+        precondition(id > Self.root && Int(id) < count, "FileTree.remove: invalid node or the root")
+        precondition(!flagsStore[Int(id)].contains(.removed), "FileTree.remove: already removed")
+        let i = Int(id)
+        let parent = Int(parents[i])
+
+        // Unlink from the parent's singly linked child list.
+        if firstChildren[parent] == id {
+            firstChildren[parent] = nextSiblings[i]
+        } else {
+            var c = firstChildren[parent]
+            while c >= 0 {
+                let next = nextSiblings[Int(c)]
+                if next == id {
+                    nextSiblings[Int(c)] = nextSiblings[i]
+                    break
+                }
+                c = next
+            }
+        }
+        nextSiblings[i] = -1
+
+        // What the node contributed to each ancestor: a directory's own rows, or a file's size
+        // under its category and age bucket (as `addChild` computed them).
+        let size = sizes[i]
+        var categoryDelta = [UInt64](repeating: 0, count: Self.categoryCount)
+        var ageDelta = [UInt64](repeating: 0, count: Self.ageCount)
+        let slot = Int(dirSlots[i])
+        if slot >= 0 {
+            for column in 0..<Self.categoryCount { categoryDelta[column] = categoryBytes[slot * Self.categoryCount + column] }
+            for column in 0..<Self.ageCount { ageDelta[column] = ageBytes[slot * Self.ageCount + column] }
+        } else {
+            categoryDelta[Int(categories[i])] = size
+            ageDelta[AgeBucket(lastUsed: lastUsedStore[i], now: now).rawValue] = size
+        }
+        var p = parent
+        while p >= 0 {
+            sizes[p] &-= size
+            let ancestorSlot = Int(dirSlots[p])
+            for column in 0..<Self.categoryCount where categoryDelta[column] != 0 {
+                categoryBytes[ancestorSlot * Self.categoryCount + column] &-= categoryDelta[column]
+            }
+            for column in 0..<Self.ageCount where ageDelta[column] != 0 {
+                ageBytes[ancestorSlot * Self.ageCount + column] &-= ageDelta[column]
+            }
+            p = Int(parents[p])
+        }
+
+        // Mark the subtree (its child links are kept, so it can still be walked).
+        var stack = [id]
+        while let n = stack.popLast() {
+            flagsStore[Int(n)].insert(.removed)
+            var c = firstChildren[Int(n)]
+            while c >= 0 {
+                stack.append(c)
+                c = nextSiblings[Int(c)]
+            }
+        }
+    }
+
     public func insertFlags(_ flags: NodeFlags, for id: NodeID) {
         flagsStore[Int(id)].formUnion(flags)
     }
