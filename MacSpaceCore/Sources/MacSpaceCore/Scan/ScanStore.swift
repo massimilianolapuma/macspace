@@ -17,7 +17,7 @@ public actor ScanStore {
     /// `(device, inode)` of every multiply-linked file already counted.
     private var seenHardLinks = Set<HardLinkKey>()
     /// Installer files (`dmg pkg mpkg xip`) found so far.
-    private var installerIDs: [NodeID] = []
+    var installerIDs: [NodeID] = []
 
     /// What `verdict` judges against; see `setEnvironment`.
     var environment: SafetyEnvironment
