@@ -117,13 +117,15 @@ private struct BiggestRow: View {
                     Color.clear.frame(height: 1)
                 }
             } else {
-                let inFolder = !model.selection.contains(row.id) && model.isCoveredBySelection(row.id)
+                let selected = model.selection.contains(row.id)
+                let inFolder = model.isInsideSelection(row.id)
                 Toggle(isOn: Binding(get: { model.isCoveredBySelection(row.id) },
                                      set: { _ in model.toggleSelection(row.id) })) { EmptyView() }
                     .toggleStyle(.checkbox)
                     .labelsHidden()
                     .disabled(inFolder)
-                    .help(inFolder ? Text("Fa già parte di una cartella selezionata") : Text("Seleziona"))
+                    .help(inFolder ? Text("Fa già parte di una cartella selezionata")
+                                   : selected ? Text("Deseleziona") : Text("Seleziona"))
             }
         }
         .frame(width: 24)

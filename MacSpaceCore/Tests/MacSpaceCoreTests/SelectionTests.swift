@@ -92,3 +92,18 @@ private func node(_ store: ScanStore, _ fx: Fixture, _ rel: String) async throws
     #expect(await store.commonFolder(of: []) == nil)
     #expect(await store.commonFolder(of: [FileTree.root]) == nil)
 }
+
+/// A protected folder in the request never hides what may be selected inside it: protected items
+/// go first, then the top-most rule applies to what is left.
+@Test func protectedFolderDoesNotHideSelectableItemsInside() async throws {
+    let fx = try Fixture(); defer { fx.cleanup() }
+    try fx.file("Library/Caches/com.gone.x/a", bytes: 2_000_000)
+    let store = try await scanned(fx)
+    let library = try await node(store, fx, "Library")
+    let cache = try await node(store, fx, "Library/Caches/com.gone.x")
+    #expect(await store.verdict(library)?.level == .protected)
+    #expect(await store.verdict(cache)?.level == .safe)
+    let resolved = await store.resolveSelection([library, cache])
+    #expect(resolved.ids == [cache])
+    #expect(resolved.total == (try #require(await store.row(cache))).size)
+}

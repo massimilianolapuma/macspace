@@ -25,6 +25,24 @@ extension ScanModel {
         selection.contains(node) || breadcrumb.contains { selection.contains($0.id) }
     }
 
+    /// Whether `node` is not selected itself but lies inside a selected folder: the breadcrumb or,
+    /// for deeper chart elements, the folders on screen above it.
+    func isInsideSelection(_ node: NodeID) -> Bool {
+        guard !selection.isEmpty, !selection.contains(node) else { return false }
+        if breadcrumb.contains(where: { selection.contains($0.id) }) { return true }
+        let links: [(NodeID, NodeID)] = switch chart {
+        case .sunburst: segments.compactMap { s in s.node.map { ($0, s.parent) } }
+        case .treemap: tiles.compactMap { t in t.node.map { ($0, t.parent) } }
+        }
+        let parents = Dictionary(links, uniquingKeysWith: { first, _ in first })
+        var up = parents[node]
+        while let folder = up {
+            if selection.contains(folder) { return true }
+            up = parents[folder]
+        }
+        return false
+    }
+
     /// Whether `node` may be offered for selection: not the root and not protected, as far as its
     /// verdict on screen tells (the store checks again).
     func isSelectable(_ node: NodeID?) -> Bool {
@@ -56,28 +74,38 @@ extension ScanModel {
     // MARK: Trash
 
     /// Why "Sposta nel Cestino…" is unavailable right now (nil: it is available): the scan is still
-    /// running (the store refuses it too), or the apps index is not ready, so `~/Library` items have
-    /// not been judged yet.
+    /// running or its end has not fully landed (the store refuses a running scan too), or the apps
+    /// index is not ready or a new environment is being applied, so verdicts are not final.
     var trashUnavailableReason: LocalizedStringResource? {
-        if isScanning { return "Analisi in corso…" }
-        if store != nil, !appsReady { return "Analisi delle app in corso…" }
+        guard store != nil else { return nil }
+        if isScanning || !scanSettled { return "Analisi in corso…" }
+        if !appsReady || environmentUpdates > 0 { return "Analisi delle app in corso…" }
         return nil
     }
 
-    /// Asks to move `ids` to the Trash: the confirmation sheet opens on them. Nothing moves here.
+    /// Asks to move `ids` (a suggestion's ticked items) to the Trash: the confirmation sheet opens
+    /// on what the store allows of them right now. Nothing moves here.
     func requestTrash(_ ids: [NodeID]) {
-        guard trashUnavailableReason == nil, store != nil, !ids.isEmpty else { return }
-        pendingTrash = ids
+        requestTrash { _ in Set(ids) }
     }
 
-    /// "Sposta nel Cestino…" in the selection bar: the selection, largest first.
+    /// "Sposta nel Cestino…" in the selection bar: the selection, once every pending change to it
+    /// has landed.
     func requestTrashOfSelection() {
-        guard let store else { return }
-        let ids = selection
+        requestTrash { $0 }
+    }
+
+    /// Waits for pending selection changes, then sets `pendingTrash` to what the store allows of
+    /// `ids(selection)` now (`resolveSelection`: never protected, top-most, largest first), unless
+    /// the scan or environment changed meanwhile or nothing is left.
+    private func requestTrash(_ ids: @escaping (Set<NodeID>) -> Set<NodeID>) {
+        guard let store, trashUnavailableReason == nil else { return }
+        let previous = selectionWork
         Task {
-            let top = await store.topMost(ids)
-            guard store === self.store, ids == selection else { return }
-            requestTrash(top)
+            await previous?.value
+            let resolved = await store.resolveSelection(ids(selection))
+            guard store === self.store, trashUnavailableReason == nil, !resolved.ids.isEmpty else { return }
+            pendingTrash = resolved.ids
         }
     }
 

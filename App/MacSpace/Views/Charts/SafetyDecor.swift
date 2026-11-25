@@ -62,17 +62,24 @@ enum SafetyDecor {
     enum Mark {
         case selected, highlighted
 
-        /// 2 pt for a selected element, the same line lighter for a highlighted one: 1.5 pt (at 1 pt
-        /// it reads as one more separator) and toned down, so the two never look alike.
+        /// 2 pt for a selected element; the same ink lighter, 1.5 pt, for a highlighted one.
         var lineWidth: Double { self == .selected ? 2 : 1.5 }
-        var opacity: Double { self == .selected ? 1 : 0.6 }
+        /// How wide the mark is drawn in all: a highlighted line is cased in the background tone,
+        /// so it stays legible on solid orange and on hatching, and never looks like a selection.
+        var extent: Double { self == .selected ? 2 : 4 }
     }
 
-    /// Strokes `path`'s outline in the primary text color, the same in both charts.
+    /// Strokes `path`'s outline in the primary text color, the same in both charts; a highlighted
+    /// one over a casing in the background tone.
     static func selectionOutline(_ path: Path, mark: Mark, alpha: Double = 1, scheme: ColorScheme,
                                  in context: GraphicsContext) {
-        context.stroke(path, with: .color(FusionPalette.primaryText(scheme).opacity(alpha * mark.opacity)),
-                       style: StrokeStyle(lineWidth: mark.lineWidth, lineJoin: .round))
+        let style = { (width: Double) in StrokeStyle(lineWidth: width, lineJoin: .round) }
+        if mark == .highlighted {
+            context.stroke(path, with: .color(FusionPalette.background(scheme).opacity(0.9 * alpha)),
+                           style: style(mark.extent))
+        }
+        context.stroke(path, with: .color(FusionPalette.primaryText(scheme).opacity(alpha)),
+                       style: style(mark.lineWidth))
     }
 
     /// Whether an element `width` × `height` pt has room for a standalone lock.

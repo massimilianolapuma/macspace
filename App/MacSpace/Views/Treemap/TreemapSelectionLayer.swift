@@ -56,7 +56,7 @@ struct TreemapSelectionLayer: View {
     /// The tile's rounded outline, drawn just inside its edge so the gap around it stays clear.
     private static func outline(_ rect: CGRect, depth: Int, mark: SafetyDecor.Mark, alpha: Double,
                                 scheme: ColorScheme, in context: GraphicsContext) {
-        let inset = mark.lineWidth / 2
+        let inset = mark.extent / 2
         let line = rect.insetBy(dx: inset, dy: inset)
         guard line.width > 0, line.height > 0 else { return }
         let radius = max(TreemapView.cornerRadius(rect, depth: depth) - inset, 0)

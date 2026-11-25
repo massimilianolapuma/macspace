@@ -23,6 +23,7 @@ struct SidebarView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
+            .accessibilityLabel(Text("Pannello"))
             .padding(.horizontal, 12)
             .padding(.top, 10)
             Group {
@@ -93,7 +94,7 @@ struct TrashButton: View {
 }
 
 /// "<N> selezionati · <totale>" ("1 selezionato" in the singular).
-struct SelectedCount: View {
+private struct SelectedCount: View {
     let count: Int
     let total: UInt64
 

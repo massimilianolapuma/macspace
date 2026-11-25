@@ -81,7 +81,8 @@ enum ChartSelection {
 
 extension View {
     /// "Seleziona" or "Deseleziona" on a segment, tile or list row that may be selected, and the
-    /// selected trait while it is. The selection is read in the modifier, so a change to it
+    /// selected trait while it is; inside a selected folder, no action but the selected trait and a
+    /// hint saying why. The selection is read in the modifier, so a change to it
     /// re-evaluates only the elements, not the chart around them.
     func selectionAction(node: NodeID?, model: ScanModel) -> some View {
         modifier(SelectionAction(node: node, model: model))
@@ -105,7 +106,12 @@ private struct SelectionAction: ViewModifier {
     let model: ScanModel
 
     func body(content: Content) -> some View {
-        if let node, model.isSelectable(node) {
+        if let node, model.isInsideSelection(node) {
+            // Goes with its selected folder: nothing to select on its own, but say so.
+            content
+                .accessibilityAddTraits(.isSelected)
+                .accessibilityHint(Text("Fa già parte di una cartella selezionata"))
+        } else if let node, model.isSelectable(node) {
             let selected = model.selection.contains(node)
             content
                 .accessibilityAction(named: selected ? Text("Deseleziona") : Text("Seleziona")) {

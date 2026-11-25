@@ -9,13 +9,17 @@ struct SuggestionsView: View {
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        if model.suggestions.isEmpty {
+        if model.suggestions.isEmpty || !model.scanSettled {
             empty
         } else {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 18) {
+                    if wasCancelled {
+                        note("Analisi interrotta: i suggerimenti possono essere incompleti",
+                             systemImage: "pause.circle")
+                    }
                     if !model.appsReady {
-                        pendingNote
+                        note("Analisi delle app in corso…", systemImage: nil)
                     }
                     ForEach(model.suggestions) { suggestion in
                         SuggestionSection(model: model, suggestion: suggestion)
@@ -28,37 +32,63 @@ struct SuggestionsView: View {
         }
     }
 
-    /// No scan yet, scanning, apps index not ready, or nothing to suggest.
+    private var wasCancelled: Bool {
+        if case let .done(summary) = model.phase { return summary.wasCancelled }
+        return false
+    }
+
+    /// No scan yet; scanning, or its end still landing (no flash of "nothing found"); apps index
+    /// not ready; a cancelled scan; or nothing to suggest.
     private var empty: some View {
         VStack(spacing: 10) {
             switch model.phase {
             case .idle:
-                Text("Analizza per vedere i suggerimenti")
+                message("Analizza per vedere i suggerimenti")
             case .scanning:
                 ProgressView().controlSize(.small)
-                Text("Analisi in corso…")
+                message("Analisi in corso…")
+            case .done where !model.scanSettled:
+                ProgressView().controlSize(.small)
+                message("Analisi in corso…")
             case .done where !model.appsReady:
                 ProgressView().controlSize(.small)
-                Text("Analisi delle app in corso…")
+                message("Analisi delle app in corso…")
+            case .done where wasCancelled:
+                Image(systemName: "pause.circle")
+                    .font(.title2)
+                    .foregroundStyle(FusionPalette.secondaryText(scheme))
+                    .accessibilityHidden(true)
+                message("Analisi interrotta: i suggerimenti possono essere incompleti", emphasized: true)
             case .done:
                 Image(systemName: "checkmark.circle")
                     .font(.title2)
+                    .foregroundStyle(FusionPalette.secondaryText(scheme))
                     .accessibilityHidden(true)
-                Text("Nessun suggerimento: qui è tutto in ordine")
+                message("Nessun suggerimento: qui è tutto in ordine", emphasized: true)
             }
         }
         .font(.callout)
-        .foregroundStyle(FusionPalette.secondaryText(scheme))
         .multilineTextAlignment(.center)
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    /// Leftovers need the apps index: until it is ready, only the other groups can show.
-    private var pendingNote: some View {
-        HStack(spacing: 8) {
-            ProgressView().controlSize(.mini)
-            Text("Analisi delle app in corso…")
+    /// An empty state's words: an outcome in the primary ink, a wait or a hint in the secondary.
+    private func message(_ key: LocalizedStringKey, emphasized: Bool = false) -> some View {
+        Text(key)
+            .foregroundStyle(emphasized ? FusionPalette.primaryText(scheme) : FusionPalette.secondaryText(scheme))
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// A one-line note above the sections: a spinner while waiting, else `systemImage`.
+    private func note(_ key: LocalizedStringKey, systemImage: String?) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            if let systemImage {
+                Image(systemName: systemImage).accessibilityHidden(true)
+            } else {
+                ProgressView().controlSize(.mini)
+            }
+            Text(key).fixedSize(horizontal: false, vertical: true)
         }
         .font(.caption)
         .foregroundStyle(FusionPalette.secondaryText(scheme))
@@ -94,10 +124,18 @@ private struct SuggestionSection: View {
                     .padding(.vertical, 2)
             }
             HStack(spacing: 8) {
-                SelectedCount(count: ticked.count, total: ticked.reduce(0) { $0 + $1.size })
-                    .font(.caption)
-                    .foregroundStyle(FusionPalette.secondaryText(scheme))
-                    .layoutPriority(1)
+                // Ticks, not the selection: "<n> di <m>" (R37).
+                HStack(spacing: 4) {
+                    Text("\(ticked.count) di \(suggestion.items.count)")
+                    Text(verbatim: "·").accessibilityHidden(true)
+                    Text(verbatim: Formatters.bytes(ticked.reduce(0) { $0 + $1.size }))
+                }
+                .monospacedDigit()
+                .lineLimit(1)
+                .accessibilityElement(children: .combine)
+                .font(.caption)
+                .foregroundStyle(FusionPalette.secondaryText(scheme))
+                .layoutPriority(1)
                 Spacer(minLength: 4)
                 // Quieter than the selection bar's: one per section.
                 TrashButton(model: model, prominent: false, isEnabled: !ticked.isEmpty) {
@@ -179,11 +217,13 @@ private struct SuggestionItemRow: View {
         .accessibilityElement(children: .combine)
         .accessibilityLabel(Text(verbatim: [item.name, item.verdict.level.spokenTitle].compactMap { $0 }
             .joined(separator: ", ")))
-        .accessibilityValue(Text(verbatim: [Formatters.bytes(item.size), item.verdict.sentence].compactMap { $0 }
-            .joined(separator: ", ")))
-        .accessibilityAddTraits(model.isTicked(item) ? .isSelected : [])
-        .accessibilityAction(named: model.isTicked(item) ? Text("Deseleziona") : Text("Seleziona")) {
-            model.setTicked(item, !model.isTicked(item))
+        // The tick is the checkbox's own state, said first; it is not the chart selection (R37).
+        .accessibilityValue(Text(verbatim: [ticked ? String(localized: "Spuntato") : String(localized: "Non spuntato"),
+                                            Formatters.bytes(item.size), folderName, item.verdict.sentence]
+            .compactMap { $0 }.joined(separator: ", ")))
+        .accessibilityAddTraits(.isToggle)
+        .accessibilityAction(named: ticked ? Text("Togli la spunta") : Text("Spunta")) {
+            model.setTicked(item, !ticked)
         }
     }
 
@@ -193,6 +233,8 @@ private struct SuggestionItemRow: View {
             .truncationMode(.middle)
             .foregroundStyle(FusionPalette.primaryText(scheme))
     }
+
+    private var ticked: Bool { model.isTicked(item) }
 
     /// The name of the folder the item is in, as the chart names it.
     private var folderName: String {

@@ -8,12 +8,13 @@ public struct SelectionSummary: Sendable, Equatable {
 
 /// Selection rules (spec §5.6) and the folders the app navigates to for a group of items.
 extension ScanStore {
-    /// `ids` reduced to what may stay selected: `topMost(ids)` (no stale IDs, no root, nothing
-    /// removed, nothing inside another selected folder) minus every item whose verdict is protected.
-    /// Selecting a folder therefore drops what was selected inside it, and selecting something inside
-    /// a selected folder changes nothing.
+    /// `ids` reduced to what may stay selected: first every item whose verdict is protected goes
+    /// (and stale IDs), then `topMost` of the rest (no root, nothing removed, nothing inside another
+    /// selected folder). Selecting a folder therefore drops what was selected inside it, selecting
+    /// something inside a selected folder changes nothing, and a protected folder never hides what
+    /// may be selected inside it.
     public func resolveSelection(_ ids: Set<NodeID>) -> SelectionSummary {
-        let kept = topMost(ids).filter { judged($0).level != .protected }
+        let kept = topMost(ids.filter { contains($0) && judged($0).level != .protected })
         return SelectionSummary(ids: kept, total: kept.reduce(0) { $0 + tree.size($1) })
     }
 

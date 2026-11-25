@@ -89,6 +89,12 @@ final class ScanModel {
     var pendingTrash: [NodeID]?
     /// Whether the installed apps index is ready, so `~/Library` items have been judged.
     private(set) var appsReady = false
+    /// The last scan's end has fully landed: verdicts judged again on the finished tree, the
+    /// selection re-resolved and the suggestions recomputed. Until then the Trash stays unavailable,
+    /// so no request is made on provisional verdicts.
+    private(set) var scanSettled = true
+    /// Environment updates still being applied (verdicts, selection, suggestions); the Trash waits.
+    private(set) var environmentUpdates = 0
 
     static let ringDepth = 3
     static let biggestLimit = 20
@@ -118,12 +124,15 @@ final class ScanModel {
         environment = env
         if appsReady != (env.apps != nil) { appsReady = env.apps != nil }
         guard let store else { return }
+        environmentUpdates += 1
         Task {
+            defer { environmentUpdates -= 1 }
             // Read when the task runs, so of two quick updates the store ends with the latest.
             guard let latest = environment else { return }
             await store.setEnvironment(latest)
             guard store === self.store else { return }
             await refreshViews()
+            await selectionWork?.value  // the re-resolve `refreshViews` queued
             await refreshSuggestions()
         }
     }
@@ -295,8 +304,9 @@ final class ScanModel {
         categoryTotals = [:]
         ageTotals = [:]
         showsMerged = false
-        selectionWork?.cancel()
+        // Changes still queued for the old store drop themselves (they check the store).
         selectionWork = nil
+        scanSettled = false
         selection = []
         selectionTotal = 0
         highlighted = []
@@ -332,7 +342,9 @@ final class ScanModel {
         // predates the final inserts: judge and show the finished tree.
         await store.invalidateVerdicts()
         await refreshViews()
+        await selectionWork?.value  // the re-resolve `refreshViews` queued, on the final verdicts
         await refreshSuggestions()
+        if store === self.store { scanSettled = true }
     }
 
     /// The startup volume's name as Finder shows it ("Macintosh HD" unless renamed).

@@ -4,6 +4,9 @@
     "%@ file" : {
 
     },
+    "%lld di %lld" : {
+
+    },
     "%lld selezionati" : {
       "localizations" : {
         "it" : {
@@ -48,6 +51,9 @@
 
     },
     "Analisi interrotta · %@ file" : {
+
+    },
+    "Analisi interrotta: i suggerimenti possono essere incompleti" : {
 
     },
     "Analizza" : {
@@ -209,6 +215,9 @@
     "Non leggibile" : {
 
     },
+    "Non spuntato" : {
+
+    },
     "Non usato da oltre 2 anni (stima)" : {
 
     },
@@ -216,6 +225,9 @@
 
     },
     "Oltre 2 anni" : {
+
+    },
+    "Pannello" : {
 
     },
     "Per lo più: %@" : {
@@ -284,6 +296,12 @@
     "Sposta nel Cestino…" : {
 
     },
+    "Spunta" : {
+
+    },
+    "Spuntato" : {
+
+    },
     "Suggerimenti" : {
 
     },
@@ -294,6 +312,9 @@
 
     },
     "Togli l'evidenziazione" : {
+
+    },
+    "Togli la spunta" : {
 
     },
     "Torna su" : {
