@@ -98,8 +98,6 @@ final class ScanModel {
 
     // Moving to the Trash (`ScanModel+Trash.swift`).
 
-    /// What the last move to the Trash did, as the store reported it; nil before the first.
-    var lastOutcome: TrashOutcome?
     /// The finished move the sheet shows in place of the confirmation (nil: none). The sheet is up
     /// while this or `pendingTrash` is set.
     var trashReport: TrashReport?
@@ -123,8 +121,9 @@ final class ScanModel {
     /// Selection changes run one after the other, each against the outcome of the previous one.
     @ObservationIgnored var selectionWork: Task<Void, Never>?
     @ObservationIgnored private var scanTask: Task<Void, Never>?
-    /// What verdicts are judged against (`updateEnvironment`); nil until the provider's first one.
-    @ObservationIgnored private var environment: SafetyEnvironment?
+    /// What verdicts are judged against (`updateEnvironment`, or the live one `trash` reads); nil
+    /// until the provider's first one.
+    @ObservationIgnored var environment: SafetyEnvironment?
     /// Nodes whose Spotlight last use was asked for in this scan (found or not).
     @ObservationIgnored private var lastUsedRequested: Set<NodeID> = []
     /// Waits for the pointer to rest on a node before looking it up.
@@ -336,10 +335,9 @@ final class ScanModel {
         storeGeneration += 1
         phase = .scanning(ScanProgress(filesSeen: 0, bytesSeen: 0, directoriesPending: 1))
         if let environment {
-            // The same apps, judged at the current time (rules measure ages from `now`).
-            let fresh = SafetyEnvironment.system(home: environment.home, apps: environment.apps,
-                                                 runningBundleIDs: environment.runningBundleIDs,
-                                                 runningAppPaths: environment.runningAppPaths)
+            // The same apps, judged at the current time (rules measure ages from `now`) with the
+            // apps running now.
+            let fresh = SafetyEnvironmentProvider.environment(apps: environment.apps)
             self.environment = fresh
             await store.setEnvironment(fresh)
         }

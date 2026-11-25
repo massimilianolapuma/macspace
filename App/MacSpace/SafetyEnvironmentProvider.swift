@@ -5,7 +5,9 @@ import Observation
 
 /// Keeps the `SafetyEnvironment` the safety rules judge against up to date: builds the installed
 /// apps index once at launch, in the background (until then `apps` is nil and `~/Library` items
-/// stay "Analisi delle app in corso…"), and follows apps launching and quitting.
+/// stay "Analisi delle app in corso…"), and follows apps launching and quitting. The launch and
+/// quit notifications skip background-only and `LSUIElement` apps, so `runningApplications` is
+/// also observed through KVO, which reports every change to the list.
 @MainActor @Observable
 final class SafetyEnvironmentProvider {
     /// The latest environment; `revision` changes with it.
@@ -13,12 +15,14 @@ final class SafetyEnvironmentProvider {
     /// Bumped on every new `environment`, for views to observe (the environment is not Equatable).
     private(set) var revision = 0
 
-    /// Coalesces bursts of launch/quit notifications.
+    /// Coalesces bursts of launch/quit notifications. Only the views wait for it: `ScanModel.trash`
+    /// reads the running apps itself right before moving.
     static let runningAppsDebounce: Duration = .milliseconds(500)
 
     @ObservationIgnored private var apps: AppsIndex?
     @ObservationIgnored private var tasks: [Task<Void, Never>] = []
     @ObservationIgnored private var pendingRefresh: Task<Void, Never>?
+    @ObservationIgnored private var runningObservation: NSKeyValueObservation?
 
     /// Cheap: the work starts in `start()`, so a throwaway instance (SwiftUI may evaluate a
     /// `@State` initial value more than once) costs nothing.
@@ -46,11 +50,16 @@ final class SafetyEnvironmentProvider {
                 }
             })
         }
+        // Every change to the list, agents and background-only apps included.
+        runningObservation = NSWorkspace.shared.observe(\.runningApplications) { [weak self] _, _ in
+            Task { @MainActor in self?.scheduleRefresh() }
+        }
     }
 
     isolated deinit {
         tasks.forEach { $0.cancel() }
         pendingRefresh?.cancel()
+        runningObservation?.invalidate()
     }
 
     /// Publishes a fresh environment `runningAppsDebounce` after the last launch or quit.
@@ -68,8 +77,9 @@ final class SafetyEnvironmentProvider {
         revision += 1
     }
 
-    /// The environment now: `apps`, and the bundle IDs and bundle paths of the running apps.
-    private static func environment(apps: AppsIndex?) -> SafetyEnvironment {
+    /// The environment now: `apps`, the bundle IDs and bundle paths of the apps running at this
+    /// moment, and the home folders iCloud Drive syncs.
+    static func environment(apps: AppsIndex?) -> SafetyEnvironment {
         let running = NSWorkspace.shared.runningApplications
         return .system(home: NSHomeDirectory(), apps: apps,
                        runningBundleIDs: Set(running.compactMap(\.bundleIdentifier)),

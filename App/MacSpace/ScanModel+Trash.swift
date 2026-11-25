@@ -94,13 +94,16 @@ extension ScanModel {
     /// Moves `ids` to the Trash through `ScanStore.trash`, which re-checks each one right before
     /// moving it (still there and unchanged, not open, not protected, not inside a package, and at
     /// the level in `expectedLevels`: what the user saw and confirmed; an item missing from it is
-    /// skipped) and skips with a reason whatever fails. Then: the history gains what moved, the selection, ticks and outlines lose it, the
-    /// views and suggestions are refreshed (the tree was updated in place).
+    /// skipped) and skips with a reason whatever fails. The store first gets the apps running at
+    /// this moment (ruling R41), not the debounced environment the views show: an app launched
+    /// since protects its data and bundle, and a level that changed with it skips `.verdictChanged`.
+    /// Then: the history gains what moved, the selection, ticks and outlines lose it, the views and
+    /// suggestions are refreshed (the tree was updated in place).
     /// Refused while another move runs or while the Trash is unavailable: nothing is moved then.
     func trash(_ ids: [NodeID], expectedLevels: [NodeID: SafetyLevel]) async -> TrashOutcome {
         guard let store else { return TrashOutcome() }
         guard !isTrashing else { return TrashOutcome() }
-        guard trashUnavailableReason == nil else {
+        guard trashUnavailableReason == nil, let environment else {
             // Said as it is: the scan has not settled, or verdicts are still being updated.
             let reason: TrashSkip = isScanning || !scanSettled ? .scanInProgress : .appsAnalysisInProgress
             var skipped: [TrashOutcome.Skipped] = []
@@ -112,6 +115,14 @@ extension ScanModel {
         }
         isTrashing = true
         defer { isTrashing = false }
+        // The running apps (and iCloud sync) read now. Kept as the model's environment too, so an
+        // update queued meanwhile cannot hand the store an older one before the move.
+        let live = SafetyEnvironmentProvider.environment(apps: environment.apps)
+        let changed = live.runningBundleIDs != environment.runningBundleIDs
+            || live.runningAppPaths != environment.runningAppPaths
+            || live.syncedHomeFolders != environment.syncedHomeFolders
+        self.environment = live
+        await store.setEnvironment(live)
         // On the store's actor: blocking file system calls, off the main actor.
         let outcome = await store.trash(Set(ids), actions: SystemDiskActions(), packages: SystemPackageProbe(),
                                         openFiles: { OpenFileSet.current() }, expectedLevels: expectedLevels)
@@ -120,7 +131,8 @@ extension ScanModel {
         history.insert(contentsOf: outcome.moved.map {
             HistoryEntry(name: $0.name, size: $0.size, date: now, trashedURL: $0.trashedPath.map { URL(filePath: $0) })
         }, at: 0)
-        lastOutcome = outcome
+        // Verdicts on screen still follow the older environment: refresh them all, as an update does.
+        if changed, store === self.store { updateEnvironment(live) }
         guard store === self.store, !outcome.moved.isEmpty else { return outcome }
 
         let moved = Set(outcome.moved.map(\.node))
