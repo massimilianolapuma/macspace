@@ -358,8 +358,24 @@ private let old: UInt32 = 1_000_000_000
     #expect(v(lib + "/LaunchAgents/com.openai.chat.agent.plist", kind: .file, apps: apps).reason == .leftoverLaunchAgent)
     #expect(v(lib + "/Application Support/com.openai.codex", lastUsed: old, apps: apps)
             == SafetyVerdict(level: .caution, reason: .appData, owner: "ChatGPT"))
-    // Never safe: not preselected, and the reason says why.
-    #expect(SafetyLevel.caution.isTrashable)
+}
+
+@Test func sharedHostingPrefixesAreNoVendor() {   // final review minor: R36 must not name an unrelated app
+    #expect(SafetyTables.notVendorPrefixes == ["io.github", "com.github", "org.electron", "com.electron"])
+    let apps = AppsIndex(records: [
+        AppRecord(bundleID: "io.github.alice.Tool", name: "Tool", teamID: nil, path: "/Applications/Tool.app"),
+        AppRecord(bundleID: "com.github.bob.Viewer", name: "Viewer", teamID: nil, path: "/Applications/Viewer.app"),
+        AppRecord(bundleID: "org.electron.fiddle", name: "Fiddle", teamID: nil, path: "/Applications/Fiddle.app"),
+        AppRecord(bundleID: "com.electron.app1", name: "App1", teamID: nil, path: "/Applications/App1.app"),
+    ])
+    for id in ["io.github.carol.Other", "com.github.dave.Thing", "org.electron.other", "COM.Electron.app2"] {
+        #expect(v(lib + "/Application Support/" + id, lastUsed: old, apps: apps)
+                == SafetyVerdict(level: .safe, reason: .leftover), "\(id)")
+        #expect(v(lib + "/Caches/" + id, apps: apps) == SafetyVerdict(level: .safe, reason: .leftover), "\(id)")
+    }
+    #expect(apps.app(forVendorOf: "io.github.carol.Other") == nil)
+    // The apps themselves still own their data.
+    #expect(v(lib + "/Application Support/io.github.alice.Tool", apps: apps).owner == "Tool")
 }
 
 @Test func leftoverRecencyBoundaries() {

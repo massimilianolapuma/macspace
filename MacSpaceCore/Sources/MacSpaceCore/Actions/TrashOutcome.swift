@@ -5,8 +5,11 @@ public enum TrashSkip: Sendable, Hashable {
     /// On disk it is no longer what was scanned: another kind of object (a folder now a symbolic
     /// link, a file now a folder), a folder above it replaced, now a mount point, or on another volume.
     case changed
-    /// The safety rules, re-evaluated right before moving, protect it (or something inside it).
+    /// The safety rules, re-evaluated right before moving, protect it.
     case protected(SafetyReason)
+    /// A folder holding something the rules protect as a whole (a running app, a Photos library,
+    /// Apple data…), for the given reason; the folder itself may not be protected.
+    case containsProtected(SafetyReason)
     /// Its fresh safety level is not the one the user confirmed (`trash`'s `expectedLevels`), or it
     /// has no confirmed level there.
     case verdictChanged

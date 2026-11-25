@@ -117,7 +117,7 @@ public struct AppsIndex: Sendable {
     }
 
     /// Whether any installed app is signed by `teamID`.
-    public func hasTeam(_ teamID: String) -> Bool {
+    func hasTeam(_ teamID: String) -> Bool {
         teams.contains(Self.lower(teamID))
     }
 
@@ -156,11 +156,11 @@ public struct AppsIndex: Sendable {
         var appPaths: [String] = []
         var seenApps: Set<String> = []
         func add(_ path: String) {
-            let clean = normalized(path)
+            let clean = SafetyTables.normalized(path)
             if seenApps.insert(clean).inserted { appPaths.append(clean) }
         }
         for rawRoot in roots {
-            let root = normalized(rawRoot)
+            let root = SafetyTables.normalized(rawRoot)
             for entry in names(in: root) {
                 let path = root + "/" + entry
                 if isApp(entry) {
@@ -192,20 +192,16 @@ public struct AppsIndex: Sendable {
 
     // MARK: - Helpers
 
-    /// ASCII-only lowercase, so lookups never depend on Unicode case folding.
-    private static func lower(_ string: String) -> String {
-        var bytes = Array(string.utf8)
-        for index in bytes.indices where bytes[index] >= 0x41 && bytes[index] <= 0x5A { bytes[index] += 0x20 }
-        return String(decoding: bytes, as: UTF8.self)
-    }
+    /// ASCII-only lowercase (`SafetyPaths.key`), so lookups never depend on Unicode case folding.
+    private static func lower(_ string: String) -> String { SafetyPaths.key(string) }
 
     /// The first two labels of a lowercased identifier (`com.openai`), or nil when it has fewer than 2
-    /// non-empty leading labels or the vendor is `com.apple`.
+    /// non-empty leading labels, the vendor is `com.apple` or one of `SafetyTables.notVendorPrefixes`.
     private static func vendor(of id: String) -> String? {
         let labels = id.split(separator: ".", maxSplits: 2, omittingEmptySubsequences: false)
         guard labels.count >= 2, !labels[0].isEmpty, !labels[1].isEmpty else { return nil }
-        let vendor = labels[0] + "." + labels[1]
-        return vendor == "com.apple" ? nil : String(vendor)
+        let vendor = String(labels[0] + "." + labels[1])
+        return vendor == "com.apple" || SafetyTables.notVendorPrefixes.contains(vendor) ? nil : vendor
     }
 
     /// Proper dot-prefixes of `id` that keep at least 2 labels, longest first.
@@ -225,12 +221,6 @@ public struct AppsIndex: Sendable {
     static func baseName(ofPath path: String) -> String {
         let fileName = (path as NSString).lastPathComponent
         return fileName.lowercased().hasSuffix(".app") && fileName.count > 4 ? String(fileName.dropLast(4)) : fileName
-    }
-
-    private static func normalized(_ path: String) -> String {
-        var result = path
-        while result.count > 1 && result.hasSuffix("/") { result.removeLast() }
-        return result
     }
 
     /// Whether `name` looks like a reverse-DNS identifier (privileged helpers are named by it).

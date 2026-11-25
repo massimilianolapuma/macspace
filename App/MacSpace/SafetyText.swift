@@ -91,6 +91,14 @@ extension TrashSkip {
         case .changed: String(localized: "È cambiato dopo l'analisi")
         case let .protected(reason):
             String(localized: "Ora è protetto. \(SafetyVerdict(level: .protected, reason: reason).sentence ?? String(localized: SafetyLevel.protected.title))")
+        case let .containsProtected(reason):
+            switch reason {
+            case .runningApp: String(localized: "Contiene un'app in esecuzione")
+            case .runningAppData: String(localized: "Contiene dati di un'app in esecuzione")
+            case .photosLibrary: String(localized: "Contiene una libreria di Foto")
+            case .appleData: String(localized: "Contiene dati di sistema di Apple")
+            default: String(localized: "Contiene elementi protetti")
+            }
         case .verdictChanged: String(localized: "La sua valutazione è cambiata: controllalo di nuovo")
         case .appsAnalysisInProgress: String(localized: "Analisi delle app in corso: riprova tra poco")
         case .openNow: String(localized: "Aperto ora in un'app")

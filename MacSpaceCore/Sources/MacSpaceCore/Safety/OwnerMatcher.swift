@@ -79,7 +79,7 @@ public enum OwnerMatcher {
 
     /// The identifier `name` stands for in `location` (suffix, `group.`, team prefix and a trailing
     /// file extension removed), or nil when it is not identifier-like.
-    public static func identifier(from name: String, in location: LibraryLocation) -> String? {
+    static func identifier(from name: String, in location: LibraryLocation) -> String? {
         let core = withoutFileExtension(parse(name, in: location).text)
         return isIdentifierLike(core) ? core : nil
     }

@@ -78,7 +78,7 @@ struct ContentView: View {
         }
         .onChange(of: target) {
             // Picking another target mid-scan replaces the running scan.
-            if model.isScanning { model.start(target) }
+            if model.isScanning { startScan() }
         }
         .sheet(isPresented: $showOnboarding) {
             OnboardingView(dismiss: { showOnboarding = false })
@@ -147,10 +147,17 @@ struct ContentView: View {
                 Button("Interrompi", systemImage: "stop.fill") { model.cancel() }
                     .labelStyle(.titleAndIcon)
             } else {
-                Button("Analizza", systemImage: "play.fill") { model.start(target) }
+                Button("Analizza", systemImage: "play.fill") { startScan() }
                     .labelStyle(.titleAndIcon)
             }
         }
+    }
+
+    /// Scans `target`; the installed apps are indexed again meanwhile (apps installed or removed
+    /// since launch), keeping the previous index until the new one lands.
+    private func startScan() {
+        safety.rebuildApps()
+        model.start(target)
     }
 
     /// Scan state and file count; the byte total lives only in the chart's center.

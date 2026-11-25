@@ -29,6 +29,7 @@ extension ScanStore {
     /// Moves each `topMost` item of `ids` to the Trash with `actions`, after re-checking it, and
     /// takes what moved out of the tree. Every check fails closed; an item is skipped at the first
     /// one that fails. Before any item:
+    /// - nothing is left after `topMost` (root, stale IDs): nothing happens, `openFiles` is not called;
     /// - the scan has not finished (`markScanFinished`): every item → `.scanInProgress`, nothing
     ///   moves and `openFiles` is not called;
     /// - otherwise `openFiles()` is called exactly once; if incomplete, every item →
@@ -46,7 +47,7 @@ extension ScanStore {
     /// 5. it or a file inside it is open → `.openNow`;
     /// 6. a folder holding something the rules protect as a whole (Apple data, a Photos library, a
     ///    running app or its data, an essential, system or Trash folder, an unusual path), or a
-    ///    running app's bundle → `.protected(reason)`; a folder whose contents were not all seen
+    ///    running app's bundle → `.containsProtected(reason)`; a folder whose contents were not all seen
     ///    (it or a folder inside it is a mount point, unreadable, not fully listed or not descended
     ///    by the scan, or a volume is mounted at or below it right now) → `.containsUnverified`;
     /// 7. on disk, checked last, right before the move: gone → `.missing`; cannot be examined →
@@ -54,8 +55,20 @@ extension ScanStore {
     ///    was not confined to, or a folder above it (up to the scan root) no longer a folder → `.changed`;
     /// 8. `moveToTrash` throws → `.failed(error.localizedDescription)`.
     ///
-    /// Residual window: between the step-7 `stat` and the rename inside `moveToTrash` the item can
-    /// still be swapped; its identity is checked by kind, mount status and device only (not inode).
+    /// Residuals (security review, documented):
+    /// - S3: between the step-7 `stat` and the rename inside `moveToTrash` the item can still be
+    ///   swapped; its identity is checked by kind, mount status and device only (not inode), and the
+    ///   mount table is read without waiting (`MNT_NOWAIT`).
+    /// - S4: step 6 walks the scan-time tree. Contents added after the scan are not re-walked on
+    ///   disk: a Photos library or a `.Trashes` folder moved inside a folder since, or a running app
+    ///   placed there (running apps are matched by their live bundle paths, but only those). Open
+    ///   files, running apps and mounts are read live.
+    /// - S2: names are decoded lossily; `TrashGuard` refuses a path holding U+FFFD, and a descendant
+    ///   directory whose name was not decoded exactly fails the reader, so it is `.unreadable` in the
+    ///   tree and its folder is `.containsUnverified`.
+    /// - Environment: the store judges against the environment it was last given; the app hands it
+    ///   the apps running right before calling (ruling R41), so only the window between that read
+    ///   and the move remains.
     /// Verdicts are dropped afterwards, since sizes and contents moved.
     ///
     /// `expectedLevels`: the level each item had when the user confirmed it. With a map, an item
@@ -80,6 +93,7 @@ extension ScanStore {
             outcome.skipped = items.map { TrashOutcome.Skipped(node: $0, name: tree.name($0), reason: reason) }
             return outcome
         }
+        guard !items.isEmpty else { return outcome }
         guard scanFinished else { return skipAll(.scanInProgress) }
         let open = openFiles()
         guard open.isComplete else { return skipAll(.cannotCheckOpenFiles) }
@@ -181,9 +195,9 @@ extension ScanStore {
 
     /// Why the folder `id` at `path` may not go because of what it holds, or nil:
     /// `.containsUnverified` when it or a folder below it (not removed) is a mount point, unreadable
-    /// or not fully listed; `.protected(reason)` for a folder below it whose fresh verdict is
-    /// protected for one of `subtreeBlockingReasons`, or for a running app's bundle at or below it
-    /// (compared in NFC, case-insensitively, by component).
+    /// or not fully listed; `.containsProtected(reason)` for a folder below it whose fresh verdict
+    /// is protected for one of `subtreeBlockingReasons`, or for a running app's bundle at or below
+    /// it (compared as `SafetyPaths.folded`, by component).
     private func subtreeBlocker(_ id: NodeID, path: String) -> TrashSkip? {
         if !tree.flags(id).isDisjoint(with: Self.unverifiedFlags) || unverifiedDirectories.contains(id) {
             return .containsUnverified
@@ -197,7 +211,7 @@ extension ScanStore {
             }
             let verdict = SafetyRules.evaluate(facts(n), in: environment)
             if verdict.level == .protected, Self.subtreeBlockingReasons.contains(verdict.reason) {
-                return .protected(verdict.reason)
+                return .containsProtected(verdict.reason)
             }
             tree.forEachChild(of: n) { stack.append($0) }
         }
@@ -205,7 +219,7 @@ extension ScanStore {
         let below = base + "/"
         for key in environment.running.pathKeys
         where key.utf8.elementsEqual(base.utf8) || key.utf8.starts(with: below.utf8) {
-            return .protected(.runningApp)
+            return .containsProtected(.runningApp)
         }
         return nil
     }

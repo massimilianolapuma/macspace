@@ -4,10 +4,11 @@ import MacSpaceCore
 import Observation
 
 /// Keeps the `SafetyEnvironment` the safety rules judge against up to date: builds the installed
-/// apps index once at launch, in the background (until then `apps` is nil and `~/Library` items
-/// stay "Analisi delle app in corso…"), and follows apps launching and quitting. The launch and
-/// quit notifications skip background-only and `LSUIElement` apps, so `runningApplications` is
-/// also observed through KVO, which reports every change to the list.
+/// apps index at launch, in the background (until then `apps` is nil and `~/Library` items stay
+/// "Analisi delle app in corso…"), again at each scan start (`rebuildApps`), and follows apps
+/// launching and quitting. The launch and quit notifications skip background-only and
+/// `LSUIElement` apps, so `runningApplications` is also observed through KVO, which reports every
+/// change to the list.
 @MainActor @Observable
 final class SafetyEnvironmentProvider {
     /// The latest environment; `revision` changes with it.
@@ -23,6 +24,10 @@ final class SafetyEnvironmentProvider {
     @ObservationIgnored private var tasks: [Task<Void, Never>] = []
     @ObservationIgnored private var pendingRefresh: Task<Void, Never>?
     @ObservationIgnored private var runningObservation: NSKeyValueObservation?
+    /// The apps index build running now, if any.
+    @ObservationIgnored private var building: Task<Void, Never>?
+    /// `rebuildApps` was asked again while a build ran: one more follows it.
+    @ObservationIgnored private var rebuildPending = false
 
     /// Cheap: the work starts in `start()`, so a throwaway instance (SwiftUI may evaluate a
     /// `@State` initial value more than once) costs nothing.
@@ -32,16 +37,8 @@ final class SafetyEnvironmentProvider {
 
     /// Starts building the apps index and following launches and quits; later calls do nothing.
     func start() {
-        guard tasks.isEmpty else { return }
-        tasks.append(Task { [weak self] in
-            // Blocking (file system walk, code signatures, a synchronous Spotlight query): off the main actor.
-            let index = await Task.detached(priority: .utility) {
-                AppsIndex.build(extraAppPaths: AppsIndex.spotlightAppPaths())
-            }.value
-            guard let self else { return }
-            apps = index
-            publish()
-        })
+        guard tasks.isEmpty, building == nil else { return }
+        buildApps()
         let center = NSWorkspace.shared.notificationCenter
         for name in [NSWorkspace.didLaunchApplicationNotification, NSWorkspace.didTerminateApplicationNotification] {
             tasks.append(Task { [weak self] in
@@ -56,8 +53,39 @@ final class SafetyEnvironmentProvider {
         }
     }
 
+    /// Indexes the installed apps again, in the background; the current index stays in use until
+    /// the new one lands. A request during a build queues one more build after it. Before `start`
+    /// it does nothing.
+    func rebuildApps() {
+        guard !tasks.isEmpty || building != nil else { return }
+        if building != nil {
+            rebuildPending = true
+        } else {
+            buildApps()
+        }
+    }
+
+    /// Builds the apps index off the main actor, then publishes it (and any build queued meanwhile).
+    private func buildApps() {
+        building = Task { [weak self] in
+            // Blocking (file system walk, code signatures, a synchronous Spotlight query): off the main actor.
+            let index = await Task.detached(priority: .utility) {
+                AppsIndex.build(extraAppPaths: AppsIndex.spotlightAppPaths())
+            }.value
+            guard let self else { return }
+            building = nil
+            apps = index
+            publish()
+            if rebuildPending {
+                rebuildPending = false
+                buildApps()
+            }
+        }
+    }
+
     isolated deinit {
         tasks.forEach { $0.cancel() }
+        building?.cancel()
         pendingRefresh?.cancel()
         runningObservation?.invalidate()
     }

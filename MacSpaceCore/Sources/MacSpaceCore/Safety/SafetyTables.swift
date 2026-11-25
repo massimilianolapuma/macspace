@@ -11,6 +11,10 @@ public enum SafetyTables {
     /// Identifier prefixes (lowercase) that belong to Apple although they do not contain `com.apple`.
     public static let appleIdentifierPrefixes = ["is.workflow."]
 
+    /// First two identifier labels (lowercase) shared by unrelated developers (code hosts, app
+    /// frameworks): never a vendor for the same-vendor caution (ruling R36).
+    public static let notVendorPrefixes: Set<String> = ["io.github", "com.github", "org.electron", "com.electron"]
+
     /// Team ID of Apple's own Group Containers.
     public static let appleTeamID = "243LU875E5"
 

@@ -292,7 +292,7 @@ private func exists(_ path: String) -> Bool {
     let actions = RecordingDiskActions(trash: bin.root.path)
     let outcome = await store.trash([pics], actions: actions, packages: noPackages, openFiles: nothingOpen,
                                     expectedLevels: nil)
-    #expect(outcome.skipped.map(\.reason) == [.protected(.photosLibrary)])
+    #expect(outcome.skipped.map(\.reason) == [.containsProtected(.photosLibrary)])
     #expect(actions.moved.isEmpty)
 }
 
@@ -311,7 +311,7 @@ private func exists(_ path: String) -> Bool {
     let outcome = await store.trash([apps, tools], actions: actions, packages: noPackages, openFiles: nothingOpen,
                                     expectedLevels: nil)
     #expect(Set(outcome.skipped.map(\.node)) == [apps, tools])
-    #expect(outcome.skipped.allSatisfy { $0.reason == .protected(.runningApp) })
+    #expect(outcome.skipped.allSatisfy { $0.reason == .containsProtected(.runningApp) })
     #expect(actions.moved.isEmpty)
 }
 
@@ -507,7 +507,7 @@ private func exists(_ path: String) -> Bool {
     let actions = RecordingDiskActions(trash: bin.root.path)
     let outcome = await store.trash([disk], actions: actions, packages: noPackages, openFiles: nothingOpen,
                                     expectedLevels: nil)
-    #expect(outcome.skipped.map(\.reason) == [.protected(.trash)])
+    #expect(outcome.skipped.map(\.reason) == [.containsProtected(.trash)])
     #expect(actions.moved.isEmpty)
 }
 
@@ -656,4 +656,18 @@ private func exists(_ path: String) -> Bool {
                                     expectedLevels: [id: shown.level])
     #expect(outcome.moved.isEmpty && actions.moved.isEmpty)
     #expect(outcome.skipped == [TrashOutcome.Skipped(node: id, name: "com.example.app", reason: .verdictChanged)])
+}
+
+@Test func nothingToMoveListsNoOpenFiles() async throws {   // final review minor
+    let fx = try Fixture(); defer { fx.cleanup() }
+    let bin = try Fixture(); defer { bin.cleanup() }
+    try fx.file("Projects/a", bytes: 10_000)
+    let store = try await scanned(fx)
+    let calls = CallCounter()
+    let actions = RecordingDiskActions(trash: bin.root.path)
+    // The root and IDs from no tree: nothing is left after `topMost`.
+    let outcome = await store.trash([FileTree.root, 999_999], actions: actions, packages: noPackages,
+                                    openFiles: { calls.tick(); return OpenFileSet(paths: []) }, expectedLevels: [:])
+    #expect(outcome.moved.isEmpty && outcome.skipped.isEmpty)
+    #expect(calls.value == 0)
 }
