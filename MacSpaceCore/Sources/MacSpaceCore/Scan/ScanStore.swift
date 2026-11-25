@@ -11,12 +11,20 @@ public enum ChartRequest: Sendable {
 /// Owns the `FileTree` being filled by a scan and answers queries about it.
 /// All mutation happens here, so the non-Sendable tree never leaves the actor.
 public actor ScanStore {
-    private let tree: FileTree
+    /// Internal (not private) for `ScanStore+Safety.swift`.
+    let tree: FileTree
     private let classifier: CategoryClassifier
     /// `(device, inode)` of every multiply-linked file already counted.
     private var seenHardLinks = Set<HardLinkKey>()
     /// Installer files (`dmg pkg mpkg xip`) found so far.
     private var installerIDs: [NodeID] = []
+
+    /// What `verdict` judges against; see `setEnvironment`.
+    var environment: SafetyEnvironment
+    /// Verdicts computed since the tree or the environment last changed, or `invalidateVerdicts` was called.
+    var verdictCache: [NodeID: SafetyVerdict] = [:]
+    /// How many times `SafetyRules.evaluate` ran (cache misses), for tests.
+    var verdictEvaluations = 0
 
     /// How many installer files the scan has found.
     func installerCount() -> Int { installerIDs.count }
@@ -24,11 +32,16 @@ public actor ScanStore {
     /// `home` is the user's home folder, for the classifier's `~/Library` rules. The root's own
     /// context comes from `rootPath` (scanning an `.app` bundle directly makes everything App).
     /// `now` (seconds since 1970, by default the scan start) is what ages are measured from.
-    public init(rootName: String, rootPath: String, home: String = NSHomeDirectory(),
+    /// `rootPath` is kept with runs of `/` collapsed and trailing slashes removed (not resolved).
+    /// Verdicts start against `SafetyEnvironment.system(home: home, apps: nil)`: nothing in
+    /// `~/Library` is judged until `setEnvironment` brings the apps index.
+    public init(rootName: String, rootPath rawRootPath: String, home: String = NSHomeDirectory(),
                 now: UInt32 = UInt32(clamping: Int64(Date().timeIntervalSince1970))) {
+        let rootPath = Self.canonicalRoot(rawRootPath)
         let classifier = CategoryClassifier(home: home)
         let root = RootContext.resolve(rootPath: rootPath, classifier: classifier)
         self.classifier = classifier
+        environment = .system(home: home, apps: nil)
         tree = FileTree(rootName: rootName, rootPath: rootPath, rootCategory: root.context ?? .other,
                         rootFlags: root.flags, now: now)
     }
@@ -50,8 +63,11 @@ public actor ScanStore {
     /// imposes, anything else its category. Non-directories record `lastUse(modification:access:now:)`
     /// as their last use (duplicates too, though they add no bytes). A directory's own times are
     /// ignored, since merely listing it can update them: its last use is the latest of its contents.
+    ///
+    /// Sizes and last uses of ancestors move, so cached verdicts are dropped.
     public func insert(_ entries: [DirectoryEntry], under parent: NodeID, parentPath: String,
                        boundary: ScanBoundary) -> Inserted {
+        dropVerdicts()
         let prefix = parentPath.hasSuffix("/") ? parentPath : parentPath + "/"
         let parentContext = tree.context(parent)
         let parentFlags = tree.flags(parent)
@@ -98,15 +114,17 @@ public actor ScanStore {
 
     public func markUnreadable(_ id: NodeID) {
         tree.insertFlags(.unreadable, for: id)
+        dropVerdicts()
     }
 
     public func rootSize() -> UInt64 { tree.size(FileTree.root) }
 
-    public func row(_ id: NodeID) -> NodeRow { tree.row(id) }
+    /// `id`'s row, with its safety level.
+    public func row(_ id: NodeID) -> NodeRow { stamped(tree.row(id)) }
 
-    /// The largest `limit` children of `id`, by size descending then name.
+    /// The largest `limit` children of `id`, by size descending then name, with their safety levels.
     public func rows(childrenOf id: NodeID, limit: Int) -> [NodeRow] {
-        tree.largestChildren(of: id, limit: limit).map(tree.row)
+        tree.largestChildren(of: id, limit: limit).map { stamped(tree.row($0)) }
     }
 
     /// Bytes per age bucket below `id`, non-zero entries only.
@@ -115,12 +133,12 @@ public actor ScanStore {
     /// Bytes per category below `id`, non-zero entries only.
     public func categoryTotals(of id: NodeID) -> [FileCategory: UInt64] { tree.categoryTotals(id) }
 
-    /// Rows from the root down to and including `id`.
+    /// Rows from the root down to and including `id`, with their safety levels.
     public func breadcrumb(to id: NodeID) -> [NodeRow] {
-        var rows = [tree.row(id)]
+        var rows = [stamped(tree.row(id))]
         var cur = id
         while let p = tree.parent(cur) {
-            rows.append(tree.row(p))
+            rows.append(stamped(tree.row(p)))
             cur = p
         }
         return rows.reversed()
@@ -141,14 +159,23 @@ public actor ScanStore {
     /// How far past the scan start a timestamp may lie (clock skew between machines): one day.
     public static let futureTolerance: UInt32 = 86_400
 
-    /// Sunburst ring segments below `center`, `depth` rings deep.
+    /// Sunburst ring segments below `center`, `depth` rings deep, with their safety levels.
     public func sunburst(center: NodeID, depth: Int) -> [ArcSegment] {
-        SunburstLayout.compute(tree: tree, center: center, depth: depth)
+        var segments = SunburstLayout.compute(tree: tree, center: center, depth: depth)
+        for i in segments.indices {
+            if let node = segments[i].node { segments[i].safety = verdict(node).level }
+        }
+        return segments
     }
 
-    /// Treemap tiles below `center` in a `width × height` canvas, `depth` levels deep.
+    /// Treemap tiles below `center` in a `width × height` canvas, `depth` levels deep, with their
+    /// safety levels.
     public func treemap(center: NodeID, width: Double, height: Double, depth: Int) -> [TreemapTile] {
-        TreemapLayout.compute(tree: tree, center: center, width: width, height: height, depth: depth)
+        var tiles = TreemapLayout.compute(tree: tree, center: center, width: width, height: height, depth: depth)
+        for i in tiles.indices {
+            if let node = tiles[i].node { tiles[i].safety = verdict(node).level }
+        }
+        return tiles
     }
 
     /// Everything the UI shows around `center`, taken in one actor call so the pieces agree
@@ -166,9 +193,13 @@ public actor ScanStore {
         public var categoryTotals: [FileCategory: UInt64]
         /// Bytes per age bucket below `center`, non-zero entries only.
         public var ageTotals: [AgeBucket: UInt64]
+        /// The verdict of every node in `segments`, `tiles`, `biggest` and `breadcrumb`, whose
+        /// `safety` is that verdict's level.
+        public var verdicts: [NodeID: SafetyVerdict]
     }
 
-    /// Lays out only the chart `chart` asks for, so the other one costs nothing.
+    /// Lays out only the chart `chart` asks for, so the other one costs nothing. Each node's
+    /// verdict comes from the cache when it has one, so none is evaluated twice.
     public func snapshot(center: NodeID, chart: ChartRequest, biggestLimit: Int) -> Snapshot {
         var segments: [ArcSegment] = []
         var tiles: [TreemapTile] = []
@@ -178,10 +209,15 @@ public actor ScanStore {
         case .treemap(let width, let height, let depth):
             tiles = treemap(center: center, width: width, height: height, depth: depth)
         }
-        return Snapshot(segments: segments, tiles: tiles,
-                        biggest: rows(childrenOf: center, limit: biggestLimit),
-                        breadcrumb: breadcrumb(to: center),
-                        categoryTotals: categoryTotals(of: center), ageTotals: ageTotals(of: center))
+        let biggest = rows(childrenOf: center, limit: biggestLimit)
+        let crumbs = breadcrumb(to: center)
+        var verdicts: [NodeID: SafetyVerdict] = [:]
+        for id in segments.compactMap(\.node) + tiles.compactMap(\.node) + (biggest + crumbs).map(\.id) {
+            verdicts[id] = verdict(id)
+        }
+        return Snapshot(segments: segments, tiles: tiles, biggest: biggest, breadcrumb: crumbs,
+                        categoryTotals: categoryTotals(of: center), ageTotals: ageTotals(of: center),
+                        verdicts: verdicts)
     }
 
     private struct HardLinkKey: Hashable {

@@ -54,3 +54,38 @@ func startupDiskScan() async throws {
     #expect(rootSize <= used + used / 10,
             "scan total far above used space: firmlink double counting, or APFS clones/compression")
 }
+
+/// Opt-in: `MACSPACE_BENCH=1 swift test -c release --filter librarySnapshotWithVerdicts`.
+/// A treemap snapshot of `~/Library` (the app's canvas and depth) with verdicts, the real apps
+/// index and running apps: the first (cold cache) and the median of warm repeats, which must
+/// stay under 20 ms.
+@Test(.enabled(if: ProcessInfo.processInfo.environment["MACSPACE_BENCH"] == "1"))
+func librarySnapshotWithVerdicts() async throws {
+    let home = NSHomeDirectory(), library = home + "/Library"
+    let store = ScanStore(rootName: "Library", rootPath: library, home: home)
+    let summary = await Scanner(rootPath: library, boundary: try .forFolder(library)).scan(into: store)
+    let apps = AppsIndex.build()
+    await store.setEnvironment(.system(home: home, apps: apps))
+    let chart = ChartRequest.treemap(width: 1100, height: 700, depth: 3)
+    let clock = ContinuousClock()
+    let ms = { (d: Duration) in Double(d.components.seconds) * 1e3 + Double(d.components.attoseconds) / 1e15 }
+    let coldStart = clock.now
+    let snapshot = await store.snapshot(center: FileTree.root, chart: chart, biggestLimit: 20)
+    let cold = clock.now - coldStart
+    var warm: [Double] = []
+    for _ in 0..<15 {
+        let start = clock.now
+        _ = await store.snapshot(center: FileTree.root, chart: chart, biggestLimit: 20)
+        warm.append(ms(clock.now - start))
+    }
+    warm.sort()
+    let median = warm[warm.count / 2]
+    let levels = SafetyLevel.allCases.map { level in "\(level)=\(snapshot.tiles.filter { $0.safety == level }.count)" }
+    print("""
+    BENCH library files=\(summary.files) tiles=\(snapshot.tiles.count) verdicts=\(snapshot.verdicts.count) \
+    apps=\(apps.count) cold=\(String(format: "%.2f", ms(cold)))ms \
+    warmMedian=\(String(format: "%.2f", median))ms warmMax=\(String(format: "%.2f", warm.last ?? 0))ms \
+    tiles \(levels.joined(separator: " "))
+    """)
+    #expect(median < 20)
+}

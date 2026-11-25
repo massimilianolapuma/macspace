@@ -32,11 +32,14 @@ public struct TreemapTile: Sendable, Hashable, Identifiable {
     /// Whether the top `Style.header` points of the tile (below the `gap / 2` inset) are reserved
     /// for a section header; its children sit below it.
     public var hasHeader: Bool
+    /// The node's `SafetyVerdict` level, stamped by `ScanStore`; always `.normal` for "altri".
+    public var safety: SafetyLevel
 
     public init(id: String, node: NodeID?, parent: NodeID, depth: Int, x: Double, y: Double,
                 width: Double, height: Double, size: UInt64, name: String, otherCount: Int,
                 flags: NodeFlags = [], hasChildren: Bool = false, category: FileCategory = .other,
-                lastUsed: UInt32 = 0, ageBucket: AgeBucket = .unknown, hasHeader: Bool = false) {
+                lastUsed: UInt32 = 0, ageBucket: AgeBucket = .unknown, hasHeader: Bool = false,
+                safety: SafetyLevel = .normal) {
         self.id = id
         self.node = node
         self.parent = parent
@@ -54,6 +57,7 @@ public struct TreemapTile: Sendable, Hashable, Identifiable {
         self.lastUsed = lastUsed
         self.ageBucket = ageBucket
         self.hasHeader = hasHeader
+        self.safety = safety
     }
 }
 

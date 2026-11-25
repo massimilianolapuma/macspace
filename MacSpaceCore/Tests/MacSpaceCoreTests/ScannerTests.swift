@@ -247,3 +247,198 @@ func scanFixture(_ fx: Fixture) async throws -> (ScanStore, ScanSummary) {
     }
     #expect(row.flags.contains(.package) && row.flags.contains(.insidePackage))
 }
+
+// MARK: - Safety verdicts
+
+/// Sets a file's access and modification times to `seconds` since 1970.
+private func setTimes(_ url: URL, _ seconds: Int) throws {
+    var times = [timeval(tv_sec: seconds, tv_usec: 0), timeval(tv_sec: seconds, tv_usec: 0)]
+    guard utimes(url.path, &times) == 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+}
+
+/// A home folder with a leftover cache (`com.gone.app`) and an installer in Downloads, scanned.
+private func scanLeftoverHome(_ fx: Fixture) async throws -> ScanStore {
+    let home = fx.root.path
+    try fx.file("Library/Caches/com.gone.app/blob", bytes: 50_000); try fx.file("Downloads/Setup.dmg", bytes: 5_000)
+    let store = ScanStore(rootName: "fx", rootPath: home, home: home)
+    _ = await Scanner(rootPath: home, boundary: try .forFolder(home)).scan(into: store)
+    return store
+}
+
+@Test func snapshotCarriesVerdicts() async throws {
+    let fx = try Fixture(); defer { fx.cleanup() }
+    let home = fx.root.path
+    let store = try await scanLeftoverHome(fx)
+    await store.setEnvironment(.system(home: home, apps: .empty, runningBundleIDs: [], runningAppPaths: []))
+    let caches = try #require(await store.node(atPath: home + "/Library/Caches"))
+    let snap = await store.snapshot(center: caches, chart: .sunburst(depth: 3), biggestLimit: 5)
+    let seg = try #require(snap.segments.first { $0.name == "com.gone.app" })
+    let segNode = try #require(seg.node)
+    #expect(seg.safety == .safe && snap.verdicts[segNode]?.reason == .leftover)
+    #expect(snap.breadcrumb.last?.safety == .protected)        // Library/Caches is essential
+    // Every element is stamped with its verdict's level, and every node has a verdict.
+    #expect(snap.breadcrumb.first?.safety == .protected && snap.verdicts[FileTree.root]?.reason == .scanRoot)
+    for s in snap.segments {
+        let node = try #require(s.node)
+        #expect(s.safety == snap.verdicts[node]?.level)
+    }
+    for row in snap.biggest + snap.breadcrumb { #expect(row.safety == snap.verdicts[row.id]?.level) }
+    // `com.gone.app` is a package by its extension: it moves as a whole, its contents never alone.
+    let blob = try #require(snap.segments.first { $0.name == "blob" })
+    let blobNode = try #require(blob.node)
+    #expect(blob.safety == .protected && snap.verdicts[blobNode]?.reason == .insidePackage)
+    // Treemap tiles and list rows outside the chart's center.
+    let downloads = try #require(await store.node(atPath: home + "/Downloads"))
+    let tilesSnap = await store.snapshot(center: downloads, chart: .treemap(width: 400, height: 300, depth: 2),
+                                         biggestLimit: 5)
+    let dmg = try #require(tilesSnap.tiles.first { $0.name == "Setup.dmg" })
+    let dmgNode = try #require(dmg.node)
+    #expect(dmg.safety == .safe && tilesSnap.verdicts[dmgNode]?.reason == .installer)
+    #expect(tilesSnap.biggest.first?.safety == .safe && tilesSnap.segments.isEmpty)
+    #expect(await store.rows(childrenOf: caches, limit: 5).first?.safety == .safe)
+    #expect(await store.verdict(dmgNode).level == .safe)
+}
+
+@Test func noAppsIndexMeansNoLeftovers() async throws {
+    let fx = try Fixture(); defer { fx.cleanup() }
+    let home = fx.root.path
+    try fx.file("Library/Application Support/com.gone.editor/data/old.bin", bytes: 10_000)
+    let store = try await scanLeftoverHome(fx)
+    let caches = try #require(await store.node(atPath: home + "/Library/Caches"))
+    let snap = await store.snapshot(center: caches, chart: .sunburst(depth: 3), biggestLimit: 5)
+    let seg = try #require(snap.segments.first { $0.name == "com.gone.app" })
+    let segNode = try #require(seg.node)
+    #expect(seg.safety == .normal && snap.verdicts[segNode]?.reason == .analysisPending)
+    #expect(!snap.segments.contains { $0.safety == .safe } && !snap.biggest.contains { $0.safety == .safe })
+    // Deeper items of other locations wait too.
+    let support = home + "/Library/Application Support/com.gone.editor"
+    for path in [support, support + "/data", support + "/data/old.bin"] {
+        let id = try #require(await store.node(atPath: path))
+        #expect(await store.verdict(id) == SafetyVerdict(level: .normal, reason: .analysisPending))
+    }
+    // Once the index is ready, the cached pending verdicts are replaced.
+    await store.setEnvironment(.system(home: home, apps: .empty))
+    #expect(await store.verdict(segNode).reason == .leftover)
+}
+
+@Test func deepFileInRecentlyUsedLeftoverIsCaution() async throws {
+    let fx = try Fixture(); defer { fx.cleanup() }
+    let home = fx.root.path
+    let old = Int(Date().timeIntervalSince1970) - 400 * 86_400
+    let deep = try fx.file("Library/Application Support/com.gone.editor/sub/old.bin", bytes: 10_000)
+    try fx.file("Library/Application Support/com.gone.editor/recent.txt", bytes: 100)
+    let control = try fx.file("Library/Application Support/com.old.editor/sub/old.bin", bytes: 10_000)
+    try setTimes(deep, old); try setTimes(control, old)
+    let store = ScanStore(rootName: "fx", rootPath: home, home: home)
+    _ = await Scanner(rootPath: home, boundary: try .forFolder(home)).scan(into: store)
+    await store.setEnvironment(.system(home: home, apps: .empty))
+    let support = home + "/Library/Application Support"
+    let deepID = try #require(await store.node(atPath: support + "/com.gone.editor/sub/old.bin"))
+    let subID = try #require(await store.node(atPath: support + "/com.gone.editor/sub"))
+    #expect(await store.verdict(deepID) == SafetyVerdict(level: .caution, reason: .recentLeftover))
+    #expect(await store.verdict(subID) == SafetyVerdict(level: .caution, reason: .recentLeftover))
+    // The same layout with nothing recent is a leftover all the way down.
+    let controlID = try #require(await store.node(atPath: support + "/com.old.editor/sub/old.bin"))
+    #expect(await store.verdict(controlID) == SafetyVerdict(level: .safe, reason: .leftover))
+}
+
+@Test func leftoverAboveTheScanRootIsNotTakenAsOld() async throws {
+    // Scanning inside a leftover: the folder's other contents are unknown, so its last use is too.
+    let fx = try Fixture(); defer { fx.cleanup() }
+    let home = fx.root.path
+    let file = try fx.file("Library/Application Support/com.gone.editor/sub/old.bin", bytes: 10_000)
+    try setTimes(file, Int(Date().timeIntervalSince1970) - 400 * 86_400)
+    let root = home + "/Library/Application Support/com.gone.editor/sub"
+    let store = ScanStore(rootName: "sub", rootPath: root, home: home)
+    _ = await Scanner(rootPath: root, boundary: try .forFolder(root)).scan(into: store)
+    await store.setEnvironment(.system(home: home, apps: .empty))
+    let id = try #require(await store.node(atPath: root + "/old.bin"))
+    #expect(await store.verdict(id) == SafetyVerdict(level: .caution, reason: .recentLeftover))
+}
+
+@Test func rootPathIsCanonicalized() async throws {
+    let fx = try Fixture(); defer { fx.cleanup() }
+    let home = fx.root.path
+    try fx.file("Downloads/Setup.dmg", bytes: 5_000)
+    for raw in [home + "/", home + "//", home.replacingOccurrences(of: "/", with: "//") + "///"] {
+        let store = ScanStore(rootName: "fx", rootPath: raw, home: home)
+        _ = await Scanner(rootPath: home, boundary: try .forFolder(home)).scan(into: store)
+        #expect(await store.path(of: FileTree.root) == home)
+        let dmg = try #require(await store.node(atPath: home + "/Downloads/Setup.dmg"))
+        #expect(await store.path(of: dmg) == home + "/Downloads/Setup.dmg")
+        await store.setEnvironment(.system(home: home, apps: .empty))
+        #expect(await store.verdict(dmg) == SafetyVerdict(level: .safe, reason: .installer))
+    }
+    #expect(await ScanStore(rootName: "/", rootPath: "/").path(of: FileTree.root) == "/")
+    #expect(await ScanStore(rootName: "/", rootPath: "///").path(of: FileTree.root) == "/")
+}
+
+@Test func verdictsAreCachedUntilTheTreeOrEnvironmentChanges() async throws {
+    func file(_ name: String, time: UInt32) -> DirectoryEntry {
+        DirectoryEntry(name: name, kind: .file, allocatedSize: 4096, device: 1, inode: 0, linkCount: 1,
+                       isMountPoint: false, isDataless: false, modificationTime: time, accessTime: time)
+    }
+    func dir(_ name: String) -> DirectoryEntry {
+        DirectoryEntry(name: name, kind: .directory, allocatedSize: 0, device: 1, inode: 0, linkCount: 1,
+                       isMountPoint: false, isDataless: false)
+    }
+    let home = "/Users/u", boundary = ScanBoundary(allowedDevices: [1], excludedPaths: [])
+    let now = UInt32(Date().timeIntervalSince1970)
+    let store = ScanStore(rootName: "u", rootPath: home, home: home, now: now)
+    // The folders exist only in the tree: write access comes from a switch the test flips.
+    let writable = Mutex(true)
+    await store.setEnvironment(SafetyEnvironment(home: home, apps: .empty, runningBundleIDs: [], runningAppPaths: [],
+                                                 now: now, isWritable: { _ in writable.withLock { $0 } }))
+    let lib = try #require(await store.insert([dir("Library")], under: FileTree.root, parentPath: home,
+                                              boundary: boundary).descend.first)
+    let loc = try #require(await store.insert([dir("Application Support")], under: lib.id, parentPath: lib.path,
+                                              boundary: boundary).descend.first)
+    let app = try #require(await store.insert([dir("com.gone.editor")], under: loc.id, parentPath: loc.path,
+                                              boundary: boundary).descend.first)
+    _ = await store.insert([file("old", time: now - 400 * 86_400)], under: app.id, parentPath: app.path,
+                           boundary: boundary)
+    let before = await store.verdictEvaluations
+    let snap = await store.snapshot(center: loc.id, chart: .sunburst(depth: 2), biggestLimit: 5)
+    #expect(snap.verdicts[app.id] == SafetyVerdict(level: .safe, reason: .leftover))
+    let evaluated = await store.verdictEvaluations - before
+    #expect(evaluated == snap.verdicts.count)                  // each node evaluated once
+    _ = await store.snapshot(center: loc.id, chart: .treemap(width: 300, height: 200, depth: 2), biggestLimit: 5)
+    #expect(await store.verdictEvaluations - before == evaluated)   // all cached
+    // A change outside the tree is not seen until the cache is invalidated.
+    writable.withLock { $0 = false }
+    #expect(await store.verdict(app.id).reason == .leftover)
+    await store.invalidateVerdicts()
+    #expect(await store.verdict(app.id).reason == .notWritable)
+    // A recent file arriving during the scan is seen at once: inserting drops the cache.
+    writable.withLock { $0 = true }
+    await store.invalidateVerdicts()
+    #expect(await store.verdict(app.id).reason == .leftover)
+    _ = await store.insert([file("new", time: now)], under: app.id, parentPath: app.path, boundary: boundary)
+    #expect(await store.verdict(app.id) == SafetyVerdict(level: .caution, reason: .recentLeftover))
+}
+
+@Test func mergedElementsStayNormal() async throws {
+    // A big installer and many tiny ones in Downloads: the tiny ones merge into "altri".
+    func file(_ name: String, size: UInt64) -> DirectoryEntry {
+        DirectoryEntry(name: name, kind: .file, allocatedSize: size, device: 1, inode: 0, linkCount: 1,
+                       isMountPoint: false, isDataless: false)
+    }
+    let home = "/Users/u", boundary = ScanBoundary(allowedDevices: [1], excludedPaths: [])
+    let store = ScanStore(rootName: "u", rootPath: home, home: home)
+    await store.setEnvironment(SafetyEnvironment(home: home, apps: .empty, runningBundleIDs: [], runningAppPaths: [],
+                                                 now: 0, isWritable: { _ in true }))
+    let downloads = try #require(await store.insert([DirectoryEntry(
+        name: "Downloads", kind: .directory, allocatedSize: 0, device: 1, inode: 0, linkCount: 1,
+        isMountPoint: false, isDataless: false)], under: FileTree.root, parentPath: home, boundary: boundary)
+        .descend.first)
+    _ = await store.insert([file("Big.dmg", size: 100_000_000)] + (0..<300).map { file("s\($0).dmg", size: 4096) },
+                           under: downloads.id, parentPath: downloads.path, boundary: boundary)
+    let sun = await store.snapshot(center: downloads.id, chart: .sunburst(depth: 1), biggestLimit: 5)
+    let tree = await store.snapshot(center: downloads.id, chart: .treemap(width: 200, height: 100, depth: 1),
+                                    biggestLimit: 5)
+    let mergedSegment = try #require(sun.segments.first { $0.node == nil })
+    let mergedTile = try #require(tree.tiles.first { $0.node == nil })
+    #expect(mergedSegment.safety == .normal && mergedTile.safety == .normal)
+    #expect(sun.segments.first { $0.name == "Big.dmg" }?.safety == .safe)
+    #expect(tree.tiles.first { $0.name == "Big.dmg" }?.safety == .safe)
+}

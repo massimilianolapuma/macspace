@@ -233,6 +233,41 @@ public final class FileTree {
         return String(decoding: bytes, as: UTF8.self)
     }
 
+    /// The node at `path`, walking from the root and matching each component's UTF-8 bytes exactly
+    /// (no case folding or Unicode normalization); trailing slashes are ignored. Nil when nothing
+    /// is there yet, or `path` is not `rootPath` or below it.
+    public func node(atPath path: String) -> NodeID? {
+        let slash = UInt8(ascii: "/")
+        func trimmed(_ s: String) -> [UInt8] {
+            var bytes = Array(s.utf8)
+            while bytes.count > 1, bytes.last == slash { bytes.removeLast() }
+            return bytes
+        }
+        let query = trimmed(path)
+        var base = trimmed(rootPath)
+        if query == base { return Self.root }
+        if base == [slash] { base = [] }
+        guard query.count > base.count + 1, query.starts(with: base), query[base.count] == slash else { return nil }
+        var current = Self.root
+        for component in query[(base.count + 1)...].split(separator: slash, omittingEmptySubsequences: false) {
+            guard let next = child(of: current, named: component) else { return nil }
+            current = next
+        }
+        return current
+    }
+
+    /// The child of `id` whose name has exactly these UTF-8 bytes (the newest if several).
+    private func child(of id: NodeID, named name: ArraySlice<UInt8>) -> NodeID? {
+        nameBytes.withUnsafeBufferPointer { arena in
+            var c = firstChildren[Int(id)]
+            while c >= 0 {
+                if arena[nameRange(c)].elementsEqual(name) { return c }
+                c = nextSiblings[Int(c)]
+            }
+            return nil
+        }
+    }
+
     /// Children sorted by size descending, then name ascending (as `String.<` orders them), then
     /// newest node first for names `String.<` considers equal.
     public func children(of id: NodeID) -> [NodeID] {

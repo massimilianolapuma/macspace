@@ -190,3 +190,18 @@ import Testing
     #expect(t.size(FileTree.root) == 1_000_000)
     #expect(elapsed < .seconds(1), "took \(elapsed)")
 }
+@Test func nodeAtPath() {
+    let t = FileTree(rootName: "r", rootPath: "/r")
+    let a = t.addChild(of: 0, name: "a", kind: .directory, allocatedSize: 0)
+    let b = t.addChild(of: a, name: "b é", kind: .file, allocatedSize: 1)
+    #expect(t.node(atPath: "/r/a/b é") == b && t.node(atPath: "/r") == 0)
+    #expect(t.node(atPath: "/r/a/zz") == nil && t.node(atPath: "/other/a") == nil)
+    // A trailing slash names the same folder; a sibling sharing the root's prefix is outside it.
+    #expect(t.node(atPath: "/r/a/") == a && t.node(atPath: "/r/") == 0 && t.node(atPath: "/ra") == nil)
+    // Exact bytes: decomposed "é" and other case are different names; "//" and "." match nothing.
+    #expect(t.node(atPath: "/r/a/b e\u{301}") == nil && t.node(atPath: "/r/A") == nil)
+    #expect(t.node(atPath: "/r//a") == nil && t.node(atPath: "/r/./a") == nil)
+    let s = FileTree(rootName: "/", rootPath: "/")
+    let u = s.addChild(of: 0, name: "Users", kind: .directory, allocatedSize: 0)
+    #expect(s.node(atPath: "/Users") == u && s.node(atPath: "/") == 0)
+}
