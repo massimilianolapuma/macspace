@@ -30,16 +30,18 @@ public actor ScanStore {
     var scanFinished = false
     /// Devices the scan was allowed on; items found on another device at Trash time have changed.
     var scanDevices: Set<Int32> = []
-    /// Directories a cancelled scan never listed, or listed only in part: their contents are unknown.
+    /// Directories whose contents are unknown: not descended by the boundary (excluded, or on
+    /// another device), or never listed, or listed only in part, by a cancelled scan.
     var unverifiedDirectories: Set<NodeID> = []
 
     /// Called by `Scanner.scan(into:)` when it ends, normally or cancelled (tests that fill a store
     /// by hand call it themselves): records the devices the scan was confined to and the
-    /// directories whose contents it did not fully list, and allows `trash`.
+    /// directories whose contents it did not fully list (added to those `insert` did not descend),
+    /// and allows `trash`.
     public func markScanFinished(allowedDevices: Set<Int32> = [], unverifiedDirectories: [NodeID] = []) {
         scanFinished = true
         scanDevices = allowedDevices
-        self.unverifiedDirectories = Set(unverifiedDirectories)
+        self.unverifiedDirectories.formUnion(unverifiedDirectories)
     }
 
     /// How many installer files the scan has found.
@@ -126,6 +128,9 @@ public actor ScanStore {
             guard !entry.isDataless else { continue }
             if boundary.shouldDescend(path: path, device: entry.device, isMountPoint: entry.isMountPoint) {
                 descend.append((id: id, path: path))
+            } else if !entry.isMountPoint {
+                // Excluded or on another device: its contents are never seen (mount points are flagged).
+                unverifiedDirectories.insert(id)
             }
         }
         return Inserted(descend: descend, bytes: bytes)

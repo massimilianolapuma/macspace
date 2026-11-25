@@ -503,3 +503,77 @@ private func exists(_ path: String) -> Bool {
     #expect(outcome.moved.map(\.node) == [mixed] && outcome.skipped.isEmpty)
     #expect(actions.moved == [fx.root.path + "/Projects/mixed"])
 }
+
+@Test func folderHoldingLiveMountIsUnverified() async throws {
+    let fx = try Fixture(); defer { fx.cleanup() }
+    let bin = try Fixture(); defer { bin.cleanup() }
+    try fx.file("Data/inner/f", bytes: 10_000)
+    try fx.file("Spot/f", bytes: 10_000)
+    try fx.file("Other/f", bytes: 10_000)
+    let store = try await scanned(fx)
+    let data = try await node(store, fx, "Data")
+    let spot = try await node(store, fx, "Spot")
+    let other = try await node(store, fx, "Other")
+    let actions = RecordingDiskActions(trash: bin.root.path)
+    // Mounted after the scan: one below `Data`, one exactly at `Spot` (trailing slash); `/` is ignored.
+    let mounts = ["/", fx.root.path + "/Data/inner/mnt", fx.root.path + "/Spot/"]
+
+    let outcome = await store.trash([data, spot, other], actions: actions, packages: noPackages,
+                                    openFiles: nothingOpen, mountPoints: { mounts })
+    #expect(Set(outcome.skipped.map(\.node)) == [data, spot])
+    #expect(outcome.skipped.allSatisfy { $0.reason == .containsUnverified })
+    #expect(outcome.moved.map(\.node) == [other])
+    #expect(actions.moved == [fx.root.path + "/Other"])
+}
+
+@Test func unreadableMountTableMovesNothing() async throws {
+    let fx = try Fixture(); defer { fx.cleanup() }
+    let bin = try Fixture(); defer { bin.cleanup() }
+    try fx.file("A/f", bytes: 10_000)
+    try fx.file("B/f", bytes: 10_000)
+    let store = try await scanned(fx)
+    let a = try await node(store, fx, "A")
+    let b = try await node(store, fx, "B")
+    let actions = RecordingDiskActions(trash: bin.root.path)
+    let outcome = await store.trash([a, b], actions: actions, packages: noPackages, openFiles: nothingOpen,
+                                    mountPoints: { nil })
+    #expect(Set(outcome.skipped.map(\.node)) == [a, b])
+    #expect(outcome.skipped.allSatisfy { $0.reason == .containsUnverified })
+    #expect(actions.moved.isEmpty)
+}
+
+@Test func mountTableHelpers() throws {
+    let live = try #require(MountTable.current())
+    #expect(live.contains("/"))
+    let canonical = MountTable.canonical(["/", "/Volumes/USB/", "/System/Volumes/Data/Users/u/mnt", "/tmp/m"])
+    #expect(canonical == ["/Volumes/USB", "/System/Volumes/Data/Users/u/mnt", "/Users/u/mnt", "/private/tmp/m"])
+    #expect(MountTable.hasMount(atOrBelow: "/Users/u", in: canonical))
+    #expect(MountTable.hasMount(atOrBelow: "/Users/u/mnt", in: canonical))
+    #expect(MountTable.hasMount(atOrBelow: "/tmp", in: canonical))           // /tmp is /private/tmp
+    #expect(!MountTable.hasMount(atOrBelow: "/Users/u/mn", in: canonical))    // by component, not by prefix
+    #expect(!MountTable.hasMount(atOrBelow: "/Users/u/mnt/x", in: canonical))
+}
+
+@Test func folderHoldingUndescendedFolderIsUnverified() async throws {
+    let fx = try Fixture(); defer { fx.cleanup() }
+    let bin = try Fixture(); defer { bin.cleanup() }
+    try fx.file("Projects/skip/f", bytes: 10_000)
+    try fx.file("Projects/other/f", bytes: 10_000)
+    let store = ScanStore(rootName: "home", rootPath: fx.root.path, home: fx.root.path, now: fixedNow)
+    var boundary = try ScanBoundary.forFolder(fx.root.path)
+    boundary.excludedPaths = [fx.root.path + "/Projects/skip"]
+    _ = await Scanner(rootPath: fx.root.path, boundary: boundary).scan(into: store)
+    await store.setEnvironment(.system(home: fx.root.path, apps: .empty))
+    let projects = try await node(store, fx, "Projects")
+    let skip = try await node(store, fx, "Projects/skip")
+    let other = try await node(store, fx, "Projects/other")
+    #expect(await store.unverifiedDirectories == [skip])
+
+    let actions = RecordingDiskActions(trash: bin.root.path)
+    let first = await store.trash([projects], actions: actions, packages: noPackages, openFiles: nothingOpen)
+    #expect(first.skipped.map(\.reason) == [.containsUnverified])
+    let second = await store.trash([skip, other], actions: actions, packages: noPackages, openFiles: nothingOpen)
+    #expect(second.skipped == [TrashOutcome.Skipped(node: skip, name: "skip", reason: .containsUnverified)])
+    #expect(second.moved.map(\.node) == [other])
+    #expect(actions.moved == [fx.root.path + "/Projects/other"])
+}

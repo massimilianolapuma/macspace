@@ -32,7 +32,9 @@ extension ScanStore {
     /// - the scan has not finished (`markScanFinished`): every item → `.scanInProgress`, nothing
     ///   moves and `openFiles` is not called;
     /// - otherwise `openFiles()` is called exactly once; if incomplete, every item →
-    ///   `.cannotCheckOpenFiles` and nothing moves.
+    ///   `.cannotCheckOpenFiles` and nothing moves;
+    /// - the current mount table is read once (`getfsstat`); if it cannot be read, every item →
+    ///   `.containsUnverified` and nothing moves.
     ///
     /// Then per item, in this order:
     /// 1. removed already (it or a folder above it) → `.missing`;
@@ -43,7 +45,8 @@ extension ScanStore {
     /// 6. a folder holding something the rules protect as a whole (Apple data, a Photos library, a
     ///    running app or its data, an essential, system or Trash folder, an unusual path), or a
     ///    running app's bundle → `.protected(reason)`; a folder whose contents were not all seen
-    ///    (it or a folder inside it is a mount point, unreadable, or not fully listed) → `.containsUnverified`;
+    ///    (it or a folder inside it is a mount point, unreadable, not fully listed or not descended
+    ///    by the scan, or a volume is mounted at or below it right now) → `.containsUnverified`;
     /// 7. on disk, checked last, right before the move: gone → `.missing`; cannot be examined →
     ///    `.failed`; another kind of object than scanned, now a mount point, on a device the scan
     ///    was not confined to, or a folder above it (up to the scan root) no longer a folder → `.changed`;
@@ -54,6 +57,13 @@ extension ScanStore {
     /// Verdicts are dropped afterwards, since sizes and contents moved.
     public func trash(_ ids: Set<NodeID>, actions: any DiskActions, packages: any PackageProbe,
                       openFiles: @Sendable () -> OpenFileSet) -> TrashOutcome {
+        trash(ids, actions: actions, packages: packages, openFiles: openFiles, mountPoints: MountTable.current)
+    }
+
+    /// `trash` with the mount table injectable for tests: `mountPoints` returns every mount-on
+    /// path, or nil when they cannot be read.
+    func trash(_ ids: Set<NodeID>, actions: any DiskActions, packages: any PackageProbe,
+               openFiles: @Sendable () -> OpenFileSet, mountPoints: () -> [String]?) -> TrashOutcome {
         defer { verdictCache.removeAll() }
         let items = topMost(ids, keepingRemoved: true)
         var outcome = TrashOutcome()
@@ -64,10 +74,12 @@ extension ScanStore {
         guard scanFinished else { return skipAll(.scanInProgress) }
         let open = openFiles()
         guard open.isComplete else { return skipAll(.cannotCheckOpenFiles) }
+        guard let rawMounts = mountPoints() else { return skipAll(.containsUnverified) }
+        let mounts = MountTable.canonical(rawMounts)
         let devices = allowedDevices()
         for id in items {
             let name = tree.name(id)
-            if let reason = trashBlocker(id, open: open, packages: packages, devices: devices) {
+            if let reason = trashBlocker(id, open: open, packages: packages, mounts: mounts, devices: devices) {
                 outcome.skipped.append(TrashOutcome.Skipped(node: id, name: name, reason: reason))
                 continue
             }
@@ -95,7 +107,7 @@ extension ScanStore {
 
     /// Checks 1–7 of `trash` for one item: the first failing one, or nil when it may move.
     private func trashBlocker(_ id: NodeID, open: OpenFileSet, packages: any PackageProbe,
-                              devices: Set<Int32>) -> TrashSkip? {
+                              mounts: [String], devices: Set<Int32>) -> TrashSkip? {
         // 1. Already moved (`remove` marks the whole subtree).
         if tree.flags(id).contains(.removed) { return .missing }
         let path = tree.path(of: id)
@@ -114,7 +126,9 @@ extension ScanStore {
         } else if open.isOpen(path) {
             return .openNow
         }
-        // 6. Something inside it that must never go, or contents never seen.
+        // 6. A volume mounted at or below it now (perhaps after the scan); something inside it
+        //    that must never go, or contents never seen.
+        if MountTable.hasMount(atOrBelow: path, in: mounts) { return .containsUnverified }
         if kind == .directory, let reason = subtreeBlocker(id, path: path) { return reason }
         // 7. On disk, last: the same kind of object, on a scanned device, reached through the same folders.
         let entry: DirectoryEntry
