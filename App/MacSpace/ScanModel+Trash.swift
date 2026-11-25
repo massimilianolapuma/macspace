@@ -29,14 +29,23 @@ struct TrashVerdicts: Sendable {
     var allowed: Set<NodeID>
     /// Each item's current verdict; absent for an item no longer in the tree.
     var verdicts: [NodeID: SafetyVerdict]
+    /// Items taken out of the tree (moved, or inside something moved).
+    var removed: Set<NodeID>
+}
+
+/// An item that was not moved, and why, in words.
+struct SkippedItem: Sendable {
+    let node: NodeID
+    let name: String
+    let reason: String
 }
 
 /// What the sheet shows once a move ended.
 struct TrashReport: Sendable {
     /// What moved, largest first.
     var moved: [TrashOutcome.Moved]
-    /// What stayed: the store's skips, then the rows the sheet left out because they were open.
-    var skipped: [TrashOutcome.Skipped]
+    /// What stayed: the store's skips, then the rows the sheet left out (open, withdrawn).
+    var skipped: [SkippedItem]
     /// The estimate of the space each moved item frees (`PrivateSize.freed`), when the sheet had
     /// finished it before the move; the result view estimates the others in the Trash.
     var freed: [NodeID: UInt64]
@@ -66,23 +75,29 @@ extension ScanModel {
     /// dropped first, so a folder that became read-only shows): what the sheet compares its rows
     /// with after an environment update and right before moving.
     func trashVerdicts(_ ids: [NodeID]) async -> TrashVerdicts {
-        guard let store else { return TrashVerdicts(allowed: [], verdicts: [:]) }
+        guard let store else { return TrashVerdicts(allowed: [], verdicts: [:], removed: Set(ids)) }
         await store.invalidateVerdicts()
         let allowed = Set(await store.resolveSelection(Set(ids)).ids)
         var verdicts: [NodeID: SafetyVerdict] = [:]
+        var removed: Set<NodeID> = []
         for id in ids {
+            guard let row = await store.row(id) else {
+                removed.insert(id)
+                continue
+            }
+            if row.flags.contains(.removed) { removed.insert(id) }
             if let verdict = await store.verdict(id) { verdicts[id] = verdict }
         }
-        return TrashVerdicts(allowed: allowed, verdicts: verdicts)
+        return TrashVerdicts(allowed: allowed, verdicts: verdicts, removed: removed)
     }
 
     /// Moves `ids` to the Trash through `ScanStore.trash`, which re-checks each one right before
     /// moving it (still there and unchanged, not open, not protected, not inside a package, and at
-    /// the level in `expectedLevels`: what the user confirmed) and skips with a reason whatever
-    /// fails. Then: the history gains what moved, the selection, ticks and outlines lose it, the
+    /// the level in `expectedLevels`: what the user saw and confirmed; an item missing from it is
+    /// skipped) and skips with a reason whatever fails. Then: the history gains what moved, the selection, ticks and outlines lose it, the
     /// views and suggestions are refreshed (the tree was updated in place).
     /// Refused while another move runs or while the Trash is unavailable: nothing is moved then.
-    func trash(_ ids: [NodeID], expectedLevels: [NodeID: SafetyLevel]? = nil) async -> TrashOutcome {
+    func trash(_ ids: [NodeID], expectedLevels: [NodeID: SafetyLevel]) async -> TrashOutcome {
         guard let store else { return TrashOutcome() }
         guard !isTrashing else { return TrashOutcome() }
         guard trashUnavailableReason == nil else {

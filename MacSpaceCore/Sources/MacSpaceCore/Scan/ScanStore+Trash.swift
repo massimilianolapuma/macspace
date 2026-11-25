@@ -40,7 +40,8 @@ extension ScanStore {
     /// 1. removed already (it or a folder above it) → `.missing`;
     /// 2. `TrashGuard` refuses it, or the scan saw it as a mount point → `.refused`;
     /// 3. a fresh `SafetyRules` verdict (not the cache) is protected → `.protected(reason)`; its
-    ///    level differs from the one in `expectedLevels` (what the user confirmed) → `.verdictChanged`;
+    ///    level differs from the one in `expectedLevels` (what the user confirmed), or the map has
+    ///    none for it → `.verdictChanged`;
     /// 4. a folder above it, up to `/`, is a package per `packages` → `.insidePackage`;
     /// 5. it or a file inside it is open → `.openNow`;
     /// 6. a folder holding something the rules protect as a whole (Apple data, a Photos library, a
@@ -57,8 +58,9 @@ extension ScanStore {
     /// still be swapped; its identity is checked by kind, mount status and device only (not inode).
     /// Verdicts are dropped afterwards, since sizes and contents moved.
     ///
-    /// `expectedLevels`: the level each item had when the user confirmed it (items absent from it,
-    /// or a nil map, are not compared).
+    /// `expectedLevels`: the level each item had when the user confirmed it. With a map, an item
+    /// absent from it was never confirmed and is skipped `.verdictChanged` (fail closed); a nil map
+    /// compares nothing.
     public func trash(_ ids: Set<NodeID>, actions: any DiskActions, packages: any PackageProbe,
                       openFiles: @Sendable () -> OpenFileSet,
                       expectedLevels: [NodeID: SafetyLevel]? = nil) -> TrashOutcome {
@@ -87,7 +89,7 @@ extension ScanStore {
         for id in items {
             let name = tree.name(id)
             if let reason = trashBlocker(id, open: open, packages: packages, mounts: mounts, devices: devices,
-                                         expectedLevel: expectedLevels?[id]) {
+                                         comparesLevel: expectedLevels != nil, expectedLevel: expectedLevels?[id]) {
                 outcome.skipped.append(TrashOutcome.Skipped(node: id, name: name, reason: reason))
                 continue
             }
@@ -115,7 +117,8 @@ extension ScanStore {
 
     /// Checks 1–7 of `trash` for one item: the first failing one, or nil when it may move.
     private func trashBlocker(_ id: NodeID, open: OpenFileSet, packages: any PackageProbe,
-                              mounts: [String], devices: Set<Int32>, expectedLevel: SafetyLevel?) -> TrashSkip? {
+                              mounts: [String], devices: Set<Int32>, comparesLevel: Bool,
+                              expectedLevel: SafetyLevel?) -> TrashSkip? {
         // 1. Already moved (`remove` marks the whole subtree).
         if tree.flags(id).contains(.removed) { return .missing }
         let path = tree.path(of: id)
@@ -125,8 +128,9 @@ extension ScanStore {
         // 3. Fresh verdict, bypassing the cache.
         let verdict = SafetyRules.evaluate(facts(id), in: environment)
         if verdict.level == .protected { return .protected(verdict.reason) }
-        // Not what the user saw when confirming (an app launched or quit meanwhile, say).
-        if let expectedLevel, verdict.level != expectedLevel { return .verdictChanged }
+        // Not what the user saw when confirming (an app launched or quit meanwhile, say), or never
+        // confirmed at all (no level for it).
+        if comparesLevel, verdict.level != expectedLevel { return .verdictChanged }
         // 4. Inside a package LaunchServices knows of (registered types too).
         if Self.ancestorPaths(of: path).contains(where: packages.isPackage) { return .insidePackage }
         // 5. Open right now.

@@ -108,7 +108,7 @@ struct TrashResultView: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                         .foregroundStyle(FusionPalette.primaryText(scheme))
-                    Text(verbatim: item.reason.text)
+                    Text(verbatim: item.reason)
                         .font(.callout)
                         .foregroundStyle(FusionPalette.secondaryText(scheme))
                         .fixedSize(horizontal: false, vertical: true)

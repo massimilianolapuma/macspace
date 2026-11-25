@@ -598,8 +598,35 @@ private func exists(_ path: String) -> Bool {
     #expect(outcome.skipped == [TrashOutcome.Skipped(node: b, name: "b.bin", reason: .verdictChanged)])
     #expect(actions.moved == [fx.root.path + "/Projects/a.bin"])
 
-    // An item with no expected level is not held back by this check.
+    // With a map, an item it has no level for was never confirmed: it fails closed.
     let rest = await store.trash([b], actions: actions, packages: noPackages, openFiles: nothingOpen,
                                  expectedLevels: [:])
-    #expect(rest.moved.map(\.node) == [b])
+    #expect(rest.moved.isEmpty)
+    #expect(rest.skipped == [TrashOutcome.Skipped(node: b, name: "b.bin", reason: .verdictChanged)])
+    #expect(actions.moved == [fx.root.path + "/Projects/a.bin"])
+}
+
+@Test func confirmedLevelIsComparedWithAFreshVerdict() async throws {
+    let fx = try Fixture(); defer { fx.cleanup() }
+    let bin = try Fixture(); defer { bin.cleanup() }
+    try fx.file("Library/Caches/com.example.app/blob", bytes: 80_000)
+    let store = ScanStore(rootName: "home", rootPath: fx.root.path, home: fx.root.path, now: fixedNow)
+    _ = await Scanner(rootPath: fx.root.path, boundary: try .forFolder(fx.root.path)).scan(into: store)
+    let apps = AppsIndex(records: [AppRecord(bundleID: "com.example.app", name: "Example", teamID: nil,
+                                             path: "/Applications/Example.app")])
+    await store.setEnvironment(.system(home: fx.root.path, apps: apps))
+    let id = try await node(store, fx, "Library/Caches/com.example.app")
+    // What the user saw and confirmed: the cache of an app that is not running.
+    let shown = try #require(await store.verdict(id))
+    #expect(shown.level == .safe && shown.reason == .cacheOfApp)
+
+    // The app launches before the move; the cache still holds the old verdict.
+    await store.setEnvironment(.system(home: fx.root.path, apps: apps, runningBundleIDs: ["com.example.app"]))
+    await store.plantVerdict(shown, for: id)
+
+    let actions = RecordingDiskActions(trash: bin.root.path)
+    let outcome = await store.trash([id], actions: actions, packages: noPackages, openFiles: nothingOpen,
+                                    expectedLevels: [id: shown.level])
+    #expect(outcome.moved.isEmpty && actions.moved.isEmpty)
+    #expect(outcome.skipped == [TrashOutcome.Skipped(node: id, name: "com.example.app", reason: .verdictChanged)])
 }

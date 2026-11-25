@@ -33,7 +33,9 @@ struct TrashConfirmationSheet: View {
     /// The rows, largest first, with the verdicts on show; nil until resolved.
     @State private var candidates: [TrashCandidate]?
     /// Rows the store no longer allows (now protected, gone): shown, dimmed, never moved.
-    @State private var withdrawn: [NodeID: TrashSkip] = [:]
+    @State private var withdrawn: [NodeID: String] = [:]
+    /// Refreshes of the rows running now; the move waits for them.
+    @State private var refreshing = 0
     /// Rows whose verdict changed while the sheet was open.
     @State private var updated: Set<NodeID> = []
     @State private var openCheck = OpenCheck.running
@@ -103,13 +105,14 @@ struct TrashConfirmationSheet: View {
                 VStack(spacing: 0) {
                     if index > 0 { Divider().padding(.leading, 46) }
                     TrashCandidateRow(candidate: candidate, stays: staysNote(candidate),
+                                      isWithdrawn: withdrawn[candidate.id] != nil,
                                       isUpdated: updated.contains(candidate.id), freed: freed[candidate.id])
                 }
             }
             .padding(.vertical, 4)
             Divider()
             VStack(alignment: .leading, spacing: 14) {
-                freedSummary(included)
+                if !included.isEmpty { freedSummary(included) }
                 status
                 buttons(included)
             }
@@ -120,19 +123,26 @@ struct TrashConfirmationSheet: View {
     }
 
     /// The question, with the count once the open files are known (it would otherwise drop as they
-    /// are left out), and how to undo.
+    /// are left out), and how to undo; "Niente da spostare" when every row stays.
     private func header(count: Int, restorable: Int) -> some View {
-        SheetHeader(systemImage: "trash") {
+        let nothingMoves = openCheck != .running && count == 0
+        return SheetHeader(systemImage: nothingMoves ? "trash.slash" : "trash") {
             if openCheck == .running {
                 HStack(spacing: 8) {
                     Text("Controllo dei file aperti…")
                     ProgressView().controlSize(.small)
                 }
+            } else if nothingMoves {
+                Text("Niente da spostare")
             } else {
                 Text("Spostare \(count) elementi nel Cestino?")
             }
         } detail: {
-            RestoreFootnote(count: restorable)
+            if nothingMoves {
+                Text("Gli elementi in grigio restano dove sono.")
+            } else {
+                RestoreFootnote(count: restorable)
+            }
         }
     }
 
@@ -181,7 +191,8 @@ struct TrashConfirmationSheet: View {
             case .running: EmptyView()  // said in the title
             case .incomplete: statusLine("Impossibile verificare i file aperti", warning: true, spinner: false)
             case let .done(open):
-                if !open.isEmpty || !withdrawn.isEmpty {
+                // Unless the header already says it (nothing moves).
+                if !open.isEmpty || !withdrawn.isEmpty, candidates.map(included(of:))?.isEmpty == false {
                     statusLine("Gli elementi in grigio restano dove sono.", warning: false, spinner: false)
                 }
             }
@@ -248,7 +259,7 @@ struct TrashConfirmationSheet: View {
 
     /// Why a row stays where it is (open now, or no longer allowed), or nil when it will move.
     private func staysNote(_ candidate: TrashCandidate) -> String? {
-        if let skip = withdrawn[candidate.id] { return skip.text }
+        if let note = withdrawn[candidate.id] { return note }
         if openIDs.contains(candidate.id) { return TrashSkip.openNow.text }
         return nil
     }
@@ -262,7 +273,9 @@ struct TrashConfirmationSheet: View {
     /// Only once the open files are known in full, with something left to move, the Trash available
     /// and no move running.
     private func canMove(_ included: [TrashCandidate]) -> Bool {
-        guard !moving, !included.isEmpty, model.trashUnavailableReason == nil, !model.isTrashing else { return false }
+        guard !moving, refreshing == 0, !included.isEmpty, model.trashUnavailableReason == nil, !model.isTrashing else {
+            return false
+        }
         if case .done = openCheck { return true }
         return false
     }
@@ -303,30 +316,47 @@ struct TrashConfirmationSheet: View {
         }
     }
 
-    /// Reads the rows' verdicts again and shows what changed, in place: a new verdict marks its
-    /// row "Aggiornato"; a row the store no longer allows is withdrawn. Returns whether anything
-    /// changed.
+    /// Reads the rows' verdicts again, afresh, and shows what changed, in place (`apply`). The move
+    /// button stays disabled while a refresh runs. Returns whether anything changed.
     private func refreshRows() async -> Bool {
         guard let shown = candidates else { return false }
+        refreshing += 1
+        defer { refreshing -= 1 }
         let current = await model.trashVerdicts(shown.map(\.id))
-        guard generation == model.storeGeneration, let rows = candidates else { return false }
+        guard generation == model.storeGeneration else { return false }
+        return apply(current)
+    }
+
+    /// Puts `current` on screen: a new verdict marks its row "Aggiornato"; a row the store no longer
+    /// allows is withdrawn, with why (gone, now protected, or no longer selectable) and its new
+    /// marker. Returns whether anything changed.
+    @discardableResult
+    private func apply(_ current: TrashVerdicts) -> Bool {
+        guard var rows = candidates else { return false }
         var changed = false
-        var refreshed = rows
-        for index in refreshed.indices {
-            let id = refreshed[index].id
+        for index in rows.indices {
+            let id = rows[index].id
             guard withdrawn[id] == nil else { continue }
             let verdict = current.verdicts[id]
-            if !current.allowed.contains(id) {
-                withdrawn[id] = verdict.map { $0.level == .protected ? .protected($0.reason) : .missing } ?? .missing
-                changed = true
-            } else if let verdict, verdict != refreshed[index].verdict {
-                refreshed[index].verdict = verdict
+            if let verdict, verdict != rows[index].verdict {
+                rows[index].verdict = verdict
                 updated.insert(id)
                 changed = true
             }
+            if !current.allowed.contains(id) {
+                withdrawn[id] = Self.withdrawalNote(verdict: verdict, removed: current.removed.contains(id))
+                changed = true
+            }
         }
-        if changed { candidates = refreshed }
+        if changed { candidates = rows }
         return changed
+    }
+
+    /// Why a row may no longer move, in words.
+    private static func withdrawalNote(verdict: SafetyVerdict?, removed: Bool) -> String {
+        if removed || verdict == nil { return TrashSkip.missing.text }
+        if let verdict, verdict.level == .protected { return TrashSkip.protected(verdict.reason).text }
+        return String(localized: "Non più selezionabile")
     }
 
     private enum Check: Sendable {
@@ -342,38 +372,62 @@ struct TrashConfirmationSheet: View {
 
     @concurrent nonisolated static func estimate(_ path: String) async -> UInt64 { PrivateSize.freed(path: path) }
 
-    /// Checks the rows one last time: if any verdict changed since they were shown, nothing moves,
-    /// the rows are refreshed and the user is asked to look again. Otherwise hands what will move,
-    /// with the levels on show, to `ScanModel.trash` (the store skips an item whose level is not
-    /// that one), then shows the result in place of the confirmation. The estimates still running
-    /// stop; the result estimates those items where they are in the Trash.
+    /// What was on screen when "Sposta nel Cestino" was pressed.
+    private struct Shown {
+        let verdicts: [NodeID: SafetyVerdict]
+        let withdrawn: Set<NodeID>
+        /// The rows that were to move, in order.
+        let included: [TrashCandidate]
+    }
+
+    /// Moves exactly what was on screen at the click, at the levels shown then. The rows are read
+    /// again afresh first: if any row's verdict or availability differs from that snapshot (an
+    /// environment update, a folder turned read-only…), nothing moves, the rows are refreshed and
+    /// the user is asked to look again. Otherwise the snapshot's rows and levels go to
+    /// `ScanModel.trash` (the store skips an item whose fresh level is not that one), and the result
+    /// replaces the confirmation. The estimates still running stop; the result estimates those items
+    /// where they are in the Trash.
     private func move() {
+        // Snapshot before anything else can change the rows.
         guard let rows = candidates, canMove(included(of: rows)), generation == model.storeGeneration else { return }
+        let shown = Shown(verdicts: Dictionary(uniqueKeysWithValues: rows.map { ($0.id, $0.verdict) }),
+                          withdrawn: Set(withdrawn.keys), included: included(of: rows))
+        let open = openIDs
         moving = true
         changedBeforeMove = false
         Task {
-            if await refreshRows() {
+            refreshing += 1
+            let current = await model.trashVerdicts(rows.map(\.id))
+            refreshing -= 1
+            guard generation == model.storeGeneration else {
+                moving = false
+                return
+            }
+            let differs = rows.contains { row in
+                guard !shown.withdrawn.contains(row.id) else { return false }
+                return !current.allowed.contains(row.id) || current.verdicts[row.id] != shown.verdicts[row.id]
+            }
+            if differs {
+                apply(current)
                 moving = false
                 changedBeforeMove = true
                 return
             }
-            guard let rows = candidates, generation == model.storeGeneration else {
-                moving = false
-                return
-            }
             work?.cancel()
-            let included = included(of: rows)
-            let ids = included.map(\.id)
-            let expected = Dictionary(uniqueKeysWithValues: included.map { ($0.id, $0.verdict.level) })
+            let ids = shown.included.map(\.id)
+            let expected = Dictionary(uniqueKeysWithValues: shown.included.map { ($0.id, $0.verdict.level) })
             let known = freed
-            let leftOut = rows.compactMap { row -> TrashOutcome.Skipped? in
-                if let skip = withdrawn[row.id] { return .init(node: row.id, name: row.name, reason: skip) }
-                if openIDs.contains(row.id) { return .init(node: row.id, name: row.name, reason: .openNow) }
+            let leftOut = rows.compactMap { row -> SkippedItem? in
+                if let note = withdrawn[row.id] { return SkippedItem(node: row.id, name: row.name, reason: note) }
+                if open.contains(row.id) {
+                    return SkippedItem(node: row.id, name: row.name, reason: TrashSkip.openNow.text)
+                }
                 return nil
             }
             let outcome = await model.trash(ids, expectedLevels: expected)
             let moved = Set(outcome.moved.map(\.node))
-            model.trashReport = TrashReport(moved: outcome.moved, skipped: outcome.skipped + leftOut,
+            let skipped = outcome.skipped.map { SkippedItem(node: $0.node, name: $0.name, reason: $0.reason.text) }
+            model.trashReport = TrashReport(moved: outcome.moved, skipped: skipped + leftOut,
                                             freed: known.filter { moved.contains($0.key) })
             model.pendingTrash = nil
         }
@@ -430,6 +484,8 @@ private struct TrashCandidateRow: View {
     let candidate: TrashCandidate
     /// Why it stays where it is; nil when it will move.
     let stays: String?
+    /// The store no longer allows it: its marker shows its state now, not the old level.
+    let isWithdrawn: Bool
     let isUpdated: Bool
     /// Its estimate, once known.
     let freed: UInt64?
@@ -491,10 +547,11 @@ private struct TrashCandidateRow: View {
             .joined(separator: ", ")))
     }
 
-    /// The level's swatch; a hollow ring for an ordinary item, so every row has a marker in the column.
+    /// The level's swatch; a hollow ring for an ordinary item, or a withdrawn one that is not now
+    /// protected (gone, no longer selectable), so every row has a marker in the column.
     @ViewBuilder
     private var levelMarker: some View {
-        if candidate.verdict.level == .normal {
+        if candidate.verdict.level == .normal || (isWithdrawn && candidate.verdict.level != .protected) {
             Circle()
                 .strokeBorder(FusionPalette.secondaryText(scheme), lineWidth: 1)
                 .frame(width: 9, height: 9)

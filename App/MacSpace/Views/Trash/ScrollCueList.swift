@@ -46,16 +46,16 @@ struct ScrollCueList<Row: View>: View {
                         .init(color: .black.opacity(below > 0 ? 0.1 : 1), location: 1),
                     ], startPoint: .top, endPoint: .bottom)
                 }
-                if below > 0 {
-                    Text("+\(below) altri")
-                        .font(.caption)
-                        .monospacedDigit()
-                        .foregroundStyle(FusionPalette.secondaryText(scheme))
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 24)
-                        .padding(.vertical, 6)
-                        .accessibilityHidden(true)  // VoiceOver reads every row anyway
-                }
+                // Always laid out, empty at the end, so the sheet does not jump while scrolling.
+                Text("+\(max(below, 1)) altri")
+                    .font(.caption)
+                    .monospacedDigit()
+                    .foregroundStyle(FusionPalette.secondaryText(scheme))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 24)
+                    .padding(.vertical, 6)
+                    .opacity(below > 0 ? 1 : 0)
+                    .accessibilityHidden(true)  // VoiceOver reads every row anyway
             }
         }
     }
@@ -67,9 +67,11 @@ struct ScrollCueList<Row: View>: View {
         return measured.dropLast().reduce(0, +) + measured[visibleRows] / 2
     }
 
-    /// Rows whose bottom edge lies below what is visible now.
+    /// Rows whose bottom edge lies below what is visible now. The offset is clamped to the content,
+    /// so rubber-banding past either end does not change the count.
     private func hiddenBelow(viewport: CGFloat) -> Int {
-        let visibleBottom = offset + viewport
+        let content = (0..<count).reduce(CGFloat(0)) { $0 + (heights[$1] ?? 0) }
+        let visibleBottom = min(max(offset, 0), max(content - viewport, 0)) + viewport
         var top: CGFloat = 0
         var hidden = 0
         for index in 0..<count {
