@@ -54,10 +54,23 @@ public enum SafetyTables {
         "Keychains", "Mail", "Messages", "Accounts", "Calendars", "Safari", "IdentityServices",
         "Daemon Containers", "Biome", "Metadata", "Suggestions", "Sharing", "Assistant", "IntelligencePlatform",
         "Shortcuts", "Trial",
+        // Direct children of `~/Library` that macOS keeps for its own apps and services (ruling R44).
+        "Apple", "AppleMediaServices", "Contacts", "Reminders", "Passes", "FinanceBackup", "Finance",
+        "MobileDevice", "Accessibility", "MediaAnalysis", "FrontBoard", "KeyboardServices", "LanguageModeling",
+        "Intents", "Translation", "SafariSafeBrowsing", "UnifiedAssetFramework", "DataDeliveryServices",
+        "ResponseKit", "Photos", "HomeKit", "PersonalizationPortrait", "DuetExpertCenter", "StatusKit",
+        "ContainerManager", "CoreFollowUp", "DoNotDisturb", "Weather", "PrivateCloudCompute", "LockdownMode",
         "Application Support/AddressBook", "Application Support/CallHistoryDB", "Application Support/Knowledge",
         "Application Support/CloudDocs", "Application Support/FileProvider",
         "Application Support/CallHistoryTransactions",
     ]
+
+    /// Lowercase name prefixes of Apple's own direct children of `~/Library` (rule 6, ruling R44):
+    /// they and everything below them are Apple data, as `L/<location>/com.apple.*` is.
+    public static let appleLibraryChildPrefixes = ["com.apple."]
+
+    /// The `~/Library` child where apps keep unsaved versions of documents (rule 12b): caution of its own.
+    public static let autosaveFolder = "Autosave Information"
 
     /// Direct children of `~/Library` that rule 12b leaves to the other rules, besides the
     /// `LibraryLocation` folders: every other child is a Library internal (caution).

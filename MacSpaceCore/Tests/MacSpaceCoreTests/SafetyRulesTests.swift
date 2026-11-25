@@ -704,7 +704,7 @@ private func synced(_ path: String, kind: NodeKind = .directory, flags: NodeFlag
 
 @Test func otherLibraryFoldersAreLibraryInternal() {
     let libraryInternal = SafetyVerdict(level: .caution, reason: .libraryInternal)
-    for name in ["Fonts", "Autosave Information", "Application Scripts", "Android", "Some Vendor", ".DS_Store"] {
+    for name in ["Fonts", "Application Scripts", "Android", "Some Vendor", ".DS_Store"] {
         #expect(v(lib + "/" + name) == libraryInternal, "\(name)")
         #expect(v(lib + "/" + name + "/deep/file.bin", kind: .file, lastUsed: old) == libraryInternal, "\(name)")
     }
@@ -727,4 +727,51 @@ private func synced(_ path: String, kind: NodeKind = .directory, flags: NodeFlag
     // Not below the home's Library.
     #expect(v("/Library/Fonts/a.ttf", kind: .file).reason == .ordinary)
     #expect(v("/Users/u/Libraryx/a", kind: .file).reason == .ordinary)
+}
+
+// MARK: - Apple data at the top of ~/Library (ruling R44)
+
+@Test func appleIdentifierFoldersAtTheTopOfTheLibraryAreAppleData() {
+    let apple = SafetyVerdict(level: .protected, reason: .appleData)
+    for name in ["com.apple.AppleMediaServices", "com.apple.aiml.instrumentation", "COM.APPLE.bird", "com.apple."] {
+        #expect(v(lib + "/" + name) == apple, "\(name)")
+        #expect(v(lib + "/" + name + "/deep/x/y.db", kind: .file, lastUsed: old) == apple, "\(name)")
+        #expect(v(lib.lowercased() + "/" + name) == apple, "\(name)")   // case-insensitive
+    }
+    // Only a `com.apple.` prefix of a direct child counts.
+    #expect(v(lib + "/com.applex.tool").reason == .libraryInternal)
+    #expect(v(lib + "/com.apple").reason == .libraryInternal)
+    #expect(v(lib + "/xcom.apple.tool").reason == .libraryInternal)
+    #expect(v(lib + "/Stuff/com.apple.tool").reason == .libraryInternal)
+    #expect(v("/Users/u/com.apple.tool").reason == .ordinary)
+}
+
+@Test func moreAppleFoldersAtTheTopOfTheLibraryAreNeverTouched() {
+    let apple = SafetyVerdict(level: .protected, reason: .appleData)
+    let folders = ["Apple", "AppleMediaServices", "Contacts", "Reminders", "Passes", "FinanceBackup", "Finance",
+                   "MobileDevice", "Accessibility", "MediaAnalysis", "FrontBoard", "KeyboardServices",
+                   "LanguageModeling", "Intents", "Translation", "SafariSafeBrowsing", "UnifiedAssetFramework",
+                   "DataDeliveryServices", "ResponseKit", "Photos", "HomeKit", "PersonalizationPortrait",
+                   "DuetExpertCenter", "StatusKit", "ContainerManager", "CoreFollowUp", "DoNotDisturb", "Weather",
+                   "PrivateCloudCompute", "LockdownMode"]
+    for folder in folders {
+        #expect(v(lib + "/" + folder) == apple, "\(folder)")
+        #expect(v(lib + "/" + folder + "/x/y.db", kind: .file, lastUsed: old) == apple, "\(folder)")
+        #expect(v(lib.lowercased() + "/" + folder.uppercased()) == apple, "\(folder)")   // case-insensitive
+    }
+    // Component-wise: a longer name is not the folder.
+    #expect(v(lib + "/Photosx").reason == .libraryInternal)
+    #expect(v(lib + "/Contacts Backup").reason == .libraryInternal)
+    #expect(v(lib + "/Applex/a", kind: .file).reason == .libraryInternal)
+    // Only at the top of the Library.
+    #expect(v(lib + "/Application Support/Photos").reason == .ordinary)
+}
+
+@Test func autosaveInformationHasItsOwnCaution() {
+    let autosave = SafetyVerdict(level: .caution, reason: .autosave)
+    #expect(v(lib + "/Autosave Information") == autosave)
+    #expect(v(lib + "/Autosave Information/Untitled.rtf", kind: .file, lastUsed: old) == autosave)
+    #expect(v(lib + "/autosave information/a/b.txt", kind: .file) == autosave)   // case-insensitive
+    #expect(v(lib + "/Autosave Informationx").reason == .libraryInternal)
+    #expect(v(lib + "/Autosave Information/a", kind: .file, writable: false).reason == .notWritable)
 }

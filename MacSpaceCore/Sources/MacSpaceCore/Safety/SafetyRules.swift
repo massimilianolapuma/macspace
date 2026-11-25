@@ -55,13 +55,17 @@ public enum SafetyRules {
         if SafetyPaths.isUnder(key, t.homeTrash) || key.split(separator: "/").contains(".trashes") {
             return SafetyVerdict(level: .protected, reason: .trash)
         }
-        // 6. Apple data: never-touch folders, Apple containers, and Apple-owned `L/<location>/<name>`
-        //    (except Caches and Logs, decided by rules 14 and 15). Needs no apps index.
+        // 6. Apple data: never-touch folders, Apple containers, `L/com.apple.*` (ruling R44), and
+        //    Apple-owned `L/<location>/<name>` (except Caches and Logs, decided by rules 14 and 15).
+        //    Needs no apps index.
+        let libraryChild = SafetyPaths.component(below: t.library, path: path, key: key).map(SafetyPaths.key)
         let anchor = t.anchor(path: path, key: key)
         let ownership = anchor.map {
             OwnerMatcher.ownership(of: $0.name, in: $0.location, apps: env.apps ?? .empty, running: env.running)
         }
         if t.appleData.contains(where: { SafetyPaths.isUnder(key, $0) }) || isAppleContainer(anchor)
+            || libraryChild.map({ child in SafetyTables.appleLibraryChildPrefixes.contains { child.hasPrefix($0) } })
+                == true
             || (ownership == .apple && anchor.map { $0.location != .caches && $0.location != .logs } == true) {
             return SafetyVerdict(level: .protected, reason: .appleData)
         }
@@ -93,9 +97,10 @@ public enum SafetyRules {
             return SafetyVerdict(level: .safe, reason: .developerCache, owner: cache.name)
         }
         // 12b. Any other `~/Library` child (and below) outside the known locations: macOS or app
-        //      internals no table describes, so only caution (ruling R43).
-        if let child = SafetyPaths.component(below: t.library, path: path, key: key),
-           !t.libraryKnownChildren.contains(SafetyPaths.key(child)) {
+        //      internals no table describes, so only caution (ruling R43). Unsaved versions of
+        //      documents get their own caution (ruling R44).
+        if let child = libraryChild, !t.libraryKnownChildren.contains(child) {
+            if child == t.autosaveFolder { return SafetyVerdict(level: .caution, reason: .autosave) }
             return SafetyVerdict(level: .caution, reason: .libraryInternal)
         }
         if let anchor, let ownership {
@@ -239,6 +244,8 @@ struct SafetyPaths: Sendable {
     let locations: [(location: LibraryLocation, path: String)]
     /// Lowercased names of the `~/Library` children rule 12b leaves alone.
     let libraryKnownChildren: Set<String>
+    /// Lowercased name of the `~/Library` child holding unsaved document versions (rule 12b).
+    let autosaveFolder: String
 
     init(home rawHome: String) {
         let h = SafetyTables.normalized(rawHome)
@@ -258,6 +265,7 @@ struct SafetyPaths: Sendable {
         locations = LibraryLocation.allCases.map { ($0, Self.key(lib + "/" + $0.rawValue)) }
         libraryKnownChildren = Set((LibraryLocation.allCases.map(\.rawValue) + SafetyTables.libraryInternalExceptions)
             .map(Self.key))
+        autosaveFolder = Self.key(SafetyTables.autosaveFolder)
     }
 
     /// The `L/<location>/<name>` folder `path` is at or below, if any.
