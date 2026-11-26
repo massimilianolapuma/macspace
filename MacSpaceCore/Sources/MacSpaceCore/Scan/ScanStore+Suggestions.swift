@@ -19,7 +19,14 @@ extension ScanStore {
         }
         func children(ofFolder path: String, reasons: Set<SafetyReason>) -> [SuggestionItem] {
             guard let folder = tree.node(atPath: path) else { return [] }
-            return tree.children(of: folder).compactMap { item($0, reasons: reasons) }
+            // In `children(of:)` order, but only those big enough to suggest get sorted: `item`
+            // turns the others down before anything with a side effect.
+            var candidates: [NodeID] = []
+            tree.forEachChild(of: folder) { child in
+                if tree.size(child) >= SafetyRules.suggestionMinSize { candidates.append(child) }
+            }
+            tree.sortLikeChildren(&candidates)
+            return candidates.compactMap { item($0, reasons: reasons) }
         }
 
         let leftoverReasons: Set<SafetyReason> = [.leftover, .recentLeftover, .vendorLeftover, .leftoverLaunchAgent]
