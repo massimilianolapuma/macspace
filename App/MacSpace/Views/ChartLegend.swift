@@ -16,36 +16,87 @@ struct ChartLegend: View {
     let mode: ColorMode
     @Environment(\.colorScheme) private var scheme
     @State private var showsOverflow = false
+    /// How many chips the row on screen folds into "+N" (0: none), reported by the chosen candidate.
+    @State private var hiddenCount = 0
 
     /// The levels "Eliminabili" marks; normal elements are the neutral rest of the chart.
     private static let safetyLevels: [SafetyLevel] = [.safe, .caution, .protected]
-    private static let spacing: CGFloat = 16
+    private static let spacing: CGFloat = 2 * WindowLayout.gap
 
-    /// One chip's meaning.
+    /// One chip's meaning and figure.
     private enum Entry: Hashable {
         case level(SafetyLevel)
         case category(FileCategory, UInt64)
         case age(AgeBucket, UInt64)
         case merged
+
+        /// What the chip stands for, without its figure: stays the same while a scan grows it.
+        var key: Key {
+            switch self {
+            case let .level(level): .level(level)
+            case let .category(category, _): .category(category)
+            case let .age(bucket, _): .age(bucket)
+            case .merged: .merged
+            }
+        }
+
+        enum Key: Hashable {
+            case level(SafetyLevel)
+            case category(FileCategory)
+            case age(AgeBucket)
+            case merged
+        }
+    }
+
+    /// The popover is about one folder, one mode and one set of folded chips; their sizes may grow
+    /// under it while a scan runs.
+    private struct OverflowSubject: Equatable {
+        let mode: ColorMode
+        let center: NodeID
+        let hidden: [Entry.Key]
     }
 
     var body: some View {
         let entries = entries
+        let hidden = Array(entries.suffix(min(hiddenCount, entries.count)))
         ViewThatFits(in: .horizontal) {
             ForEach((0...entries.count).reversed(), id: \.self) { shown in
                 HStack(spacing: Self.spacing) {
-                    ForEach(entries.prefix(shown), id: \.self) { chip($0) }
+                    ForEach(entries.prefix(shown), id: \.key) { chip($0) }
                     if shown < entries.count {
-                        overflow(Array(entries.dropFirst(shown)))
+                        overflowChip(count: entries.count - shown)
                     }
                 }
                 .fixedSize()
+                .preference(key: HiddenCountKey.self, value: entries.count - shown)
             }
         }
+        .onPreferenceChange(HiddenCountKey.self) { count in hiddenCount = count }
         .frame(maxWidth: .infinity)
         .frame(height: WindowLayout.rowHeight)
+        // One popover for the row, anchored on whichever "+N" is on screen; its list is always the
+        // chips that "+N" folds.
+        .overlayPreferenceValue(OverflowAnchorKey.self) { anchor in
+            GeometryReader { proxy in
+                if let anchor {
+                    let rect = proxy[anchor]
+                    Color.clear
+                        .frame(width: rect.width, height: rect.height)
+                        .position(x: rect.midX, y: rect.midY)
+                        .allowsHitTesting(false)
+                        .popover(isPresented: $showsOverflow, arrowEdge: .top) {
+                            VStack(alignment: .leading, spacing: WindowLayout.gap) {
+                                ForEach(hidden, id: \.key) { chip($0) }
+                            }
+                            .padding(2 * WindowLayout.gap)
+                        }
+                }
+            }
+        }
         .accessibilityElement(children: .contain)
-        .onChange(of: entries) { if showsOverflow { showsOverflow = false } }
+        .onChange(of: OverflowSubject(mode: mode, center: model.center, hidden: hidden.map(\.key))) {
+            if showsOverflow { showsOverflow = false }
+        }
     }
 
     private var entries: [Entry] {
@@ -79,24 +130,32 @@ struct ChartLegend: View {
         }
     }
 
-    /// "+N": the chips that do not fit, listed in a popover.
-    private func overflow(_ hidden: [Entry]) -> some View {
-        let words = hidden.count == 1 ? String(localized: "Un'altra voce")
-                                      : String(localized: "Altre \(hidden.count) voci")
+    /// "+N": the chips that do not fit; a click lists them in the row's popover.
+    private func overflowChip(count: Int) -> some View {
+        let words = count == 1 ? String(localized: "Un'altra voce") : String(localized: "Altre \(count) voci")
         return Button { showsOverflow.toggle() } label: {
-            Text(verbatim: "+\(hidden.count)")
+            Text(verbatim: "+\(count)")
                 .font(LegendChip<EmptyView>.font)
                 .monospacedDigit()
         }
         .buttonStyle(CrumbButtonStyle())
         .help(Text(verbatim: words))
         .accessibilityLabel(Text(verbatim: words))
-        .popover(isPresented: $showsOverflow, arrowEdge: .top) {
-            VStack(alignment: .leading, spacing: 8) {
-                ForEach(hidden, id: \.self) { chip($0) }
-            }
-            .padding(12)
-        }
+        .anchorPreference(key: OverflowAnchorKey.self, value: .bounds) { $0 }
+    }
+}
+
+/// How many chips the chosen row folds into "+N".
+private struct HiddenCountKey: PreferenceKey {
+    static let defaultValue = 0
+    static func reduce(value: inout Int, nextValue: () -> Int) { value = max(value, nextValue()) }
+}
+
+/// Where the "+N" on screen is.
+private struct OverflowAnchorKey: PreferenceKey {
+    static let defaultValue: Anchor<CGRect>? = nil
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
+        value = nextValue() ?? value
     }
 }
 
