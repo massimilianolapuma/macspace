@@ -81,8 +81,22 @@ final class ScanModel {
     private(set) var tileParents: [NodeID: NodeID] = [:]
     /// The canvas size `tiles` were laid out for.
     private(set) var tilesSize: CGSize = .zero
-    /// Total capacity of the scanned volume; set only when scanning the startup disk.
-    var capacity: UInt64?
+    /// Whether the current (or last) scan is of the startup disk rather than a chosen folder.
+    private(set) var scansStartupDisk = false
+    /// The startup disk's used space and capacity, read when a startup-disk scan starts and again
+    /// when it ends; nil for a folder scan, or when the volume does not report them.
+    var disk: DiskUsage?
+    /// The disk's usage as a fact of its own: only at the root of a startup-disk scan that finished
+    /// (while scanning, the scanned total would read as a progress towards it; after a cancel, the
+    /// rest is not system space but simply not scanned). The breadcrumb must already show the root:
+    /// going up sets `center` before the views catch up.
+    var diskAtRoot: DiskUsage? {
+        // `isScanning` first: while scanning, `phase` (updated on every tick) is not read.
+        guard !isScanning, case let .done(summary) = phase, !summary.wasCancelled,
+              center == FileTree.root, breadcrumb.count == 1, breadcrumb[0].id == FileTree.root
+        else { return nil }
+        return disk
+    }
 
     // Selection and suggestions (`ScanModel+Selection.swift`).
 
@@ -327,7 +341,8 @@ final class ScanModel {
         spotlightLastUsed = [:]
         lastUsedRequested = []
         lastUsedRest?.cancel()
-        capacity = if case .startupDisk = target { Self.startupDiskCapacity() } else { nil }
+        scansStartupDisk = target == .startupDisk
+        disk = scansStartupDisk ? DiskUsage.startupDisk() : nil
         segments = []
         tiles = []
         biggest = []
@@ -369,6 +384,8 @@ final class ScanModel {
         ticker.cancel()
         await ticker.value
 
+        // Read again: the disk kept changing while it was scanned.
+        if case .startupDisk = target { disk = DiskUsage.startupDisk() }
         phase = .done(summary)
         // Verdicts judged mid-scan saw partial sizes and last uses; the last timer refresh also
         // predates the final inserts: judge and show the finished tree.
@@ -385,11 +402,6 @@ final class ScanModel {
         return values?.volumeLocalizedName ?? "Macintosh HD"
     }()
 
-    private static func startupDiskCapacity() -> UInt64? {
-        let values = try? URL(filePath: "/").resourceValues(forKeys: [.volumeTotalCapacityKey])
-        return values?.volumeTotalCapacity.map { UInt64(clamping: $0) }
-    }
-
     /// Scan root path and display name. Chosen folders are resolved first: the reader
     /// opens directories with `O_NOFOLLOW`, so a symlinked root would fail.
     static func root(of target: ScanTarget) -> (path: String, name: String) {
@@ -404,6 +416,49 @@ final class ScanModel {
             }
             return (path, FileManager.default.displayName(atPath: path))
         }
+    }
+}
+
+/// The startup disk's space as Finder shows it.
+struct DiskUsage: Equatable {
+    /// Capacity minus the space available for important usage: what Finder shows as used.
+    let used: UInt64
+    let capacity: UInt64
+
+    /// Never reached while scanning: the bar disappears when the scan ends instead.
+    static let maxProgress = 0.95
+
+    /// "/"'s figures; nil when the volume does not report them.
+    static func startupDisk() -> DiskUsage? {
+        let keys: Set<URLResourceKey> = [.volumeTotalCapacityKey, .volumeAvailableCapacityForImportantUsageKey]
+        guard let values = try? URL(filePath: "/").resourceValues(forKeys: keys),
+              let total = values.volumeTotalCapacity, let available = values.volumeAvailableCapacityForImportantUsage
+        else { return nil }
+        let capacity = UInt64(clamping: total)
+        return DiskUsage(used: capacity - min(UInt64(clamping: available), capacity), capacity: capacity)
+    }
+
+    /// The estimated share of the scan done after `bytesSeen`, in 0…`maxProgress`: scanned bytes
+    /// never reach the used space (system volume, APFS snapshots, unreadable folders).
+    func progress(bytesSeen: UInt64) -> Double {
+        guard used > 0 else { return 0 }
+        return min(Double(bytesSeen) / Double(used), Self.maxProgress)
+    }
+
+    /// "Disco: 702,12 GB occupati"; where it wraps, the figure stays whole.
+    var line: String {
+        let figure = String(Formatters.bytes(used).map { $0.isWhitespace ? "\u{00A0}" : $0 })
+        return String(localized: "Disco: \(figure) occupati")
+    }
+
+    /// "Disco: 702,12 GB occupati su 994,61 GB": the chart's spoken summary.
+    var summary: String {
+        String(localized: "Disco: \(Formatters.bytes(used)) occupati su \(Formatters.bytes(capacity))")
+    }
+
+    /// The tooltip and the spoken label: used space and capacity, and why the scan counts less.
+    func explanation(scanned: UInt64) -> String {
+        String(localized: "Disco: \(Formatters.bytes(used)) occupati su \(Formatters.bytes(capacity)). MacSpace conta \(Formatters.bytes(scanned)) nelle cartelle che può leggere; il resto è spazio del sistema, istantanee APFS o cartelle non leggibili.")
     }
 }
 

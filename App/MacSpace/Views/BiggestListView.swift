@@ -111,7 +111,7 @@ private struct BiggestRow: View {
                 if colorMode != .deletable {
                     Image(systemName: "lock.fill")
                         .font(.system(size: 9, weight: .semibold))
-                        .foregroundStyle(FusionPalette.secondaryText(scheme))
+                        .foregroundStyle(FusionPalette.rowSecondaryText(scheme))
                         .help(Text(SafetyLevel.protected.title))
                 } else {
                     Color.clear.frame(height: 1)
@@ -166,7 +166,7 @@ private struct BiggestRow: View {
         HStack(spacing: 8) {
             Image(systemName: symbol)
                 .font(.body)
-                .foregroundStyle(FusionPalette.secondaryText(scheme))
+                .foregroundStyle(FusionPalette.rowSecondaryText(scheme))
                 .frame(width: 18)
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
@@ -178,13 +178,13 @@ private struct BiggestRow: View {
                     if row.flags.contains(.unreadable) {
                         Image(systemName: "lock.fill")
                             .font(.caption2)
-                            .foregroundStyle(FusionPalette.secondaryText(scheme))
+                            .foregroundStyle(FusionPalette.rowSecondaryText(scheme))
                             .accessibilityLabel(Text("Non leggibile"))
                     }
                     Spacer(minLength: 6)
                     Text(verbatim: Formatters.bytes(row.size))
                         .monospacedDigit()
-                        .foregroundStyle(FusionPalette.secondaryText(scheme))
+                        .foregroundStyle(FusionPalette.rowSecondaryText(scheme))
                 }
                 detail
                 share
@@ -266,7 +266,7 @@ private struct RowDetail<Marker: View>: View {
                 .accessibilityHidden(true)
             Text(verbatim: text)
                 .font(.caption)
-                .foregroundStyle(FusionPalette.secondaryText(scheme))
+                .foregroundStyle(FusionPalette.rowSecondaryText(scheme))
                 .lineLimit(lines)
                 .truncationMode(.tail)
                 .fixedSize(horizontal: false, vertical: true)
@@ -306,6 +306,6 @@ private struct RowButtonStyle: ButtonStyle {
 
     static func fill(highlighted: Bool, pressed: Bool, scheme: ColorScheme) -> some View {
         RoundedRectangle(cornerRadius: 6, style: .continuous)
-            .fill(FusionPalette.primaryText(scheme).opacity(pressed ? 0.11 : highlighted ? 0.07 : 0))
+            .fill(highlighted || pressed ? FusionPalette.rowFill(pressed: pressed, scheme: scheme) : .clear)
     }
 }

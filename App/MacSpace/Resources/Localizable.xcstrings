@@ -109,7 +109,7 @@
     "Analisi in corso…" : {
 
     },
-    "Analisi in corso… %@ file" : {
+    "Analisi in corso… %@ file · %@" : {
 
     },
     "Analisi interrotta · %@ file" : {
@@ -149,6 +149,9 @@
 
     },
     "Archivi e installer" : {
+
+    },
+    "Avanzamento stimato" : {
 
     },
     "Avanzi di app disinstallate" : {
@@ -248,6 +251,15 @@
 
     },
     "Deseleziona" : {
+
+    },
+    "Disco: %@ occupati" : {
+
+    },
+    "Disco: %@ occupati su %@" : {
+
+    },
+    "Disco: %@ occupati su %@. MacSpace conta %@ nelle cartelle che può leggere; il resto è spazio del sistema, istantanee APFS o cartelle non leggibili." : {
 
     },
     "Documenti" : {
@@ -575,7 +587,7 @@
     "circa %@ da recuperare svuotando il Cestino" : {
 
     },
-    "di %@" : {
+    "circa %lld%%" : {
 
     },
     "recuperabili circa %@" : {

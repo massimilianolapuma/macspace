@@ -5,14 +5,18 @@ import SwiftUI
 /// What VoiceOver gets from a chart: one element for the whole chart plus its biggest
 /// segments or tiles as children. Both charts are `Canvas`es, so nothing in them is a view.
 enum ChartAccessibility {
-    /// "Scegli cosa analizzare e premi Analizza" before a scan, "<cartella>, <totale>" after.
+    /// "Scegli cosa analizzare e premi Analizza" before a scan, "<cartella>, <totale>" after (and
+    /// the disk's used space and capacity at the root of a finished startup-disk scan).
     @MainActor
     static func label(for model: ScanModel) -> String {
         guard let folder = model.breadcrumb.last else {
             return model.isScanning ? String(localized: "Analisi in corso…")
                                     : String(localized: "Scegli cosa analizzare e premi Analizza")
         }
-        return "\(folder.name), \(Formatters.bytes(folder.size))"
+        let label = "\(folder.name), \(Formatters.bytes(folder.size))"
+        guard let disk = model.diskAtRoot else { return label }
+        // Short: the full explanation is spoken once, on the center (sunburst) or the header (treemap).
+        return label + ". " + disk.summary
     }
 }
 

@@ -340,3 +340,18 @@ private func safetyFills(_ s: ChartPalette.Scheme) -> [(SafetyLevel, Double, Con
         }
     }
 }
+
+/// Secondary text on a list row keeps AA in every row state (at rest, hovered, pressed), stays
+/// below the primary text, and moves as little as it must from the window's secondary text.
+@Test func rowSecondaryTextKeepsAAInEveryRowState() {
+    for s in [ChartPalette.Scheme.light, .dark] {
+        let text = ChartPalette.rowSecondaryText(s)
+        for (hovered, pressed) in [(false, false), (true, false), (true, true)] {
+            let surface = ChartPalette.rowSurface(hovered: hovered, pressed: pressed, scheme: s)
+            #expect(Contrast.ratio(text, surface) >= 4.5, "\(s) hovered \(hovered) pressed \(pressed)")
+            #expect(Contrast.ratio(text, surface) < Contrast.ratio(ChartPalette.primaryText(s), surface), "\(s)")
+        }
+        let pressed = ChartPalette.rowSurface(hovered: true, pressed: true, scheme: s)
+        #expect(Contrast.ratio(text, pressed) < 4.7, "\(s): moved further than needed")
+    }
+}

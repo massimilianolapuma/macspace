@@ -204,8 +204,16 @@ struct FusionPalette {
     static let centerHover: @Sendable (ColorScheme) -> Color = { $0 == .dark ? rgb(0x2C2C2E) : rgb(0xECE7DF) }
     /// Hover card surface: opaque, so its text keeps full contrast over any ring.
     static let tooltipFill: @Sendable (ColorScheme) -> Color = { $0 == .dark ? rgb(0x2C2C2E) : rgb(0xFBF9F6) }
-    static let primaryText: @Sendable (ColorScheme) -> Color = { $0 == .dark ? rgb(0xFFFFFF) : rgb(0x1F1B16) }
+    static let primaryText: @Sendable (ColorScheme) -> Color = { color(ChartPalette.primaryText(paletteScheme($0))) }
     static let secondaryText: @Sendable (ColorScheme) -> Color = { color(secondaryTextRGB($0)) }
+    /// Secondary text on a list row (`ChartPalette.rowSecondaryText`): AA also while it is pressed.
+    static let rowSecondaryText: @Sendable (ColorScheme) -> Color = {
+        color(ChartPalette.rowSecondaryText(paletteScheme($0)))
+    }
+    /// Highlight laid over a list row while it is hovered or pressed (`ChartPalette.rowSurface`).
+    static func rowFill(pressed: Bool, scheme: ColorScheme) -> Color {
+        primaryText(scheme).opacity(pressed ? ChartPalette.rowPressedOpacity : ChartPalette.rowHoverOpacity)
+    }
 
     /// Highlight for removable items: the safe fill (`ChartPalette.accent`).
     static func accent(_ scheme: ColorScheme) -> Color { color(ChartPalette.accent(paletteScheme(scheme))) }
