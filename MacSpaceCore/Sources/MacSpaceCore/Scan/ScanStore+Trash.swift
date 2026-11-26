@@ -48,8 +48,8 @@ extension ScanStore {
     /// 6. a folder holding something the rules protect as a whole (Apple data, a Photos library, a
     ///    running app or its data, an essential, system or Trash folder, an unusual path), or a
     ///    running app's bundle → `.containsProtected(reason)`; a folder whose contents were not all seen
-    ///    (it or a folder inside it is a mount point, unreadable, not fully listed or not descended
-    ///    by the scan, or a volume is mounted at or below it right now) → `.containsUnverified`;
+    ///    (it or a folder inside it is a mount point, unreadable, dataless, not fully listed or not
+    ///    descended by the scan, or a volume is mounted at or below it right now) → `.containsUnverified`;
     /// 7. on disk, checked last, right before the move: gone → `.missing`; cannot be examined →
     ///    `.failed`; another kind of object than scanned, now a mount point, on a device the scan
     ///    was not confined to, or a folder above it (up to the scan root) no longer a folder → `.changed`;
@@ -204,8 +204,8 @@ extension ScanStore {
     private static let unverifiedFlags: NodeFlags = [.mountPoint, .unreadable]
 
     /// Why the folder `id` at `path` may not go because of what it holds, or nil:
-    /// `.containsUnverified` when it or a folder below it (not removed) is a mount point, unreadable
-    /// or not fully listed; `.containsProtected(reason)` for a folder below it whose fresh verdict
+    /// `.containsUnverified` when it or a folder below it (not removed) is a mount point, unreadable,
+    /// or in `unverifiedDirectories` (dataless, not descended, not fully listed); `.containsProtected(reason)` for a folder below it whose fresh verdict
     /// is protected for one of `subtreeBlockingReasons`, or for a running app's bundle at or below
     /// it (compared as `SafetyPaths.folded`, by component).
     private func subtreeBlocker(_ id: NodeID, path: String) -> TrashSkip? {

@@ -24,9 +24,9 @@ public enum TrashSkip: Sendable, Hashable {
     case refused
     /// The list of open files could not be read in full, so nothing was moved.
     case cannotCheckOpenFiles
-    /// A folder whose contents were not all seen (a mount point, an unreadable folder, a folder a
-    /// cancelled scan did not finish listing, or one whose listing left an entry out), so what it
-    /// holds cannot be checked.
+    /// A folder whose contents were not all seen (a mount point, an unreadable or dataless folder, a
+    /// folder a cancelled scan did not finish listing, or one whose listing left an entry out), so
+    /// what it holds cannot be checked.
     case containsUnverified
     /// The scan is still running, so nothing was moved.
     case scanInProgress

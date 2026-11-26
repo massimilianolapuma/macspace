@@ -31,7 +31,7 @@ public actor ScanStore {
     /// Devices the scan was allowed on; items found on another device at Trash time have changed.
     var scanDevices: Set<Int32> = []
     /// Directories whose contents are unknown: not descended by the boundary (excluded, or on
-    /// another device), never listed by a cancelled scan, or listed only in part (cancelled
+    /// another device) or dataless (only in the cloud), never listed by a cancelled scan, or listed only in part (cancelled
     /// meanwhile, or an entry the file system reported an error for was left out).
     var unverifiedDirectories: Set<NodeID> = []
 
@@ -75,7 +75,10 @@ public actor ScanStore {
 
     /// Adds `entries` as children of `parent` (located at `parentPath`) and returns the child
     /// directories to descend into, per `boundary`, with the bytes counted. Symbolic links and
-    /// dataless directories are never descended. A file with `linkCount > 1` is counted once
+    /// dataless directories are never descended; a dataless directory, like one the boundary does
+    /// not descend (a mount point aside), joins `unverifiedDirectories`, since its contents are never
+    /// seen: `trash` skips it, and any folder holding it, as `.containsUnverified`. A file with
+    /// `linkCount > 1` is counted once
     /// per `(device, inode)`: later links are added with size 0 and `.hardLinkDuplicate`.
     ///
     /// Each entry is classified under `parent`'s context: a directory stores the context it
@@ -126,7 +129,11 @@ public actor ScanStore {
             if classifier.isPackage(directoryName: entry.name) { flags.insert(.package) }
             let id = tree.addChild(of: parent, name: entry.name, kind: entry.kind, allocatedSize: size,
                                    flags: flags, category: context ?? .other)
-            guard !entry.isDataless else { continue }
+            // Only in the cloud: its contents are never listed, so they are unknown (fail closed).
+            guard !entry.isDataless else {
+                unverifiedDirectories.insert(id)
+                continue
+            }
             if boundary.shouldDescend(path: path, device: entry.device, isMountPoint: entry.isMountPoint) {
                 descend.append((id: id, path: path))
             } else if !entry.isMountPoint {

@@ -735,3 +735,45 @@ private func exists(_ path: String) -> Bool {
                                     expectedLevels: nil)
     #expect(sibling.moved.map(\.node) == [whole])
 }
+
+@Test func datalessFolderAndItsParentAreUnverified() async throws {   // audit SEC-02
+    let fx = try Fixture(); defer { fx.cleanup() }
+    let bin = try Fixture(); defer { bin.cleanup() }
+    try fx.file("Projects/cloud/a", bytes: 10_000)
+    try fx.file("Projects/local/b", bytes: 10_000)
+    let projectsPath = fx.root.path + "/Projects"
+    // `cloud` lives only in iCloud (SF_DATALESS): the scan never descends it, so it never sees `a`.
+    let scanner = Scanner(rootPath: fx.root.path, boundary: try .forFolder(fx.root.path)) { path throws(DirectoryReadError) in
+        var listing = try DirectoryReader.read(path: path)
+        if path == projectsPath {
+            listing.entries = listing.entries.map { e in
+                e.name != "cloud" ? e : DirectoryEntry(
+                    name: e.name, kind: e.kind, allocatedSize: e.allocatedSize, device: e.device, inode: e.inode,
+                    linkCount: e.linkCount, isMountPoint: e.isMountPoint, isDataless: true,
+                    modificationTime: e.modificationTime, accessTime: e.accessTime)
+            }
+        }
+        return listing
+    }
+    let store = ScanStore(rootName: "home", rootPath: fx.root.path, home: fx.root.path, now: fixedNow)
+    _ = await scanner.scan(into: store)
+    await store.setEnvironment(.system(home: fx.root.path, apps: .empty))
+    let projects = try await node(store, fx, "Projects")
+    let cloud = try await node(store, fx, "Projects/cloud")
+    let local = try await node(store, fx, "Projects/local")
+    #expect(await store.row(cloud)?.flags.contains(.dataless) == true)
+    #expect(await store.node(atPath: fx.root.path + "/Projects/cloud/a") == nil)
+    #expect(await store.unverifiedDirectories == [cloud])
+
+    let actions = RecordingDiskActions(trash: bin.root.path)
+    let itself = await store.trash([cloud], actions: actions, packages: noPackages, openFiles: nothingOpen,
+                                   expectedLevels: nil)
+    #expect(itself.skipped == [TrashOutcome.Skipped(node: cloud, name: "cloud", reason: .containsUnverified)])
+    let above = await store.trash([projects], actions: actions, packages: noPackages, openFiles: nothingOpen,
+                                  expectedLevels: nil)
+    #expect(above.skipped == [TrashOutcome.Skipped(node: projects, name: "Projects", reason: .containsUnverified)])
+    #expect(itself.moved.isEmpty && above.moved.isEmpty && actions.moved.isEmpty)
+    let sibling = await store.trash([local], actions: actions, packages: noPackages, openFiles: nothingOpen,
+                                    expectedLevels: nil)
+    #expect(sibling.moved.map(\.node) == [local])
+}
