@@ -2,9 +2,10 @@ import MacSpaceCore
 import SwiftUI
 
 /// The largest items in the current folder, in ring-1 order. Hovering a row lights up its
-/// segment; clicking a folder drills into it.
+/// segment or tile; clicking a folder drills into it.
 struct BiggestListView: View {
     let model: ScanModel
+    let colorMode: ColorMode
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
@@ -38,6 +39,7 @@ struct BiggestListView: View {
             VStack(spacing: 0) {  // at most `ScanModel.biggestLimit` rows: no need for lazy loading
                 ForEach(model.biggest) { row in
                     BiggestRow(model: model, row: row, total: model.breadcrumb.last?.size ?? 0,
+                               colorMode: colorMode,
                                hover: { hover(row, $0) },
                                open: { model.drill(into: row.id) })
                 }
@@ -54,10 +56,9 @@ struct BiggestListView: View {
 
     private func hover(_ row: NodeRow, _ inside: Bool) {
         if inside {
-            let segment = model.segments.first { $0.depth == 1 && $0.node == row.id }
-            if model.hovered != segment { model.hovered = segment }
-        } else if model.hovered?.node == row.id {
-            model.hovered = nil
+            model.hoverFirstLevel(row.id)
+        } else if model.hoveredNode == row.id {
+            model.hoverFirstLevel(nil)
         }
     }
 }
@@ -66,6 +67,7 @@ private struct BiggestRow: View {
     let model: ScanModel
     let row: NodeRow
     let total: UInt64
+    let colorMode: ColorMode
     let hover: (Bool) -> Void
     let open: () -> Void
     @Environment(\.colorScheme) private var scheme
@@ -73,7 +75,7 @@ private struct BiggestRow: View {
     private var canOpen: Bool { row.kind == .directory && row.hasChildren }
 
     /// Read here, per row, so a hover change re-evaluates the rows only, not the list.
-    private var highlighted: Bool { model.hovered?.node == row.id }
+    private var highlighted: Bool { model.hoveredNode == row.id }
 
     var body: some View {
         // Folders are buttons, so they take keyboard focus and VoiceOver can open them.
@@ -114,12 +116,36 @@ private struct BiggestRow: View {
                         .monospacedDigit()
                         .foregroundStyle(FusionPalette.secondaryText(scheme))
                 }
+                detail
                 share
             }
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 6)
         .contentShape(Rectangle())
+    }
+
+    /// The row's file type (by type), or by last use a folder's dominant age bucket and a file's
+    /// relative last use, with its chart color; nothing in neutral mode. Worded as the hover card
+    /// words it: a folder with contents says "Per lo più: <bucket>"; an empty folder, like a file,
+    /// its own last use.
+    @ViewBuilder
+    private var detail: some View {
+        switch colorMode {
+        case .neutral:
+            EmptyView()
+        case .category:
+            RowDetail(color: FusionPalette.swatch(row.category, scheme: scheme),
+                      text: String(localized: row.category.title))
+        case .lastUse where row.kind == .directory && row.hasChildren:
+            // A folder: the age of most of its bytes, not of its latest touch.
+            RowDetail(color: FusionPalette.swatch(row.ageBucket, scheme: scheme),
+                      text: String(localized: "Per lo più: \(String(localized: row.ageBucket.title))"))
+        case .lastUse:
+            let age = Formatters.lastUsedAge(row.lastUsed)
+            RowDetail(color: FusionPalette.swatch(row.ageBucket, scheme: scheme), text: age)
+                .accessibilityLabel(Text("Ultimo uso (stimato): \(age)"))
+        }
     }
 
     /// Thin bar: the row's share of the current folder.
@@ -143,6 +169,27 @@ private struct BiggestRow: View {
         case .directory: "folder"
         case .symlink: "link"
         case .file, .other: "doc"
+        }
+    }
+}
+
+/// A small color dot and the words it stands for, under a row's name.
+private struct RowDetail: View {
+    let color: Color
+    let text: String
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Circle()
+                .fill(color)
+                .overlay(Circle().strokeBorder(FusionPalette.swatchRing(scheme), lineWidth: 0.5))
+                .frame(width: 7, height: 7)
+                .accessibilityHidden(true)
+            Text(verbatim: text)
+                .font(.caption)
+                .foregroundStyle(FusionPalette.secondaryText(scheme))
+                .lineLimit(1)
         }
     }
 }

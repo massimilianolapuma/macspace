@@ -12,10 +12,13 @@ func scanFixture(_ fx: Fixture) async throws -> (ScanStore, ScanSummary) {
 @Test func totalsMatchFixture() async throws {
     let fx = try Fixture(); defer { fx.cleanup() }
     let a = try fx.file("d1/a", bytes: 10_000), b = try fx.file("d1/d2/b", bytes: 50_000)
-    let alloc = { (u: URL) in UInt64(try! u.resourceValues(forKeys: [.totalFileAllocatedSizeKey]).totalFileAllocatedSize!) }
+    let alloc = { (u: URL) throws -> UInt64 in
+        let size = try #require(try u.resourceValues(forKeys: [.totalFileAllocatedSizeKey]).totalFileAllocatedSize)
+        return UInt64(size)
+    }
     let (store, s) = try await scanFixture(fx)
     #expect(s.files == 2 && s.directories >= 2 && !s.wasCancelled)
-    #expect(await store.rootSize() == alloc(a) + alloc(b))
+    #expect(await store.rootSize() == (try alloc(a)) + (try alloc(b)))
 }
 @Test func hardLinkCountedOnce() async throws {
     let fx = try Fixture(); defer { fx.cleanup() }
@@ -132,9 +135,68 @@ func scanFixture(_ fx: Fixture) async throws -> (ScanStore, ScanSummary) {
     try fx.file("a/b/c", bytes: 30_000); try fx.file("a/d", bytes: 10_000); try fx.file("e", bytes: 5_000)
     let (store, _) = try await scanFixture(fx)
     let a = await store.rows(childrenOf: FileTree.root, limit: 1)[0].id
-    let snapshot = await store.snapshot(center: a, depth: 3, biggestLimit: 1)
+    let snapshot = await store.snapshot(center: a, chart: .sunburst(depth: 3), biggestLimit: 1)
+    #expect(!snapshot.segments.isEmpty && snapshot.tiles.isEmpty)
     #expect(snapshot.segments == (await store.sunburst(center: a, depth: 3)))
     #expect(snapshot.biggest == (await store.rows(childrenOf: a, limit: 1)))
     #expect(snapshot.breadcrumb == (await store.breadcrumb(to: a)))
+    #expect(snapshot.categoryTotals == (await store.categoryTotals(of: a)) && !snapshot.categoryTotals.isEmpty)
     #expect(snapshot.breadcrumb.map(\.name) == ["fx", "a"] && snapshot.biggest.count == 1)
+    let treemap = await store.snapshot(center: a, chart: .treemap(width: 400, height: 300, depth: 3), biggestLimit: 1)
+    #expect(!treemap.tiles.isEmpty && treemap.segments.isEmpty)
+    #expect(treemap.tiles == (await store.treemap(center: a, width: 400, height: 300, depth: 3)))
+    #expect(treemap.biggest == snapshot.biggest && treemap.breadcrumb == snapshot.breadcrumb)
+}
+@Test func scanClassifiesWithContext() async throws {
+    let fx = try Fixture(); defer { fx.cleanup() }
+    try fx.file("node_modules/x/big.js", bytes: 200_000); try fx.file("film.mov", bytes: 100_000)
+    let store = ScanStore(rootName: "fx", rootPath: fx.root.path, home: "/nonexistent")
+    _ = await Scanner(rootPath: fx.root.path, boundary: try .forFolder(fx.root.path)).scan(into: store)
+    let totals = await store.categoryTotals(of: FileTree.root)
+    #expect(totals[.development, default: 0] >= 200_000 && totals[.video, default: 0] >= 100_000)
+    let rows = await store.rows(childrenOf: FileTree.root, limit: 10)
+    #expect(rows.first { $0.name == "node_modules" }?.category == .development)
+    #expect(rows.allSatisfy { $0.lastUsed > 0 })
+}
+@Test func insertUsesRootContextTimesAndHardLinkDuplicates() async {
+    func file(_ name: String, size: UInt64, links: UInt32 = 1, mtime: UInt32, atime: UInt32) -> DirectoryEntry {
+        DirectoryEntry(name: name, kind: .file, allocatedSize: size, device: 1, inode: 42, linkCount: links,
+                       isMountPoint: false, isDataless: false, modificationTime: mtime, accessTime: atime)
+    }
+    let boundary = ScanBoundary(allowedDevices: [1], excludedPaths: [])
+    // Scanning an app bundle directly: everything inside is App, whatever its extension.
+    let app = ScanStore(rootName: "Xcode", rootPath: "/Applications/Xcode.app", home: "/nonexistent")
+    _ = await app.insert([file("clip.mov", size: 4096, mtime: 5, atime: 9)], under: FileTree.root,
+                         parentPath: "/Applications/Xcode.app", boundary: boundary)
+    #expect(await app.categoryTotals(of: FileTree.root) == [.app: 4096])
+    #expect(await app.row(FileTree.root).lastUsed == 9)
+    // A hard-link duplicate adds no bytes but still raises the last use.
+    let store = ScanStore(rootName: "fx", rootPath: "/fx", home: "/nonexistent")
+    _ = await store.insert([file("a.mov", size: 4096, links: 2, mtime: 10, atime: 20)], under: FileTree.root,
+                           parentPath: "/fx", boundary: boundary)
+    let dup = await store.insert([file("b.mov", size: 4096, links: 2, mtime: 30, atime: 25)], under: FileTree.root,
+                                 parentPath: "/fx", boundary: boundary)
+    #expect(dup.bytes == 0)
+    #expect(await store.categoryTotals(of: FileTree.root) == [.video: 4096])
+    #expect(await store.row(FileTree.root).lastUsed == 30)
+}
+
+@Test func cargoTargetIsClassifiedFromItsSiblings() async throws {
+    func entry(_ name: String, _ kind: NodeKind) -> DirectoryEntry {
+        DirectoryEntry(name: name, kind: kind, allocatedSize: 0, device: 1, inode: 0, linkCount: 1,
+                       isMountPoint: false, isDataless: false)
+    }
+    let boundary = ScanBoundary(allowedDevices: [1], excludedPaths: [])
+    let store = ScanStore(rootName: "p", rootPath: "/p", home: "/Users/me")
+    let crates = await store.insert([entry("rust", .directory), entry("web", .directory)], under: FileTree.root,
+                                    parentPath: "/p", boundary: boundary).descend
+    let rust = try #require(crates.first { $0.path == "/p/rust" })
+    let web = try #require(crates.first { $0.path == "/p/web" })
+    let rustTarget = try #require(await store.insert([entry("Cargo.toml", .file), entry("target", .directory)],
+                                                     under: rust.id, parentPath: rust.path, boundary: boundary)
+        .descend.first)
+    let webTarget = try #require(await store.insert([entry("target", .directory)], under: web.id,
+                                                    parentPath: web.path, boundary: boundary).descend.first)
+    #expect(await store.row(rustTarget.id).category == .development)
+    #expect(await store.row(webTarget.id).category == .other)
 }

@@ -16,10 +16,18 @@ public struct ArcSegment: Sendable, Hashable, Identifiable {
     public var flags: NodeFlags
     /// Whether the node has children to drill into; always false for "altri".
     public var hasChildren: Bool
+    /// The node's dominant category; `.other` for "altri".
+    public var category: FileCategory
+    /// The node's last use (0 = unknown); for "altri", the latest of the merged siblings.
+    public var lastUsed: UInt32
+    /// The node's age bucket by bytes (`FileTree.dominantAgeBucket`); for "altri", the bucket
+    /// holding most of the merged siblings' bytes.
+    public var ageBucket: AgeBucket
 
     public init(id: String, node: NodeID?, parent: NodeID, depth: Int, startAngle: Double,
                 endAngle: Double, size: UInt64, name: String, otherCount: Int,
-                flags: NodeFlags = [], hasChildren: Bool = false) {
+                flags: NodeFlags = [], hasChildren: Bool = false,
+                category: FileCategory = .other, lastUsed: UInt32 = 0, ageBucket: AgeBucket = .unknown) {
         self.id = id
         self.node = node
         self.parent = parent
@@ -31,6 +39,9 @@ public struct ArcSegment: Sendable, Hashable, Identifiable {
         self.otherCount = otherCount
         self.flags = flags
         self.hasChildren = hasChildren
+        self.category = category
+        self.lastUsed = lastUsed
+        self.ageBucket = ageBucket
     }
 }
 
@@ -68,7 +79,8 @@ public enum SunburstLayout {
                 result.append(ArcSegment(id: "\(child)", node: child, parent: parent, depth: ringDepth,
                                          startAngle: cursor, endAngle: childEnd, size: size,
                                          name: row.name, otherCount: 0, flags: row.flags,
-                                         hasChildren: row.hasChildren))
+                                         hasChildren: row.hasChildren, category: row.category,
+                                         lastUsed: row.lastUsed, ageBucket: row.ageBucket))
                 if ringDepth < depth, tree.kind(child) == .directory {
                     queue.append((child, cursor, childEnd, ringDepth + 1))
                 }
@@ -77,12 +89,16 @@ public enum SunburstLayout {
             }
             var otherSize: UInt64 = 0
             var otherCount = 0
+            var otherLastUsed: UInt32 = 0
+            var otherAges = [UInt64](repeating: 0, count: FileTree.ageCount)
             let firstOther = index
             while index < children.count {
                 let size = tree.size(children[index])
                 if size == 0 { break }
                 otherSize &+= size
                 otherCount += 1
+                otherLastUsed = max(otherLastUsed, tree.lastUsed(children[index]))
+                tree.addAgeBytes(of: children[index], to: &otherAges)
                 index += 1
             }
             if otherCount == 1 {
@@ -92,12 +108,15 @@ public enum SunburstLayout {
                 result.append(ArcSegment(id: "\(child)", node: child, parent: parent, depth: ringDepth,
                                          startAngle: cursor, endAngle: snapped(cursor + span * Double(otherSize) / parentSize),
                                          size: otherSize, name: row.name, otherCount: 0, flags: row.flags,
-                                         hasChildren: row.hasChildren))
+                                         hasChildren: row.hasChildren, category: row.category,
+                                         lastUsed: row.lastUsed, ageBucket: row.ageBucket))
             } else if otherCount > 1 {
                 let otherEnd = snapped(cursor + span * Double(otherSize) / parentSize)
                 result.append(ArcSegment(id: "other-\(parent)-\(ringDepth)", node: nil, parent: parent,
                                          depth: ringDepth, startAngle: cursor, endAngle: otherEnd,
-                                         size: otherSize, name: "", otherCount: otherCount))
+                                         size: otherSize, name: "", otherCount: otherCount,
+                                         category: .other, lastUsed: otherLastUsed,
+                                         ageBucket: FileTree.dominantAgeBucket(otherAges)))
             }
         }
         return result

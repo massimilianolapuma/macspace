@@ -4,7 +4,19 @@
     "%@ file" : {
 
     },
+    "1–2 anni fa" : {
+
+    },
     "Altri %@ elementi" : {
+
+    },
+    "Altri (misti)" : {
+
+    },
+    "Altro" : {
+
+    },
+    "Analisi in corso…" : {
 
     },
     "Analisi in corso… %@ file" : {
@@ -16,10 +28,31 @@
     "Analizza" : {
 
     },
+    "App" : {
+
+    },
+    "Apri" : {
+
+    },
     "Apri Impostazioni di Sistema" : {
 
     },
+    "Archivi e installer" : {
+
+    },
+    "Colori" : {
+
+    },
     "Continua senza" : {
+
+    },
+    "Dati delle app e cache" : {
+
+    },
+    "Documenti" : {
+
+    },
+    "Foto e immagini" : {
 
     },
     "Gli elementi più pesanti appariranno qui" : {
@@ -28,7 +61,25 @@
     "Interrompi" : {
 
     },
+    "Musica e audio" : {
+
+    },
+    "Neutri" : {
+
+    },
     "Non leggibile" : {
+
+    },
+    "Oltre 2 anni" : {
+
+    },
+    "Per lo più: %@" : {
+
+    },
+    "Per tipo di file" : {
+
+    },
+    "Per ultimo uso" : {
 
     },
     "Per vedere tutto lo spazio, MacSpace deve poter leggere anche le cartelle di sistema e la Libreria. Puoi analizzare anche senza: le cartelle non leggibili saranno segnate." : {
@@ -40,13 +91,55 @@
     "Privacy e sicurezza › Accesso completo al disco › MacSpace" : {
 
     },
+    "Raggiera" : {
+
+    },
     "Scegli cartella…" : {
 
     },
     "Scegli cosa analizzare e premi Analizza" : {
 
     },
+    "Sconosciuto" : {
+
+    },
     "Serve l'accesso completo al disco" : {
+
+    },
+    "Sistema" : {
+
+    },
+    "Sviluppo" : {
+
+    },
+    "Tipo: %@" : {
+
+    },
+    "Torna su" : {
+
+    },
+    "Treemap" : {
+
+    },
+    "Ultimi 6 mesi" : {
+
+    },
+    "Ultimo anno" : {
+
+    },
+    "Ultimo mese" : {
+
+    },
+    "Ultimo uso (stimato): %@" : {
+
+    },
+    "Uso più recente (stimato): %@" : {
+
+    },
+    "Video" : {
+
+    },
+    "Vista" : {
 
     },
     "di %@" : {

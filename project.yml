@@ -25,5 +25,6 @@ targets:
         SWIFT_VERSION: 6.0
         DEVELOPMENT_LANGUAGE: it
         GENERATE_INFOPLIST_FILE: YES
+        SWIFT_EMIT_LOC_STRINGS: YES
         INFOPLIST_KEY_CFBundleDisplayName: MacSpace
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.utilities

@@ -9,22 +9,39 @@ struct ContentView: View {
     @State private var chosenFolder: (url: URL, name: String)?
     @State private var choosingFolder = false
     @State private var showOnboarding = false
+    @AppStorage(ColorMode.storageKey) private var colorMode: ColorMode = .neutral
+    @AppStorage(ChartKind.storageKey) private var chart: ChartKind = .sunburst
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(spacing: 0) {
             VStack(spacing: 0) {
-                BreadcrumbView(model: model)
-                    .padding(.horizontal, 12)
-                    .frame(height: 40)
-                    .opacity(model.breadcrumb.isEmpty ? 0 : 1)
-                SunburstView(model: model)
-                    .padding([.horizontal, .bottom], 8)
+                HStack(spacing: 12) {
+                    BreadcrumbView(model: model)
+                    if chart == .treemap {
+                        folderTotal
+                    }
+                }
+                .padding(.horizontal, 12)
+                .frame(height: 40)
+                .opacity(model.breadcrumb.isEmpty ? 0 : 1)
+                Group {
+                    switch chart {
+                    case .sunburst: SunburstView(model: model, colorMode: colorMode)
+                    case .treemap: TreemapView(model: model, colorMode: colorMode)
+                    }
+                }
+                .reportsChartSize(to: model)
+                .padding(.horizontal, 8)
+                .padding(.bottom, 4)
+                ChartLegend(model: model, mode: colorMode)
+                    .padding(.horizontal, 16)
+                    .padding(.bottom, 12)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             Divider()
-            BiggestListView(model: model)
+            BiggestListView(model: model, colorMode: colorMode)
                 .frame(width: 260)
                 .frame(maxHeight: .infinity)
         }
@@ -37,6 +54,10 @@ struct ContentView: View {
                 .disabled(model.breadcrumb.count < 2)
                 .opacity(0)
                 .accessibilityHidden(true)
+        }
+        .onChange(of: chart, initial: true) {
+            // Only relays out the current folder: a running scan carries on.
+            model.chart = chart
         }
         .navigationTitle(Text(verbatim: model.breadcrumb.last?.name ?? "MacSpace"))
         .toolbar(removing: .title)
@@ -80,6 +101,24 @@ struct ContentView: View {
                 Label(targetName, systemImage: target == .startupDisk ? "internaldrive" : "folder")
                     .labelStyle(.titleAndIcon)
             }
+        }
+        ToolbarItem(placement: .status) {
+            ChartKindPicker(selection: $chart)
+                .fixedSize()
+                .help(Text("Vista"))
+        }
+        ToolbarItem(placement: .status) {
+            Menu {
+                Picker("Colori", selection: $colorMode) {
+                    ForEach(ColorMode.allCases) { mode in
+                        Text(mode.title).tag(mode)
+                    }
+                }
+                .pickerStyle(.inline)
+            } label: {
+                Label("Colori", systemImage: "paintpalette")
+            }
+            .help(Text("Colori"))
         }
         ToolbarItem(placement: .status) {
             status
@@ -131,6 +170,23 @@ struct ContentView: View {
         }
     }
 
+    /// The current folder's size (and the disk's capacity at its root): the treemap has no
+    /// center to show it in, as the sunburst does.
+    private var folderTotal: some View {
+        HStack(spacing: 4) {
+            Text(verbatim: Formatters.bytes(model.breadcrumb.last?.size ?? 0))
+                .fontWeight(.semibold)
+                .foregroundStyle(FusionPalette.primaryText(scheme))
+            if model.center == FileTree.root, let capacity = model.capacity {
+                Text("di \(Formatters.bytes(capacity))")
+                    .foregroundStyle(FusionPalette.secondaryText(scheme))
+            }
+        }
+        .monospacedDigit()
+        .lineLimit(1)
+        .fixedSize()
+    }
+
     /// The target's name after resolving links, as the chart root shows it.
     private var targetName: String {
         switch target {
@@ -138,6 +194,35 @@ struct ContentView: View {
         case .folder: chosenFolder?.name ?? ""
         }
     }
+}
+
+/// Tells the model the chart area's size, whichever chart is on screen, so the treemap is laid out
+/// for the current size even when the window was resized while the sunburst showed. Resizing
+/// relays out only once the size has held for `resizeDebounce`; the first report is immediate.
+private struct ChartSizeReporter: ViewModifier {
+    let model: ScanModel
+    @State private var size: CGSize?
+    @State private var reported = false
+
+    static let resizeDebounce: Duration = .milliseconds(100)
+
+    func body(content: Content) -> some View {
+        content
+            .onGeometryChange(for: CGSize.self) { $0.size } action: { size = $0 }
+            .task(id: size) {
+                guard let size else { return }
+                if reported {
+                    try? await Task.sleep(for: Self.resizeDebounce)
+                    guard !Task.isCancelled else { return }
+                }
+                reported = true
+                if model.chartSize != size { model.chartSize = size }
+            }
+    }
+}
+
+private extension View {
+    func reportsChartSize(to model: ScanModel) -> some View { modifier(ChartSizeReporter(model: model)) }
 }
 
 private struct OnboardingView: View {

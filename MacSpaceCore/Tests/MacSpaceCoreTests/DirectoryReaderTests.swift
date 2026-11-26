@@ -9,7 +9,7 @@ import Testing
     try fx.dir("sub")
     let entries = try DirectoryReader.read(path: fx.root.path)
     let a = try #require(entries.first { $0.name == "a.bin" })
-    let expected = try f.resourceValues(forKeys: [.totalFileAllocatedSizeKey]).totalFileAllocatedSize!
+    let expected = try #require(try f.resourceValues(forKeys: [.totalFileAllocatedSizeKey]).totalFileAllocatedSize)
     #expect(a.kind == .file && a.allocatedSize == UInt64(expected))
     #expect(entries.first { $0.name == "sub" }?.kind == .directory)
 }
@@ -24,7 +24,7 @@ import Testing
     let fx = try Fixture(); defer { fx.cleanup() }
     let f = try fx.file("x", bytes: 5000); try fx.hardLink("y", to: f)
     let e = try DirectoryReader.read(path: fx.root.path)
-    let x = e.first { $0.name == "x" }!, y = e.first { $0.name == "y" }!
+    let x = try #require(e.first { $0.name == "x" }), y = try #require(e.first { $0.name == "y" })
     #expect(x.inode == y.inode && x.linkCount == 2)
 }
 @Test func permissionDeniedThrows() throws {
@@ -43,4 +43,47 @@ import Testing
     let fx = try Fixture(); defer { fx.cleanup() }
     for i in 0..<5000 { try fx.file("f\(i)", bytes: 1) }
     #expect(try DirectoryReader.read(path: fx.root.path).count == 5000)
+}
+
+@Test func readsTimestamps() throws {
+    let fx = try Fixture(); defer { fx.cleanup() }
+    let f = try fx.file("t.bin", bytes: 10)
+    let past = Date(timeIntervalSince1970: 1_600_000_000)
+    try FileManager.default.setAttributes([.modificationDate: past], ofItemAtPath: f.path)
+    let e = try #require(try DirectoryReader.read(path: fx.root.path).first { $0.name == "t.bin" })
+    #expect(e.modificationTime == 1_600_000_000)
+    #expect(e.accessTime > 0)
+}
+
+@Test func statDescribesFileDirAndSymlink() throws {
+    let fx = try Fixture(); defer { fx.cleanup() }
+    let f = try fx.file("f", bytes: 5000); let d = try fx.dir("d"); try fx.symlink("l", to: d)
+    #expect(try DirectoryReader.stat(path: f.path).kind == .file)
+    #expect(try DirectoryReader.stat(path: d.path).kind == .directory)
+    #expect(try DirectoryReader.stat(path: fx.root.appending(path: "l").path).kind == .symlink)
+}
+
+@Test func statReportsTimestamps() throws {
+    let fx = try Fixture(); defer { fx.cleanup() }
+    let f = try fx.file("f", bytes: 1)
+    try FileManager.default.setAttributes(
+        [.modificationDate: Date(timeIntervalSince1970: 1_600_000_000)], ofItemAtPath: f.path)
+    let e = try DirectoryReader.stat(path: f.path)
+    #expect(e.modificationTime == 1_600_000_000)
+    #expect(e.accessTime > 0)
+}
+
+@Test func errnoMapping() throws {
+    let fx = try Fixture(); defer { fx.cleanup() }
+    let f = try fx.file("f", bytes: 1)
+    #expect(throws: DirectoryReadError.notFound) { try DirectoryReader.read(path: fx.root.path + "/missing") }
+    #expect(throws: DirectoryReadError.notADirectory) { try DirectoryReader.read(path: f.path) }
+}
+
+@Test func preCancelledReadReturnsNothing() async throws {
+    let fx = try Fixture(); defer { fx.cleanup() }
+    for i in 0..<10 { try fx.file("f\(i)", bytes: 1) }
+    // Checks the cancellation check that runs before each batch (here, before the first).
+    let n = try await Task { withUnsafeCurrentTask { $0?.cancel() }; return try DirectoryReader.read(path: fx.root.path).count }.value
+    #expect(n == 0)
 }

@@ -1,24 +1,12 @@
 import Foundation
+import MacSpaceCore
 
-/// Number and size formatting for the UI: Italian locale; sizes as Finder computes them
-/// (allocated bytes, `.file` count style), always numeric ("0 byte", never "Zero kB") and with a
-/// fixed number of decimals per unit, so sizes line up ("2,70 GB" next to "142,87 GB").
+/// Number, size and date formatting for the UI, in Italian.
 enum Formatters {
     private static let locale = Locale(identifier: "it_IT")
-    /// Decimals per unit: `.file` style rounds to these, but drops trailing zeros.
-    private static let decimals = ["MB": 1, "GB": 2, "TB": 2, "PB": 2]
 
-    static func bytes(_ value: UInt64) -> String {
-        let text = Int64(clamping: value).formatted(.byteCount(style: .file, spellsOutZero: false).locale(locale))
-        guard let space = text.lastIndex(where: \.isWhitespace),
-              let wanted = decimals[String(text[text.index(after: space)...])] else { return text }
-        var number = String(text[..<space])
-        let have = number.firstIndex(of: ",").map { number.distance(from: $0, to: number.endIndex) - 1 } ?? -1
-        if have < wanted {
-            number += (have < 0 ? "," : "") + String(repeating: "0", count: wanted - max(have, 0))
-        }
-        return number + text[space...]
-    }
+    /// Sizes as Finder shows them, with fixed decimals per unit (`ByteFormat`).
+    static func bytes(_ value: UInt64) -> String { ByteFormat.string(value, locale: locale) }
 
     static func count(_ value: Int) -> String {
         value.formatted(.number.locale(locale))
@@ -31,4 +19,27 @@ enum Formatters {
         if part > 0, ratio < 0.005 { return "<1%" }
         return ratio.formatted(.percent.precision(.fractionLength(0)).locale(locale))
     }
+
+    /// An estimated last use (seconds since 1970) as a date ("12 mar 2025"); "Sconosciuto" for 0.
+    static func lastUsedDate(_ timestamp: UInt32) -> String {
+        guard timestamp != 0 else { return String(localized: "Sconosciuto") }
+        return Date(timeIntervalSince1970: TimeInterval(timestamp))
+            .formatted(Date.FormatStyle(date: .abbreviated, time: .omitted).locale(locale))
+    }
+
+    /// An estimated last use relative to now ("3 mesi fa"); "Sconosciuto" for 0.
+    @MainActor
+    static func lastUsedAge(_ timestamp: UInt32, now: Date = .now) -> String {
+        guard timestamp != 0 else { return String(localized: "Sconosciuto") }
+        return relative.localizedString(for: min(Date(timeIntervalSince1970: TimeInterval(timestamp)), now),
+                                        relativeTo: now)
+    }
+
+    @MainActor private static let relative: RelativeDateTimeFormatter = {
+        let formatter = RelativeDateTimeFormatter()
+        formatter.locale = locale
+        formatter.dateTimeStyle = .named
+        formatter.unitsStyle = .full
+        return formatter
+    }()
 }
