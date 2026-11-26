@@ -53,7 +53,11 @@ public enum SunburstLayout {
     /// Lays out `depth` rings of descendants of `center`. Each segment's children subdivide its
     /// span proportionally to size. Siblings narrower than `minAngle` are merged into one
     /// trailing "altri" segment (only two or more non-empty ones; a lone one is kept as itself), which is
-    /// never subdivided. Output is ordered ring by ring.
+    /// never subdivided. Output is ordered ring by ring, each family like `children(of:)` (size
+    /// descending, then name) with "altri" last.
+    ///
+    /// Cost: one unsorted pass over the children of each expanded folder, plus a sort of only the
+    /// ones drawn, so a folder of a million tiny files costs O(n), not O(n log n).
     public static func compute(tree: FileTree, center: NodeID, depth: Int = 3,
                                minAngle: Double = 0.006) -> [ArcSegment] {
         guard depth > 0, tree.size(center) > 0 else { return [] }
@@ -69,15 +73,35 @@ public enum SunburstLayout {
             let span = end - start
             // Summed proportional spans drift by an ulp or so: the last one ends exactly at `end`.
             func snapped(_ angle: Double) -> Double { abs(end - angle) < 1e-9 ? end : angle }
-            let children = tree.children(of: parent)
-            var cursor = start
-            var index = 0
-            while index < children.count {
-                let child = children[index]
+            // One unsorted pass over all children: a folder of a million tiny files costs O(n).
+            // A child gets its own segment when its span reaches `minAngle`; that test is monotone
+            // in size, so the kept ones are exactly the prefix of `children(of:)` the sorted walk
+            // used to keep, and only they get sorted (at most about span / minAngle of them). The
+            // rest are tallied into "altri"; the tallies (wrapping sums, a max) ignore order.
+            var members: [NodeID] = []
+            var otherSize: UInt64 = 0
+            var otherCount = 0
+            var otherLastUsed: UInt32 = 0
+            var otherAges = [UInt64](repeating: 0, count: FileTree.ageCount)
+            var lastOther: NodeID = 0
+            tree.forEachChild(of: parent) { child in
                 let size = tree.size(child)
-                if size == 0 { break }  // sorted by size descending: the rest are empty too
+                guard size > 0 else { return }
+                if !(span * Double(size) / parentSize < minAngle) {
+                    members.append(child)
+                } else {
+                    otherSize &+= size
+                    otherCount += 1
+                    otherLastUsed = max(otherLastUsed, tree.lastUsed(child))
+                    tree.addAgeBytes(of: child, to: &otherAges)
+                    lastOther = child
+                }
+            }
+            tree.sortLikeChildren(&members)
+            var cursor = start
+            for child in members {
+                let size = tree.size(child)
                 let childSpan = span * Double(size) / parentSize
-                if childSpan < minAngle { break }  // so are all following siblings
                 let childEnd = snapped(cursor + childSpan)
                 let row = tree.row(child)
                 result.append(ArcSegment(id: "\(child)", node: child, parent: parent, depth: ringDepth,
@@ -89,25 +113,10 @@ public enum SunburstLayout {
                     queue.append((child, cursor, childEnd, ringDepth + 1))
                 }
                 cursor = childEnd
-                index += 1
-            }
-            var otherSize: UInt64 = 0
-            var otherCount = 0
-            var otherLastUsed: UInt32 = 0
-            var otherAges = [UInt64](repeating: 0, count: FileTree.ageCount)
-            let firstOther = index
-            while index < children.count {
-                let size = tree.size(children[index])
-                if size == 0 { break }
-                otherSize &+= size
-                otherCount += 1
-                otherLastUsed = max(otherLastUsed, tree.lastUsed(children[index]))
-                tree.addAgeBytes(of: children[index], to: &otherAges)
-                index += 1
             }
             if otherCount == 1 {
                 // A lone small sibling is drawn as itself: "altri" only ever stands for two or more.
-                let child = children[firstOther]
+                let child = lastOther
                 let row = tree.row(child)
                 result.append(ArcSegment(id: "\(child)", node: child, parent: parent, depth: ringDepth,
                                          startAngle: cursor, endAngle: snapped(cursor + span * Double(otherSize) / parentSize),
