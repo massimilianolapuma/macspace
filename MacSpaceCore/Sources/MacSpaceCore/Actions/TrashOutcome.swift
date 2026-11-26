@@ -10,8 +10,8 @@ public enum TrashSkip: Sendable, Hashable {
     /// A folder holding something the rules protect as a whole (a running app, a Photos library,
     /// Apple data…), for the given reason; the folder itself may not be protected.
     case containsProtected(SafetyReason)
-    /// Its fresh safety level is not the one the user confirmed (`trash`'s `expectedLevels`), or it
-    /// has no confirmed level there.
+    /// Its fresh safety verdict (level, reason or owner) is not the one the user confirmed
+    /// (`trash`'s `expectedVerdicts`), or it has no confirmed verdict there.
     case verdictChanged
     /// The app was still applying a new environment (apps index, apps launched or quit), so verdicts
     /// were not final and nothing was moved. `ScanStore.trash` never returns it; the app does.

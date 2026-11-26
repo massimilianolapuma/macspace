@@ -22,7 +22,7 @@ struct TrashSheet: View {
 /// to look at first, why; what moving them frees; and the move itself. On appear, off the main
 /// actor, it reads the open files (open items are left out) and estimates each item's private size.
 /// The rows follow the store: after an environment update they are read again (changed ones say
-/// "Aggiornato"), and right before moving too, so nothing moves at a level the user did not see.
+/// "Aggiornato"), and right before moving too, so nothing moves with a verdict the user did not see.
 /// Nothing moves here: `ScanModel.trash` hands the items to the store, which checks them again.
 struct TrashConfirmationSheet: View {
     let model: ScanModel
@@ -380,11 +380,12 @@ struct TrashConfirmationSheet: View {
         let included: [TrashCandidate]
     }
 
-    /// Moves exactly what was on screen at the click, at the levels shown then. The rows are read
+    /// Moves exactly what was on screen at the click, with the verdicts shown then. The rows are read
     /// again afresh first: if any row's verdict or availability differs from that snapshot (an
     /// environment update, a folder turned read-only…), nothing moves, the rows are refreshed and
-    /// the user is asked to look again. Otherwise the snapshot's rows and levels go to
-    /// `ScanModel.trash` (the store skips an item whose fresh level is not that one), and the result
+    /// the user is asked to look again. Otherwise the snapshot's rows and verdicts go to
+    /// `ScanModel.trash` (the store skips an item whose fresh verdict is not that one: level, reason
+    /// or owner), and the result
     /// replaces the confirmation. The estimates still running stop; the result estimates those items
     /// where they are in the Trash.
     private func move() {
@@ -415,7 +416,7 @@ struct TrashConfirmationSheet: View {
             }
             work?.cancel()
             let ids = shown.included.map(\.id)
-            let expected = Dictionary(uniqueKeysWithValues: shown.included.map { ($0.id, $0.verdict.level) })
+            let expected = Dictionary(uniqueKeysWithValues: shown.included.map { ($0.id, $0.verdict) })
             let known = freed
             let leftOut = rows.compactMap { row -> SkippedItem? in
                 if let note = withdrawn[row.id] { return SkippedItem(node: row.id, name: row.name, reason: note) }
@@ -424,7 +425,7 @@ struct TrashConfirmationSheet: View {
                 }
                 return nil
             }
-            let outcome = await model.trash(ids, expectedLevels: expected)
+            let outcome = await model.trash(ids, expectedVerdicts: expected)
             let moved = Set(outcome.moved.map(\.node))
             let skipped = outcome.skipped.map { SkippedItem(node: $0.node, name: $0.name, reason: $0.reason.text) }
             model.trashReport = TrashReport(moved: outcome.moved, skipped: skipped + leftOut,

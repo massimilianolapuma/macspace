@@ -61,7 +61,7 @@ private func exists(_ path: String) -> Bool {
 
     let actions = RecordingDiskActions(trash: bin.root.path)
     let outcome = await store.trash([target], actions: actions, packages: noPackages, openFiles: nothingOpen,
-                                    expectedLevels: nil)
+                                    expectedVerdicts: nil)
 
     #expect(actions.moved == [path])
     #expect(outcome.moved == [TrashOutcome.Moved(node: target, name: "com.gone.x", size: size,
@@ -91,7 +91,7 @@ private func exists(_ path: String) -> Bool {
 
     let actions = RecordingDiskActions(trash: bin.root.path)
     let outcome = await store.trash([folder, inner], actions: actions, packages: noPackages, openFiles: nothingOpen,
-                                    expectedLevels: nil)
+                                    expectedVerdicts: nil)
 
     #expect(actions.moved == [fx.root.path + "/Library/Caches/com.gone.x"])
     #expect(outcome.moved.map(\.node) == [folder] && outcome.skipped.isEmpty)
@@ -127,7 +127,7 @@ private func exists(_ path: String) -> Bool {
     let actions = RecordingDiskActions(trash: bin.root.path)
 
     let first = await store.trash([library, caches, inBundle, FileTree.root], actions: actions,
-                                  packages: noPackages, openFiles: nothingOpen, expectedLevels: nil)
+                                  packages: noPackages, openFiles: nothingOpen, expectedVerdicts: nil)
     #expect(first.moved.isEmpty)
     #expect(Dictionary(uniqueKeysWithValues: first.skipped.map { ($0.node, $0.reason) })
             == [library: .refused, inBundle: .protected(.insidePackage)])   // Caches is below Library
@@ -137,7 +137,7 @@ private func exists(_ path: String) -> Bool {
     // A stale "safe" verdict in the cache must not matter: the store re-evaluates.
     await store.plantVerdict(SafetyVerdict(level: .safe, reason: .leftover), for: inBundle)
     let second = await store.trash([caches, keychain, photos, inBundle], actions: actions,
-                                   packages: noPackages, openFiles: nothingOpen, expectedLevels: nil)
+                                   packages: noPackages, openFiles: nothingOpen, expectedVerdicts: nil)
     #expect(second.moved.isEmpty)
     #expect(Dictionary(uniqueKeysWithValues: second.skipped.map { ($0.node, $0.reason) })
             == [caches: .refused, keychain: .protected(.appleData), photos: .protected(.photosLibrary),
@@ -158,7 +158,7 @@ private func exists(_ path: String) -> Bool {
 
     let actions = RecordingDiskActions(trash: bin.root.path)
     let outcome = await store.trash([id], actions: actions, packages: noPackages, openFiles: nothingOpen,
-                                    expectedLevels: nil)
+                                    expectedVerdicts: nil)
     #expect(outcome.skipped == [TrashOutcome.Skipped(node: id, name: "a.bin", reason: .missing)])
     #expect(outcome.moved.isEmpty && actions.moved.isEmpty)
     #expect(await store.rootSize() == before)
@@ -181,7 +181,7 @@ private func exists(_ path: String) -> Bool {
 
     let actions = RecordingDiskActions(trash: bin.root.path)
     let outcome = await store.trash([old, note], actions: actions, packages: noPackages, openFiles: nothingOpen,
-                                    expectedLevels: nil)
+                                    expectedVerdicts: nil)
     #expect(Set(outcome.skipped.map(\.reason)) == [.changed] && outcome.skipped.count == 2)
     #expect(outcome.moved.isEmpty && actions.moved.isEmpty)
     #expect(exists(target.path))
@@ -200,7 +200,7 @@ private func exists(_ path: String) -> Bool {
 
     let actions = RecordingDiskActions(trash: bin.root.path)
     let outcome = await store.trash([item], actions: actions, packages: noPackages, openFiles: nothingOpen,
-                                    expectedLevels: nil)
+                                    expectedVerdicts: nil)
     #expect(outcome.skipped.map(\.reason) == [.changed])
     #expect(actions.moved.isEmpty && exists(fx.root.path + "/Keep/sub2/item/f"))
 }
@@ -219,7 +219,7 @@ private func exists(_ path: String) -> Bool {
     let outcome = await store.trash([work, log], actions: actions, packages: noPackages, openFiles: {
         calls.tick()
         return OpenFileSet(paths: [doc.path, other.path])
-    }, expectedLevels: nil)
+    }, expectedVerdicts: nil)
     #expect(Set(outcome.skipped.map(\.node)) == [work, log])
     #expect(outcome.skipped.allSatisfy { $0.reason == .openNow })
     #expect(outcome.moved.isEmpty && actions.moved.isEmpty)
@@ -237,7 +237,7 @@ private func exists(_ path: String) -> Bool {
 
     let actions = RecordingDiskActions(trash: bin.root.path)
     let outcome = await store.trash([a, cache], actions: actions, packages: noPackages,
-                                    openFiles: { OpenFileSet(paths: [], isComplete: false) }, expectedLevels: nil)
+                                    openFiles: { OpenFileSet(paths: [], isComplete: false) }, expectedVerdicts: nil)
     #expect(Set(outcome.skipped.map(\.node)) == [a, cache])
     #expect(outcome.skipped.allSatisfy { $0.reason == .cannotCheckOpenFiles })
     #expect(outcome.moved.isEmpty && actions.moved.isEmpty)
@@ -253,7 +253,7 @@ private func exists(_ path: String) -> Bool {
     let actions = RecordingDiskActions(trash: bin.root.path)
     let outcome = await store.trash([inner], actions: actions,
                                     packages: FakePackageProbe(packages: [fx.root.path + "/Weird.thing"]),
-                                    openFiles: nothingOpen, expectedLevels: nil)
+                                    openFiles: nothingOpen, expectedVerdicts: nil)
     #expect(outcome.skipped.map(\.reason) == [.insidePackage])
     #expect(outcome.moved.isEmpty && actions.moved.isEmpty)
 }
@@ -268,15 +268,15 @@ private func exists(_ path: String) -> Bool {
 
     let actions = RecordingDiskActions(trash: bin.root.path)
     let first = await store.trash([old], actions: actions, packages: noPackages, openFiles: nothingOpen,
-                                  expectedLevels: nil)
+                                  expectedVerdicts: nil)
     #expect(first.moved.map(\.node) == [old])
     let size = await store.rootSize()
     let second = await store.trash([old], actions: actions, packages: noPackages, openFiles: nothingOpen,
-                                   expectedLevels: nil)
+                                   expectedVerdicts: nil)
     #expect(second.skipped == [TrashOutcome.Skipped(node: old, name: "old", reason: .missing)])
     // A stale id below the removed folder is missing too.
     let third = await store.trash([deep], actions: actions, packages: noPackages, openFiles: nothingOpen,
-                                  expectedLevels: nil)
+                                  expectedVerdicts: nil)
     #expect(third.skipped.map(\.reason) == [.missing])
     #expect(actions.moved.count == 1)
     #expect(await store.rootSize() == size)
@@ -291,7 +291,7 @@ private func exists(_ path: String) -> Bool {
 
     let actions = RecordingDiskActions(trash: bin.root.path)
     let outcome = await store.trash([pics], actions: actions, packages: noPackages, openFiles: nothingOpen,
-                                    expectedLevels: nil)
+                                    expectedVerdicts: nil)
     #expect(outcome.skipped.map(\.reason) == [.containsProtected(.photosLibrary)])
     #expect(actions.moved.isEmpty)
 }
@@ -309,7 +309,7 @@ private func exists(_ path: String) -> Bool {
 
     let actions = RecordingDiskActions(trash: bin.root.path)
     let outcome = await store.trash([apps, tools], actions: actions, packages: noPackages, openFiles: nothingOpen,
-                                    expectedLevels: nil)
+                                    expectedVerdicts: nil)
     #expect(Set(outcome.skipped.map(\.node)) == [apps, tools])
     #expect(outcome.skipped.allSatisfy { $0.reason == .containsProtected(.runningApp) })
     #expect(actions.moved.isEmpty)
@@ -324,7 +324,7 @@ private func exists(_ path: String) -> Bool {
 
     let actions = RecordingDiskActions(trash: fx.root.path + "/no-such-trash")
     let outcome = await store.trash([a], actions: actions, packages: noPackages, openFiles: nothingOpen,
-                                    expectedLevels: nil)
+                                    expectedVerdicts: nil)
     let skipped = try #require(outcome.skipped.first)
     guard case .failed(let message) = skipped.reason else {
         Issue.record("expected .failed, got \(skipped.reason)")
@@ -374,13 +374,13 @@ private func exists(_ path: String) -> Bool {
     let actions = RecordingDiskActions(trash: bin.root.path)
 
     let during = await store.trash([id], actions: actions, packages: noPackages,
-                                   openFiles: { calls.tick(); return OpenFileSet(paths: []) }, expectedLevels: nil)
+                                   openFiles: { calls.tick(); return OpenFileSet(paths: []) }, expectedVerdicts: nil)
     #expect(during.skipped == [TrashOutcome.Skipped(node: id, name: "a.bin", reason: .scanInProgress)])
     #expect(during.moved.isEmpty && actions.moved.isEmpty && calls.value == 0)
 
     await store.markScanFinished(allowedDevices: boundary.allowedDevices)
     let after = await store.trash([id], actions: actions, packages: noPackages, openFiles: nothingOpen,
-                                  expectedLevels: nil)
+                                  expectedVerdicts: nil)
     #expect(after.moved.map(\.node) == [id])
 }
 
@@ -392,7 +392,7 @@ private func exists(_ path: String) -> Bool {
     let store = try await scanned(fx)
     let old = try await node(store, fx, "Projects/old")
     let actions = RecordingDiskActions(trash: bin.root.path)
-    _ = await store.trash([old], actions: actions, packages: noPackages, openFiles: nothingOpen, expectedLevels: nil)
+    _ = await store.trash([old], actions: actions, packages: noPackages, openFiles: nothingOpen, expectedVerdicts: nil)
     let size = await store.rootSize()
     let totals = await store.categoryTotals(of: FileTree.root)
     let ages = await store.ageTotals(of: FileTree.root)
@@ -420,7 +420,7 @@ private func exists(_ path: String) -> Bool {
 
     let actions = RecordingDiskActions(trash: bin.root.path)
     let outcome = await store.trash([usb], actions: actions, packages: noPackages, openFiles: nothingOpen,
-                                    expectedLevels: nil)
+                                    expectedVerdicts: nil)
     #expect(outcome.skipped.map(\.reason) == [.refused])
     #expect(actions.moved.isEmpty)
 }
@@ -445,11 +445,11 @@ private func exists(_ path: String) -> Bool {
 
     let actions = RecordingDiskActions(trash: bin.root.path)
     let outcome = await store.trash([disks, locked, partial, lockedInside], actions: actions,
-                                    packages: noPackages, openFiles: nothingOpen, expectedLevels: nil)
+                                    packages: noPackages, openFiles: nothingOpen, expectedVerdicts: nil)
     #expect(Set(outcome.skipped.map(\.node)) == [disks, locked, partial])   // lockedInside is below Locked
     #expect(outcome.skipped.allSatisfy { $0.reason == .containsUnverified })
     let alone = await store.trash([lockedInside], actions: actions, packages: noPackages, openFiles: nothingOpen,
-                                  expectedLevels: nil)
+                                  expectedVerdicts: nil)
     #expect(alone.skipped.map(\.reason) == [.containsUnverified])   // its own contents are unknown
     #expect(actions.moved.isEmpty)
 }
@@ -466,7 +466,7 @@ private func exists(_ path: String) -> Bool {
 
     let actions = RecordingDiskActions(trash: bin.root.path)
     let outcome = await store.trash([a], actions: actions, packages: noPackages, openFiles: nothingOpen,
-                                    expectedLevels: nil)
+                                    expectedVerdicts: nil)
     #expect(outcome.skipped.map(\.reason) == [.changed])
     #expect(actions.moved.isEmpty)
 }
@@ -494,7 +494,7 @@ private func exists(_ path: String) -> Bool {
     let actions = RecordingDiskActions(trash: bin.root.path)
     // Gone from disk and open: the open check comes first, the disk check right before the move.
     let outcome = await store.trash([id], actions: actions, packages: noPackages,
-                                    openFiles: { OpenFileSet(paths: [file.path]) }, expectedLevels: nil)
+                                    openFiles: { OpenFileSet(paths: [file.path]) }, expectedVerdicts: nil)
     #expect(outcome.skipped.map(\.reason) == [.openNow])
 }
 
@@ -506,7 +506,7 @@ private func exists(_ path: String) -> Bool {
     let disk = try await node(store, fx, "Projects/disk")
     let actions = RecordingDiskActions(trash: bin.root.path)
     let outcome = await store.trash([disk], actions: actions, packages: noPackages, openFiles: nothingOpen,
-                                    expectedLevels: nil)
+                                    expectedVerdicts: nil)
     #expect(outcome.skipped.map(\.reason) == [.containsProtected(.trash)])
     #expect(actions.moved.isEmpty)
 }
@@ -524,7 +524,7 @@ private func exists(_ path: String) -> Bool {
 
     let actions = RecordingDiskActions(trash: bin.root.path)
     let outcome = await store.trash([mixed], actions: actions, packages: noPackages, openFiles: nothingOpen,
-                                    expectedLevels: nil)
+                                    expectedVerdicts: nil)
     #expect(outcome.moved.map(\.node) == [mixed] && outcome.skipped.isEmpty)
     #expect(actions.moved == [fx.root.path + "/Projects/mixed"])
 }
@@ -544,7 +544,7 @@ private func exists(_ path: String) -> Bool {
     let mounts = ["/", fx.root.path + "/Data/inner/mnt", fx.root.path + "/Spot/"]
 
     let outcome = await store.trash([data, spot, other], actions: actions, packages: noPackages,
-                                    openFiles: nothingOpen, expectedLevels: nil, mountPoints: { mounts })
+                                    openFiles: nothingOpen, expectedVerdicts: nil, mountPoints: { mounts })
     #expect(Set(outcome.skipped.map(\.node)) == [data, spot])
     #expect(outcome.skipped.allSatisfy { $0.reason == .containsUnverified })
     #expect(outcome.moved.map(\.node) == [other])
@@ -561,7 +561,7 @@ private func exists(_ path: String) -> Bool {
     let b = try await node(store, fx, "B")
     let actions = RecordingDiskActions(trash: bin.root.path)
     let outcome = await store.trash([a, b], actions: actions, packages: noPackages, openFiles: nothingOpen,
-                                    expectedLevels: nil, mountPoints: { nil })
+                                    expectedVerdicts: nil, mountPoints: { nil })
     #expect(Set(outcome.skipped.map(\.node)) == [a, b])
     #expect(outcome.skipped.allSatisfy { $0.reason == .containsUnverified })
     #expect(actions.moved.isEmpty)
@@ -596,10 +596,10 @@ private func exists(_ path: String) -> Bool {
 
     let actions = RecordingDiskActions(trash: bin.root.path)
     let first = await store.trash([projects], actions: actions, packages: noPackages, openFiles: nothingOpen,
-                                  expectedLevels: nil)
+                                  expectedVerdicts: nil)
     #expect(first.skipped.map(\.reason) == [.containsUnverified])
     let second = await store.trash([skip, other], actions: actions, packages: noPackages, openFiles: nothingOpen,
-                                   expectedLevels: nil)
+                                   expectedVerdicts: nil)
     #expect(second.skipped == [TrashOutcome.Skipped(node: skip, name: "skip", reason: .containsUnverified)])
     #expect(second.moved.map(\.node) == [other])
     #expect(actions.moved == [fx.root.path + "/Projects/other"])
@@ -613,21 +613,22 @@ private func exists(_ path: String) -> Bool {
     let store = try await scanned(fx)
     let a = try await node(store, fx, "Projects/a.bin")
     let b = try await node(store, fx, "Projects/b.bin")
-    let levelA = try #require(await store.verdict(a)).level
-    let levelB = try #require(await store.verdict(b)).level
-    let other: SafetyLevel = levelB == .safe ? .caution : .safe
+    let verdictA = try #require(await store.verdict(a))
+    let verdictB = try #require(await store.verdict(b))
+    let other = SafetyVerdict(level: verdictB.level == .safe ? .caution : .safe, reason: verdictB.reason,
+                              owner: verdictB.owner)
 
-    // The user confirmed `a` at its current level and `b` at another one: only `a` moves.
+    // The user confirmed `a` as it is and `b` at another level: only `a` moves.
     let actions = RecordingDiskActions(trash: bin.root.path)
     let outcome = await store.trash([a, b], actions: actions, packages: noPackages, openFiles: nothingOpen,
-                                    expectedLevels: [a: levelA, b: other])
+                                    expectedVerdicts: [a: verdictA, b: other])
     #expect(outcome.moved.map(\.node) == [a])
     #expect(outcome.skipped == [TrashOutcome.Skipped(node: b, name: "b.bin", reason: .verdictChanged)])
     #expect(actions.moved == [fx.root.path + "/Projects/a.bin"])
 
     // With a map, an item it has no level for was never confirmed: it fails closed.
     let rest = await store.trash([b], actions: actions, packages: noPackages, openFiles: nothingOpen,
-                                 expectedLevels: [:])
+                                 expectedVerdicts: [:])
     #expect(rest.moved.isEmpty)
     #expect(rest.skipped == [TrashOutcome.Skipped(node: b, name: "b.bin", reason: .verdictChanged)])
     #expect(actions.moved == [fx.root.path + "/Projects/a.bin"])
@@ -653,7 +654,7 @@ private func exists(_ path: String) -> Bool {
 
     let actions = RecordingDiskActions(trash: bin.root.path)
     let outcome = await store.trash([id], actions: actions, packages: noPackages, openFiles: nothingOpen,
-                                    expectedLevels: [id: shown.level])
+                                    expectedVerdicts: [id: shown])
     #expect(outcome.moved.isEmpty && actions.moved.isEmpty)
     #expect(outcome.skipped == [TrashOutcome.Skipped(node: id, name: "com.example.app", reason: .verdictChanged)])
 }
@@ -667,7 +668,7 @@ private func exists(_ path: String) -> Bool {
     let actions = RecordingDiskActions(trash: bin.root.path)
     // The root and IDs from no tree: nothing is left after `topMost`.
     let outcome = await store.trash([FileTree.root, 999_999], actions: actions, packages: noPackages,
-                                    openFiles: { calls.tick(); return OpenFileSet(paths: []) }, expectedLevels: [:])
+                                    openFiles: { calls.tick(); return OpenFileSet(paths: []) }, expectedVerdicts: [:])
     #expect(outcome.moved.isEmpty && outcome.skipped.isEmpty)
     #expect(calls.value == 0)
 }
@@ -687,13 +688,13 @@ private func exists(_ path: String) -> Bool {
     let other = try await node(store, fx, "Projects/a.bin")
     let shown = try #require(await store.verdict(id))
     #expect(shown == SafetyVerdict(level: .caution, reason: .appData, owner: "Example"))
-    let otherLevel = try #require(await store.verdict(other)).level
+    let otherVerdict = try #require(await store.verdict(other))
 
     // The live environment, handed with the move: the app runs now, so its data is protected.
     let live = SafetyEnvironment.system(home: fx.root.path, apps: apps, runningBundleIDs: ["com.example.app"])
     let actions = RecordingDiskActions(trash: bin.root.path)
     let outcome = await store.trash([id, other], environment: live, actions: actions, packages: noPackages,
-                                    openFiles: nothingOpen, expectedLevels: [id: shown.level, other: otherLevel])
+                                    openFiles: nothingOpen, expectedVerdicts: [id: shown, other: otherVerdict])
     #expect(outcome.skipped == [TrashOutcome.Skipped(node: id, name: "com.example.app",
                                                      reason: .protected(.runningAppData))])
     #expect(outcome.moved.map(\.node) == [other])
@@ -724,15 +725,15 @@ private func exists(_ path: String) -> Bool {
 
     let actions = RecordingDiskActions(trash: bin.root.path)
     let outcome = await store.trash([partial], actions: actions, packages: noPackages, openFiles: nothingOpen,
-                                    expectedLevels: nil)
+                                    expectedVerdicts: nil)
     #expect(outcome.skipped == [TrashOutcome.Skipped(node: partial, name: "partial", reason: .containsUnverified)])
     let above = await store.trash([projects], actions: actions, packages: noPackages, openFiles: nothingOpen,
-                                  expectedLevels: nil)
+                                  expectedVerdicts: nil)
     #expect(above.skipped.map(\.reason) == [.containsUnverified])
     #expect(outcome.moved.isEmpty && above.moved.isEmpty && actions.moved.isEmpty)
     // A sibling listed in full still moves.
     let sibling = await store.trash([whole], actions: actions, packages: noPackages, openFiles: nothingOpen,
-                                    expectedLevels: nil)
+                                    expectedVerdicts: nil)
     #expect(sibling.moved.map(\.node) == [whole])
 }
 
@@ -767,13 +768,46 @@ private func exists(_ path: String) -> Bool {
 
     let actions = RecordingDiskActions(trash: bin.root.path)
     let itself = await store.trash([cloud], actions: actions, packages: noPackages, openFiles: nothingOpen,
-                                   expectedLevels: nil)
+                                   expectedVerdicts: nil)
     #expect(itself.skipped == [TrashOutcome.Skipped(node: cloud, name: "cloud", reason: .containsUnverified)])
     let above = await store.trash([projects], actions: actions, packages: noPackages, openFiles: nothingOpen,
-                                  expectedLevels: nil)
+                                  expectedVerdicts: nil)
     #expect(above.skipped == [TrashOutcome.Skipped(node: projects, name: "Projects", reason: .containsUnverified)])
     #expect(itself.moved.isEmpty && above.moved.isEmpty && actions.moved.isEmpty)
     let sibling = await store.trash([local], actions: actions, packages: noPackages, openFiles: nothingOpen,
-                                    expectedLevels: nil)
+                                    expectedVerdicts: nil)
     #expect(sibling.moved.map(\.node) == [local])
+}
+
+@Test func confirmedReasonAndOwnerMustStillHold() async throws {   // audit SEC-04
+    let fx = try Fixture(); defer { fx.cleanup() }
+    let bin = try Fixture(); defer { bin.cleanup() }
+    try fx.file("Library/Caches/com.example.app/blob", bytes: 80_000)
+    let store = ScanStore(rootName: "home", rootPath: fx.root.path, home: fx.root.path, now: fixedNow)
+    _ = await Scanner(rootPath: fx.root.path, boundary: try .forFolder(fx.root.path)).scan(into: store)
+    let apps = AppsIndex(records: [AppRecord(bundleID: "com.example.app", name: "Example", teamID: nil,
+                                             path: "/Applications/Example.app")])
+    await store.setEnvironment(.system(home: fx.root.path, apps: apps))
+    let id = try await node(store, fx, "Library/Caches/com.example.app")
+    let shown = try #require(await store.verdict(id))
+    #expect(shown == SafetyVerdict(level: .safe, reason: .cacheOfApp, owner: "Example"))
+    let actions = RecordingDiskActions(trash: bin.root.path)
+    let changed = [TrashOutcome.Skipped(node: id, name: "com.example.app", reason: .verdictChanged)]
+
+    // The same level, but the user agreed to another reason.
+    let otherReason = await store.trash([id], actions: actions, packages: noPackages, openFiles: nothingOpen,
+                                        expectedVerdicts: [id: SafetyVerdict(level: .safe, reason: .leftover)])
+    #expect(otherReason.skipped == changed && otherReason.moved.isEmpty)
+    // The same level and reason, but another app's.
+    let otherOwner = await store.trash([id], actions: actions, packages: noPackages, openFiles: nothingOpen,
+                                       expectedVerdicts: [id: SafetyVerdict(level: .safe, reason: .cacheOfApp,
+                                                                            owner: "Other")])
+    #expect(otherOwner.skipped == changed && otherOwner.moved.isEmpty)
+    #expect(actions.moved.isEmpty)
+
+    // Exactly what was shown: it moves.
+    let same = await store.trash([id], actions: actions, packages: noPackages, openFiles: nothingOpen,
+                                 expectedVerdicts: [id: shown])
+    #expect(same.moved.map(\.node) == [id] && same.skipped.isEmpty)
+    #expect(actions.moved == [fx.root.path + "/Library/Caches/com.example.app"])
 }
