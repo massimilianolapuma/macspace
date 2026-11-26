@@ -199,6 +199,9 @@
     "Cartella interna della Libreria: controlla prima" : {
 
     },
+    "Cartella superiore" : {
+
+    },
     "Cartelle intermedie" : {
 
     },
@@ -603,6 +606,9 @@
 
     },
     "Uso più recente (stimato): %@" : {
+
+    },
+    "Vai" : {
 
     },
     "Versioni non salvate dei documenti: controlla prima" : {

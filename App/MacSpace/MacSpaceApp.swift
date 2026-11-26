@@ -14,6 +14,25 @@ struct MacSpaceApp: App {
         .commands {
             // The View menu's show/hide inspector item and its ⌃⌘I shortcut.
             InspectorCommands()
+            GoCommands()
         }
     }
+}
+
+/// "Vai › Cartella superiore" (⌘↑), as in Finder; it acts on the key window's scan.
+struct GoCommands: Commands {
+    @FocusedValue(\.scanModel) private var model
+
+    var body: some Commands {
+        CommandMenu("Vai") {
+            Button("Cartella superiore") { model?.goUp() }
+                .keyboardShortcut(.upArrow, modifiers: .command)
+                .disabled((model?.breadcrumb.count ?? 0) < 2)
+        }
+    }
+}
+
+extension FocusedValues {
+    /// The key window's scan, for the menu bar's commands.
+    @Entry var scanModel: ScanModel?
 }

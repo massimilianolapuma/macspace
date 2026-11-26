@@ -54,12 +54,14 @@ struct ContentView: View {
                     .inspectorColumnWidth(min: WindowLayout.inspectorMinWidth, ideal: WindowLayout.inspectorIdealWidth,
                                           max: WindowLayout.inspectorMaxWidth)
             }
+            .focusedSceneValue(\.scanModel, model)
             .background {
-                // ⌘↑ and ⌘[ go up a level, as in Finder.
-                ZStack {
-                    upShortcut(.upArrow)
-                    upShortcut("[")
-                }
+                // ⌘[ also goes up a level, as in Finder (⌘↑ is "Vai › Cartella superiore").
+                Button { model.goUp() } label: { EmptyView() }
+                    .keyboardShortcut("[", modifiers: .command)
+                    .disabled(model.breadcrumb.count < 2)
+                    .opacity(0)
+                    .accessibilityHidden(true)
             }
             .goesUpOnMouseBack(model: model)
             .onChange(of: inspectorShown) { lastInspectorShown = inspectorShown }
@@ -129,15 +131,6 @@ struct ContentView: View {
                 Text("Scegli cosa analizzare e premi Analizza")
             }
         }
-    }
-
-    /// A hidden button carrying a "go up a level" shortcut (⌘ + `key`).
-    private func upShortcut(_ key: KeyEquivalent) -> some View {
-        Button { model.goUp() } label: { EmptyView() }
-            .keyboardShortcut(key, modifiers: .command)
-            .disabled(model.breadcrumb.count < 2)
-            .opacity(0)
-            .accessibilityHidden(true)
     }
 
     @ToolbarContentBuilder
