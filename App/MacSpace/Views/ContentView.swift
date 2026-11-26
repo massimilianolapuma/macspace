@@ -15,8 +15,9 @@ struct ContentView: View {
     /// Whether the inspector shows; app-wide and kept across launches (window restoration is off
     /// whenever "Close windows when quitting an app" is on, the system default).
     @AppStorage("inspectorShown") private var inspectorShown = true
-    /// The inspector's current width: the content's minimum is what the window's minimum leaves beside it.
-    @State private var inspectorWidth = WindowLayout.inspectorIdealWidth
+    /// The path row's widest facts beside its narrowest path, measured (`BreadcrumbView.Narrowest`,
+    /// `PathRowFacts.Widest`).
+    @State private var pathRowNeed: CGFloat = 0
     /// Shared by every window (`MacSpaceApp`); starts itself once, on the first window.
     @Environment(SafetyEnvironmentProvider.self) private var safety
     @AppStorage(ColorMode.storageKey) private var colorMode: ColorMode = .deletable
@@ -26,8 +27,22 @@ struct ContentView: View {
     var body: some View {
         content
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .frame(minWidth: WindowLayout.minWindowWidth - (inspectorShown ? inspectorWidth : 0),
+            // Wide enough for the path row's widest facts beside the narrowest path, whatever the
+            // inspector's width (the window's minimum adds the inspector's); without the inspector,
+            // also for the toolbar, which then spans the content alone.
+            .frame(minWidth: max(pathRowNeed + 2 * WindowLayout.windowMargin,
+                                 inspectorShown ? 0 : WindowLayout.minToolbarWidth),
                    minHeight: WindowLayout.minContentHeight)
+            .background {
+                HStack(spacing: WindowLayout.pathRowSpacing) {
+                    BreadcrumbView.Narrowest()
+                    PathRowFacts.Widest()
+                }
+                .fixedSize()
+                .hidden()
+                .accessibilityHidden(true)
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { pathRowNeed = ceil($0) }
+            }
             // One surface from the window's top edge down: the toolbar floats over it, no band.
             .containerBackground(FusionPalette.background(scheme), for: .window)
             .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
@@ -35,7 +50,6 @@ struct ContentView: View {
                 SidebarView(model: model, colorMode: colorMode, tab: $inspectorTab)
                     .inspectorColumnWidth(min: WindowLayout.inspectorMinWidth, ideal: WindowLayout.inspectorIdealWidth,
                                           max: WindowLayout.inspectorMaxWidth)
-                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { inspectorWidth = $0 }
             }
             .background {
                 // ⌘↑ and ⌘[ go up a level, as in Finder.
@@ -85,7 +99,7 @@ struct ContentView: View {
     private var content: some View {
         if model.hasScan {
             VStack(spacing: WindowLayout.gap) {
-                HStack(spacing: 12) {
+                HStack(spacing: WindowLayout.pathRowSpacing) {
                     BreadcrumbView(model: model)
                     // Never cut: the path gives way first.
                     PathRowFacts(model: model, showsTotal: chart == .treemap)
@@ -355,23 +369,61 @@ private struct OnboardingView: View {
 struct PathRowFacts: View {
     let model: ScanModel
     let showsTotal: Bool
+
+    var body: some View {
+        let atRoot = model.breadcrumb.count == 1
+        // While a scan runs at the root, its bytes are the folder's total: no second figure.
+        let total = showsTotal && !(model.isScanning && atRoot) ? model.breadcrumb.last?.size : nil
+        PathRowFactsContent(total: total, state: state(atRoot: atRoot), disk: showsTotal ? model.diskAtRoot : nil)
+    }
+
+    private func state(atRoot: Bool) -> PathRowFactsContent.State? {
+        switch model.phase {
+        case .idle: nil
+        case let .scanning(progress): .scanning(progress, estimate: model.disk)
+        case let .done(summary) where summary.wasCancelled:
+            .cancelled(files: summary.files, unreadable: summary.unreadable)
+        case let .done(summary): atRoot ? .finished(files: summary.files, unreadable: summary.unreadable) : nil
+        }
+    }
+
+    /// The widest facts the row can show, hidden, for the window's minimum: a subfolder's total with
+    /// a scan's progress, a cancel, and a startup disk's root with its disk line, each with the
+    /// widest figures.
+    struct Widest: View {
+        var body: some View {
+            let total: UInt64 = 888_880_000_000
+            let disk = DiskUsage(used: 888_880_000_000, capacity: 999_990_000_000)
+            ZStack {
+                PathRowFactsContent(total: total, state: .scanning(
+                    ScanProgress(filesSeen: 8_888_888, bytesSeen: total, directoriesPending: 1), estimate: disk),
+                    disk: nil)
+                PathRowFactsContent(total: total, state: .cancelled(files: 8_888_888, unreadable: 88_888), disk: nil)
+                PathRowFactsContent(total: total, state: .finished(files: 8_888_888, unreadable: 88_888), disk: disk)
+            }
+            .fixedSize()
+        }
+    }
+}
+
+/// `PathRowFacts`' content, from plain values.
+struct PathRowFactsContent: View {
+    enum State {
+        /// `estimate`: the disk whose used space the progress is estimated against (nil: a folder).
+        case scanning(ScanProgress, estimate: DiskUsage?)
+        case cancelled(files: Int, unreadable: Int)
+        case finished(files: Int, unreadable: Int)
+    }
+
+    let total: UInt64?
+    let state: State?
+    let disk: DiskUsage?
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     static let progressWidth: CGFloat = 120
 
-    private enum State {
-        case scanning(ScanProgress)
-        case cancelled(ScanSummary)
-        case finished(ScanSummary)
-    }
-
     var body: some View {
-        let atRoot = model.breadcrumb.count == 1
-        let state = state(atRoot: atRoot)
-        // While a scan runs at the root, its bytes are the folder's total: no second figure.
-        let total = showsTotal && !(model.isScanning && atRoot) ? model.breadcrumb.last?.size : nil
-        let disk = showsTotal ? model.diskAtRoot : nil
         HStack(spacing: 4) {
             if let total {
                 Text(verbatim: Formatters.bytes(total))
@@ -400,15 +452,6 @@ struct PathRowFacts: View {
         .fixedSize()
     }
 
-    private func state(atRoot: Bool) -> State? {
-        switch model.phase {
-        case .idle: nil
-        case let .scanning(progress): .scanning(progress)
-        case let .done(summary) where summary.wasCancelled: .cancelled(summary)
-        case let .done(summary): atRoot ? .finished(summary) : nil
-        }
-    }
-
     private var separator: some View {
         Text(verbatim: "·")
             .foregroundStyle(FusionPalette.secondaryText(scheme))
@@ -420,11 +463,11 @@ struct PathRowFacts: View {
     private func status(_ state: State) -> some View {
         Group {
             switch state {
-            case let .scanning(progress):
+            case let .scanning(progress, estimate):
                 HStack(spacing: 8) {
                     // The estimate needs the disk's used space; a chosen folder's total is unknown.
-                    if let disk = model.disk, disk.used > 0 {
-                        let fraction = disk.progress(bytesSeen: progress.bytesSeen)
+                    if let estimate, estimate.used > 0 {
+                        let fraction = estimate.progress(bytesSeen: progress.bytesSeen)
                         ProgressView(value: fraction)
                             .progressViewStyle(.linear)
                             .controlSize(.small)
@@ -446,14 +489,15 @@ struct PathRowFacts: View {
                         .animation(reduceMotion ? nil : .easeOut(duration: 0.24), value: progress.filesSeen)
                     }
                 }
-            case let .cancelled(summary):
+            case let .cancelled(files, unreadable):
                 HStack(spacing: 6) {
                     Image(systemName: "pause.circle")
+                        .accessibilityHidden(true)
                     Text(verbatim: Self.withUnreadable(
-                        String(localized: "Analisi interrotta · \(Formatters.count(summary.files)) file"), summary))
+                        String(localized: "Analisi interrotta · \(Formatters.count(files)) file"), unreadable))
                 }
-            case let .finished(summary):
-                Text(verbatim: Self.withUnreadable(String(localized: "\(Formatters.count(summary.files)) file"), summary))
+            case let .finished(files, unreadable):
+                Text(verbatim: Self.withUnreadable(String(localized: "\(Formatters.count(files)) file"), unreadable))
             }
         }
         .foregroundStyle(FusionPalette.secondaryText(scheme))
@@ -467,12 +511,12 @@ struct PathRowFacts: View {
 
     /// `line`, then " · N cartelle non leggibili" when the scan could not read some folders, so the
     /// count never reads as the whole disk.
-    private static func withUnreadable(_ line: String, _ summary: ScanSummary) -> String {
-        guard summary.unreadable > 0 else { return line }
+    private static func withUnreadable(_ line: String, _ unreadable: Int) -> String {
+        guard unreadable > 0 else { return line }
         // Two strings rather than a catalog plural: the count is formatted like the file count.
-        let folders = summary.unreadable == 1
+        let folders = unreadable == 1
             ? String(localized: "1 cartella non leggibile")
-            : String(localized: "\(Formatters.count(summary.unreadable)) cartelle non leggibili")
+            : String(localized: "\(Formatters.count(unreadable)) cartelle non leggibili")
         return line + " · " + folders
     }
 }
