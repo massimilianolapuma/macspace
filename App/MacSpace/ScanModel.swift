@@ -2,6 +2,7 @@ import CoreGraphics
 import Foundation
 import MacSpaceCore
 import Observation
+import os
 import Synchronization
 
 /// What the user asked to analyse.
@@ -66,12 +67,12 @@ final class ScanModel {
     /// Which chart is on screen; only that one is laid out. Mirrors `@AppStorage(ChartKind.storageKey)`.
     /// Changing it relays out the current folder: the scan, `center` and the hovered node stay.
     var chart: ChartKind = .sunburst {
-        didSet { if chart != oldValue { Task { await refreshViews() } } }
+        didSet { if chart != oldValue { requestRefresh() } }
     }
     /// The chart area's size, reported by the content view whichever chart shows (debounced while
     /// the window resizes); the treemap is laid out for it.
     var chartSize: CGSize = .zero {
-        didSet { if chartSize != oldValue, chart == .treemap { Task { await refreshViews() } } }
+        didSet { if chartSize != oldValue, chart == .treemap { requestRefresh() } }
     }
     /// Treemap tiles below `center`, laid out for `tilesSize`; empty unless `chart` is `.treemap`.
     var tiles: [TreemapTile] = [] {
@@ -148,6 +149,11 @@ final class ScanModel {
     /// Selection changes run one after the other, each against the outcome of the previous one.
     @ObservationIgnored var selectionWork: Task<Void, Never>?
     @ObservationIgnored private var scanTask: Task<Void, Never>?
+    /// The latest view refresh (`requestRefresh`); each new one cancels it, so at most one
+    /// snapshot that is still wanted runs on the store, and superseded ones never reach it.
+    @ObservationIgnored private var refreshTask: Task<Void, Never>?
+    /// Bumped by every `requestRefresh`: a refresh lands only while its number is the latest.
+    @ObservationIgnored private var refreshGeneration = 0
     /// What verdicts are judged against (`updateEnvironment`, or the live one `trash` reads); nil
     /// until the provider's first one.
     @ObservationIgnored var environment: SafetyEnvironment?
@@ -236,7 +242,7 @@ final class ScanModel {
         center = node
         hovered = nil
         hoveredTile = nil
-        Task { await refreshViews() }
+        requestRefresh()
     }
 
     func goUp() {
@@ -248,7 +254,7 @@ final class ScanModel {
             center = crumb[crumb.count - 2].id
             hovered = nil
             hoveredTile = nil
-            await refreshViews()
+            requestRefresh()
         }
     }
 
@@ -274,11 +280,49 @@ final class ScanModel {
     }
 
     /// Reloads the active chart (`segments` or `tiles`), `biggest`, `breadcrumb`, `categoryTotals`
-    /// and `ageTotals` for the current `center`, from one consistent store snapshot. The other
-    /// chart's data is emptied; the hovered node carries over to the active chart when it is
-    /// still laid out there.
+    /// and `ageTotals` for the current `center`, from one consistent store snapshot, superseding
+    /// any refresh in flight; returns once the latest refresh (this one or a newer one) has landed.
+    /// The other chart's data is emptied; the hovered node carries over to the active chart when
+    /// it is still laid out there.
     func refreshViews() async {
-        guard let store else { return }
+        requestRefresh()
+        await refreshesSettled()
+    }
+
+    /// Starts a refresh of the views for the current state, cancelling the previous one: latest
+    /// wins. Navigation, chart and canvas changes call this without waiting.
+    func requestRefresh() {
+        refreshTask?.cancel()
+        refreshGeneration += 1
+        let generation = refreshGeneration
+        refreshTask = Task { await performRefresh(generation: generation) }
+    }
+
+    /// Waits until the latest refresh has landed (or was dropped), following any newer one that
+    /// supersedes it meanwhile.
+    private func refreshesSettled() async {
+        while let task = refreshTask {
+            await task.value
+            if refreshTask == task { return }
+        }
+    }
+
+    /// The scan ticker's refresh: never cancels one in flight (a navigation's, say), it waits for
+    /// it and then refreshes the then-current state.
+    private func refreshAfterInFlight() async {
+        await refreshesSettled()
+        guard !Task.isCancelled else { return }
+        await refreshViews()
+    }
+
+    /// Whether the refresh numbered `generation` is still the one wanted.
+    private func isLatestRefresh(_ generation: Int) -> Bool {
+        !Task.isCancelled && generation == refreshGeneration
+    }
+
+    private func performRefresh(generation: Int) async {
+        // Superseded before it started (several clicks in one turn): never reaches the store.
+        guard isLatestRefresh(generation), let store else { return }
         let center = self.center
         let chart = self.chart
         let size = chartSize
@@ -286,9 +330,11 @@ final class ScanModel {
         case .sunburst: .sunburst(depth: Self.ringDepth)
         case .treemap: .treemap(width: size.width, height: size.height, depth: Self.ringDepth)
         }
+        let signpost = Perf.signposter.beginInterval("snapshot")
         let snapshot = await store.snapshot(center: center, chart: request, biggestLimit: Self.biggestLimit)
+        Perf.signposter.endInterval("snapshot", signpost)
         // A newer scan, navigation, chart or canvas size happened meanwhile: its own refresh wins.
-        guard store === self.store, center == self.center, chart == self.chart,
+        guard isLatestRefresh(generation), store === self.store, center == self.center, chart == self.chart,
               chart == .sunburst || size == chartSize else { return }
         Perf.interval("refresh apply") {
             // Segments and tiles share ids ("\(node)"), so the hover survives a chart switch.
@@ -376,7 +422,7 @@ final class ScanModel {
                 try? await Task.sleep(for: Self.refreshInterval)
                 guard !Task.isCancelled else { return }
                 if let progress = latest.value { phase = .scanning(progress) }
-                await refreshViews()
+                await refreshAfterInFlight()
             }
         }
         let scanner = Scanner(rootPath: rootPath, boundary: boundary)
