@@ -1,20 +1,35 @@
 import Darwin
 
+/// A directory's entries, and whether they are all of them.
+public struct DirectoryListing: Sendable, Equatable {
+    public var entries: [DirectoryEntry]
+    /// False when an entry was left out (the file system reported an error for it, or its record
+    /// was malformed) or reading stopped early because the task was cancelled: the directory may
+    /// hold more than `entries`.
+    public var isComplete: Bool
+
+    public init(entries: [DirectoryEntry], isComplete: Bool) {
+        self.entries = entries
+        self.isComplete = isComplete
+    }
+}
+
 /// Reads directory entries with `getattrlistbulk(2)`: one system call returns many entries
 /// together with the attributes the scanner needs, and symbolic links are never followed.
 public enum DirectoryReader {
     static let bulkBufferSize = 256 * 1024
 
     /// Lists the entries of the directory at `path` ("." and ".." are never reported).
-    /// Entries the file system reports a per-entry error for are skipped.
+    /// The listing is complete only when every entry the file system returned was parsed: an entry
+    /// it reports a per-entry error for, or a malformed record (which also ends its batch, since
+    /// the records after it cannot be located), is left out and makes `isComplete` false.
     /// When the calling task is cancelled, reading stops between batches and the listing so far
-    /// is returned without throwing: callers must check `Task.isCancelled` before treating the
-    /// result as complete.
+    /// is returned, incomplete, without throwing.
     /// With `includePrivateSize`, each entry also carries `privateSize` where the volume reports
     /// it; the scanner leaves it off, so its request stays exactly as without the option.
     public static func read(
         path: String, includePrivateSize: Bool = false
-    ) throws(DirectoryReadError) -> [DirectoryEntry] {
+    ) throws(DirectoryReadError) -> DirectoryListing {
         let fd = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC)
         guard fd >= 0 else { throw DirectoryReadError(errno: errno) }
         defer { close(fd) }
@@ -24,26 +39,52 @@ public enum DirectoryReader {
         let buffer = UnsafeMutableRawPointer.allocate(byteCount: bulkBufferSize, alignment: 8)
         defer { buffer.deallocate() }
 
-        var entries: [DirectoryEntry] = []
-        while !Task.isCancelled {
+        var listing = DirectoryListing(entries: [], isComplete: true)
+        while true {
+            if Task.isCancelled {
+                listing.isComplete = false
+                break
+            }
             let count = getattrlistbulk(fd, &request, buffer, bulkBufferSize, options)
             if count < 0 {
                 if errno == EINTR { continue }
                 throw DirectoryReadError(errno: errno)
             }
             if count == 0 { break }
-            var record = UnsafeRawPointer(buffer)
-            let end = record + bulkBufferSize
-            for _ in 0..<count {
-                let length = Int(record.loadUnaligned(as: UInt32.self))
-                guard length > 0, record + length <= end else { break }
-                if let entry = parseRecord(UnsafeRawBufferPointer(start: record, count: length)) {
-                    entries.append(entry)
-                }
-                record += length
-            }
+            let batch = parseBatch(UnsafeRawBufferPointer(start: buffer, count: bulkBufferSize), count: Int(count))
+            listing.entries += batch.entries
+            if !batch.complete { listing.isComplete = false }
         }
-        return entries
+        return listing
+    }
+
+    /// Parses the `count` packed records `getattrlistbulk` wrote at the start of `buffer`.
+    /// `complete` is false when any record was left out: one reporting an error or malformed
+    /// (`parseRecord` → nil), or one whose length is 0 or runs past `buffer`, which also ends the
+    /// batch (the records after it cannot be located), so fewer than `count` were parsed.
+    static func parseBatch(_ buffer: UnsafeRawBufferPointer, count: Int) -> (entries: [DirectoryEntry], complete: Bool) {
+        var entries: [DirectoryEntry] = []
+        entries.reserveCapacity(count)
+        var complete = true
+        var offset = 0
+        for _ in 0..<max(0, count) {
+            guard offset + MemoryLayout<UInt32>.size <= buffer.count else {
+                complete = false
+                break
+            }
+            let length = Int(buffer.loadUnaligned(fromByteOffset: offset, as: UInt32.self))
+            guard length > 0, length <= buffer.count - offset else {
+                complete = false
+                break
+            }
+            if let entry = parseRecord(UnsafeRawBufferPointer(rebasing: buffer[offset..<(offset + length)])) {
+                entries.append(entry)
+            } else {
+                complete = false
+            }
+            offset += length
+        }
+        return (entries, complete)
     }
 
     /// Describes the object at `path` itself (a trailing symbolic link is not followed).
@@ -92,7 +133,8 @@ public enum DirectoryReader {
     /// `ATTR_CMN_ERROR` (when returned), then each returned attribute in bit order — common, dir,
     /// file, then extended common (`forkattr`, only ever requested as such) — each starting on a
     /// 4-byte boundary. Attributes not in the returned set are absent.
-    /// Returns nil for records that report an error or are malformed.
+    /// Returns nil for records that report an error or are malformed (`read` then marks its
+    /// listing incomplete).
     static func parseRecord(_ record: UnsafeRawBufferPointer) -> DirectoryEntry? {
         var cursor = Cursor(record: record, offset: MemoryLayout<UInt32>.size)
         guard let returned = cursor.read(attribute_set_t.self) else { return nil }

@@ -23,7 +23,7 @@ public enum PrivateSize {
         var pending = [path]
         while let directory = pending.popLast() {
             if Task.isCancelled { break }
-            guard let entries = try? DirectoryReader.read(path: directory, includePrivateSize: true) else {
+            guard let entries = try? DirectoryReader.read(path: directory, includePrivateSize: true).entries else {
                 continue
             }
             let base = directory.hasSuffix("/") ? directory : directory + "/"

@@ -34,6 +34,8 @@ public struct Scanner: Sendable {
     public let rootPath: String
     public let boundary: ScanBoundary
     public let maxConcurrency: Int
+    /// Lists one directory: `DirectoryReader.read`, or a stand-in in tests.
+    let reader: @Sendable (String) throws(DirectoryReadError) -> DirectoryListing
 
     static let progressInterval: Duration = .milliseconds(100)
 
@@ -44,9 +46,18 @@ public struct Scanner: Sendable {
     }
 
     public init(rootPath: String, boundary: ScanBoundary, maxConcurrency: Int = Scanner.defaultConcurrency) {
+        self.init(rootPath: rootPath, boundary: boundary, maxConcurrency: maxConcurrency) { path throws(DirectoryReadError) in
+            try DirectoryReader.read(path: path)
+        }
+    }
+
+    /// With `reader` in place of `DirectoryReader.read`, so tests can return incomplete listings.
+    init(rootPath: String, boundary: ScanBoundary, maxConcurrency: Int = Scanner.defaultConcurrency,
+         reader: @escaping @Sendable (String) throws(DirectoryReadError) -> DirectoryListing) {
         self.rootPath = rootPath
         self.boundary = boundary
         self.maxConcurrency = max(1, maxConcurrency)
+        self.reader = reader
     }
 
     /// Scans from `rootPath` into `store`, whose root node represents `rootPath`.
@@ -68,9 +79,11 @@ public struct Scanner: Sendable {
         var files = 0, directories = 0, unreadable = 0
         var bytes: UInt64 = 0
         var cancelled = false
-        /// Directories whose listing is missing or partial because the scan was cancelled.
+        /// Directories whose listing is missing (never read, the scan was cancelled) or partial
+        /// (an entry was left out, or the read was cut short by cancellation).
         var unverified: [NodeID] = []
         let boundary = self.boundary
+        let reader = self.reader
 
         await withTaskGroup(of: DirectoryResult.self) { group in
             while true {
@@ -81,7 +94,7 @@ public struct Scanner: Sendable {
                     }
                     let next = pending.removeLast()
                     group.addTask(priority: .utility) {
-                        await Self.process(next.id, path: next.path, store: store, boundary: boundary)
+                        await Self.process(next.id, path: next.path, store: store, boundary: boundary, reader: reader)
                     }
                     inFlight += 1
                 }
@@ -117,7 +130,9 @@ public struct Scanner: Sendable {
     }
 
     private enum DirectoryResult: Sendable {
-        /// `partial`: the listing was cut short by cancellation.
+        /// `partial`: the listing is incomplete (`DirectoryListing.isComplete`: an entry the file
+        /// system reported an error for, or a malformed record, was left out) or was cut short by
+        /// cancellation, so the directory's contents are not all known (`unverifiedDirectories`).
         case read(id: NodeID, children: [(id: NodeID, path: String)], files: Int, directories: Int, bytes: UInt64,
                   partial: Bool)
         case unreadable
@@ -125,22 +140,25 @@ public struct Scanner: Sendable {
     }
 
     /// Reads one directory and inserts its entries: one actor hop either way.
-    private static func process(_ id: NodeID, path: String, store: ScanStore,
-                                boundary: ScanBoundary) async -> DirectoryResult {
+    private static func process(_ id: NodeID, path: String, store: ScanStore, boundary: ScanBoundary,
+                                reader: @Sendable (String) throws(DirectoryReadError) -> DirectoryListing)
+        async -> DirectoryResult {
         guard !Task.isCancelled else { return .skipped(id) }
-        let entries: [DirectoryEntry]
+        let listing: DirectoryListing
         do {
-            entries = try DirectoryReader.read(path: path)
+            listing = try reader(path)
         } catch {
             await store.markUnreadable(id)
             return .unreadable
         }
+        let entries = listing.entries
         var files = 0, directories = 0
         for entry in entries {
             if entry.kind == .directory { directories += 1 } else { files += 1 }
         }
-        // `read` stops early without throwing once the task is cancelled.
-        let partial = Task.isCancelled
+        // `read` stops early without throwing once the task is cancelled (the listing then says
+        // incomplete too); checked again here in case cancellation came right after it.
+        let partial = !listing.isComplete || Task.isCancelled
         let inserted = await store.insert(entries, under: id, parentPath: path, boundary: boundary)
         return .read(id: id, children: inserted.descend, files: files, directories: directories,
                      bytes: inserted.bytes, partial: partial)

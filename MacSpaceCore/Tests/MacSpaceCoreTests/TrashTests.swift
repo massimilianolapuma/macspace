@@ -366,7 +366,7 @@ private func exists(_ path: String) -> Bool {
     try fx.file("a.bin", bytes: 10_000)
     let store = ScanStore(rootName: "home", rootPath: fx.root.path, home: fx.root.path, now: fixedNow)
     let boundary = try ScanBoundary.forFolder(fx.root.path)
-    _ = await store.insert(try DirectoryReader.read(path: fx.root.path), under: FileTree.root,
+    _ = await store.insert(try DirectoryReader.read(path: fx.root.path).entries, under: FileTree.root,
                            parentPath: fx.root.path, boundary: boundary)
     await store.setEnvironment(.system(home: fx.root.path, apps: .empty))
     let id = try await node(store, fx, "a.bin")
@@ -700,4 +700,38 @@ private func exists(_ path: String) -> Bool {
     #expect(actions.moved == [fx.root.path + "/Projects/a.bin"])
     // The store keeps judging against the environment it was handed.
     #expect(await store.verdict(id) == SafetyVerdict(level: .protected, reason: .runningAppData, owner: "Example"))
+}
+
+@Test func folderWithAnIncompleteListingIsUnverified() async throws {   // audit SEC-02
+    let fx = try Fixture(); defer { fx.cleanup() }
+    let bin = try Fixture(); defer { bin.cleanup() }
+    try fx.file("Projects/partial/a", bytes: 10_000)
+    try fx.file("Projects/whole/b", bytes: 10_000)
+    let partialPath = fx.root.path + "/Projects/partial"
+    // The file system left an entry of `partial` out (a per-entry error): the listing says so.
+    let scanner = Scanner(rootPath: fx.root.path, boundary: try .forFolder(fx.root.path)) { path throws(DirectoryReadError) in
+        var listing = try DirectoryReader.read(path: path)
+        if path == partialPath { listing.isComplete = false }
+        return listing
+    }
+    let store = ScanStore(rootName: "home", rootPath: fx.root.path, home: fx.root.path, now: fixedNow)
+    _ = await scanner.scan(into: store)
+    await store.setEnvironment(.system(home: fx.root.path, apps: .empty))
+    let projects = try await node(store, fx, "Projects")
+    let partial = try await node(store, fx, "Projects/partial")
+    let whole = try await node(store, fx, "Projects/whole")
+    #expect(await store.unverifiedDirectories == [partial])
+
+    let actions = RecordingDiskActions(trash: bin.root.path)
+    let outcome = await store.trash([partial], actions: actions, packages: noPackages, openFiles: nothingOpen,
+                                    expectedLevels: nil)
+    #expect(outcome.skipped == [TrashOutcome.Skipped(node: partial, name: "partial", reason: .containsUnverified)])
+    let above = await store.trash([projects], actions: actions, packages: noPackages, openFiles: nothingOpen,
+                                  expectedLevels: nil)
+    #expect(above.skipped.map(\.reason) == [.containsUnverified])
+    #expect(outcome.moved.isEmpty && above.moved.isEmpty && actions.moved.isEmpty)
+    // A sibling listed in full still moves.
+    let sibling = await store.trash([whole], actions: actions, packages: noPackages, openFiles: nothingOpen,
+                                    expectedLevels: nil)
+    #expect(sibling.moved.map(\.node) == [whole])
 }

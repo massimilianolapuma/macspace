@@ -31,7 +31,8 @@ public actor ScanStore {
     /// Devices the scan was allowed on; items found on another device at Trash time have changed.
     var scanDevices: Set<Int32> = []
     /// Directories whose contents are unknown: not descended by the boundary (excluded, or on
-    /// another device), or never listed, or listed only in part, by a cancelled scan.
+    /// another device), never listed by a cancelled scan, or listed only in part (cancelled
+    /// meanwhile, or an entry the file system reported an error for was left out).
     var unverifiedDirectories: Set<NodeID> = []
 
     /// Called by `Scanner.scan(into:)` when it ends, normally or cancelled (tests that fill a store
