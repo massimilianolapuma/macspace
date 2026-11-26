@@ -15,7 +15,6 @@ struct ContentView: View {
     @AppStorage(ColorMode.storageKey) private var colorMode: ColorMode = .deletable
     @AppStorage(ChartKind.storageKey) private var chart: ChartKind = .sunburst
     @Environment(\.colorScheme) private var scheme
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
         HStack(spacing: 0) {
@@ -23,7 +22,7 @@ struct ContentView: View {
                 HStack(spacing: 12) {
                     BreadcrumbView(model: model)
                     if chart == .treemap {
-                        folderTotal
+                        FolderTotal(size: model.breadcrumb.last?.size ?? 0, disk: model.diskAtRoot)
                     }
                 }
                 .padding(.horizontal, 12)
@@ -131,7 +130,7 @@ struct ContentView: View {
             .help(Text("Colori"))
         }
         ToolbarItem(placement: .status) {
-            status
+            ScanStatus(model: model)
         }
         ToolbarItem(placement: .primaryAction) {
             if !model.history.isEmpty {
@@ -158,72 +157,6 @@ struct ContentView: View {
     private func startScan() {
         safety.rebuildApps()
         model.start(target)
-    }
-
-    /// `line`, then " · N cartelle non leggibili" when the scan could not read some folders, so the
-    /// count never reads as the whole disk.
-    private static func withUnreadable(_ line: String, _ summary: ScanSummary) -> String {
-        guard summary.unreadable > 0 else { return line }
-        // Two strings rather than a catalog plural: the count is formatted like the file count.
-        let folders = summary.unreadable == 1
-            ? String(localized: "1 cartella non leggibile")
-            : String(localized: "\(Formatters.count(summary.unreadable)) cartelle non leggibili")
-        return line + " · " + folders
-    }
-
-    /// Scan state and file count (and the folders it could not read); the byte total lives only
-    /// in the chart's center.
-    @ViewBuilder
-    private var status: some View {
-        switch model.phase {
-        case let .scanning(progress):
-            HStack(spacing: 8) {
-                ProgressView()
-                    .controlSize(.small)
-                CountingText(UInt64(progress.filesSeen)) { Text("Analisi in corso… \(Formatters.count(Int($0))) file") }
-                    .monospacedDigit()
-                    .animation(reduceMotion ? nil : .easeOut(duration: 0.24), value: progress.filesSeen)
-                    .lineLimit(1)
-                    .frame(minWidth: 190, alignment: .leading)
-            }
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 12)
-        case let .done(summary) where summary.wasCancelled:
-            HStack(spacing: 6) {
-                Image(systemName: "pause.circle")
-                Text(verbatim: Self.withUnreadable(
-                    String(localized: "Analisi interrotta · \(Formatters.count(summary.files)) file"), summary))
-                    .monospacedDigit()
-                    .lineLimit(1)
-            }
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 12)
-        case let .done(summary):
-            Text(verbatim: Self.withUnreadable(String(localized: "\(Formatters.count(summary.files)) file"), summary))
-                .monospacedDigit()
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .padding(.horizontal, 12)
-        case .idle:
-            EmptyView()
-        }
-    }
-
-    /// The current folder's size (and the disk's capacity at its root): the treemap has no
-    /// center to show it in, as the sunburst does.
-    private var folderTotal: some View {
-        HStack(spacing: 4) {
-            Text(verbatim: Formatters.bytes(model.breadcrumb.last?.size ?? 0))
-                .fontWeight(.semibold)
-                .foregroundStyle(FusionPalette.primaryText(scheme))
-            if model.center == FileTree.root, let capacity = model.capacity {
-                Text("di \(Formatters.bytes(capacity))")
-                    .foregroundStyle(FusionPalette.secondaryText(scheme))
-            }
-        }
-        .monospacedDigit()
-        .lineLimit(1)
-        .fixedSize()
     }
 
     /// Up while the Trash confirmation or its result shows; closing it (never during a move)
@@ -311,5 +244,103 @@ private struct OnboardingView: View {
         }
         .padding(24)
         .frame(width: 500)
+    }
+}
+
+/// The toolbar's scan state and file count (and the folders it could not read); the byte total
+/// lives only in the chart. While a startup-disk scan runs, an estimated progress bar against the
+/// disk's used space; scanning a folder (whose total is unknown), a spinner.
+/// Reads the progress itself, so the content view is not re-evaluated on every progress update.
+struct ScanStatus: View {
+    let model: ScanModel
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    static let progressWidth: CGFloat = 120
+
+    var body: some View {
+        switch model.phase {
+        case let .scanning(progress):
+            HStack(spacing: 8) {
+                // The estimate needs the disk's used space; a chosen folder's total is unknown.
+                if let disk = model.disk, disk.used > 0 {
+                    let fraction = disk.progress(bytesSeen: progress.bytesSeen)
+                    ProgressView(value: fraction)
+                        .progressViewStyle(.linear)
+                        .controlSize(.small)
+                        .frame(width: Self.progressWidth)
+                        .animation(reduceMotion ? nil : .easeOut(duration: 0.24), value: fraction)
+                        .accessibilityLabel(Text("Avanzamento stimato"))
+                        .accessibilityValue(Text("circa \(Int((fraction * 100).rounded()))%"))
+                } else {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+                CountingText(UInt64(progress.filesSeen)) { Text("Analisi in corso… \(Formatters.count(Int($0))) file") }
+                    .monospacedDigit()
+                    .animation(reduceMotion ? nil : .easeOut(duration: 0.24), value: progress.filesSeen)
+                    .lineLimit(1)
+                    .frame(minWidth: 190, alignment: .leading)
+            }
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 12)
+        case let .done(summary) where summary.wasCancelled:
+            HStack(spacing: 6) {
+                Image(systemName: "pause.circle")
+                Text(verbatim: Self.withUnreadable(
+                    String(localized: "Analisi interrotta · \(Formatters.count(summary.files)) file"), summary))
+                    .monospacedDigit()
+                    .lineLimit(1)
+            }
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 12)
+        case let .done(summary):
+            Text(verbatim: Self.withUnreadable(String(localized: "\(Formatters.count(summary.files)) file"), summary))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .padding(.horizontal, 12)
+        case .idle:
+            EmptyView()
+        }
+    }
+
+    /// `line`, then " · N cartelle non leggibili" when the scan could not read some folders, so the
+    /// count never reads as the whole disk.
+    private static func withUnreadable(_ line: String, _ summary: ScanSummary) -> String {
+        guard summary.unreadable > 0 else { return line }
+        // Two strings rather than a catalog plural: the count is formatted like the file count.
+        let folders = summary.unreadable == 1
+            ? String(localized: "1 cartella non leggibile")
+            : String(localized: "\(Formatters.count(summary.unreadable)) cartelle non leggibili")
+        return line + " · " + folders
+    }
+}
+
+/// The current folder's size, for the treemap, which has no center to show it in as the sunburst
+/// does; at the root of a finished startup-disk scan, the disk's used space after it, as a fact of
+/// its own.
+struct FolderTotal: View {
+    let size: UInt64
+    /// nil: no disk line.
+    let disk: DiskUsage?
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        HStack(spacing: 4) {
+            Text(verbatim: Formatters.bytes(size))
+                .fontWeight(.semibold)
+                .foregroundStyle(FusionPalette.primaryText(scheme))
+            if let disk {
+                Text(verbatim: "· " + disk.line)
+                    .foregroundStyle(FusionPalette.secondaryText(scheme))
+                    .help(Text(verbatim: disk.explanation(scanned: size)))
+            }
+        }
+        .monospacedDigit()
+        .lineLimit(1)
+        .fixedSize()
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(Text(verbatim: disk.map { Formatters.bytes(size) + ". " + $0.explanation(scanned: size) }
+                                     ?? Formatters.bytes(size)))
     }
 }

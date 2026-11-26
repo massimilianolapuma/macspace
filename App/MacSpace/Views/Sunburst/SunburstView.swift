@@ -64,6 +64,7 @@ struct SunburstView: View {
                 }
                 SunburstPointerLayer(model: model, motion: motion, motionGeneration: motionGeneration,
                                      geometry: geometry, canGoUp: canGoUp, total: centerSize, hover: hover)
+                diskHelp(geometry)
             }
         }
         .accessibilityElement(children: .ignore)
@@ -139,33 +140,29 @@ struct SunburstView: View {
 
     @ViewBuilder
     private func centerLabel(_ geometry: ChartGeometry) -> some View {
-        let showsCapacity = model.capacity != nil && model.center == FileTree.root
-        VStack(spacing: 2) {
-            CountingText(centerSize) { Text(verbatim: Formatters.bytes($0)) }
-                .font(.system(size: geometry.centerFontSize, weight: .semibold))
-                .monospacedDigit()
-                .foregroundStyle(FusionPalette.primaryText(scheme))
-            Group {
-                if showsCapacity, let capacity = model.capacity {
-                    Text("di \(Formatters.bytes(capacity))")
-                } else {
-                    Text(verbatim: model.breadcrumb.last?.name ?? "")
-                }
+        SunburstCenterLabel(size: centerSize, name: model.breadcrumb.last?.name ?? "", disk: model.diskAtRoot,
+                            geometry: geometry)
+            .overlay(alignment: .top) {
+                CenterChevron(hover: hover, canGoUp: canGoUp)
+                    .offset(y: -18)
             }
-            .font(.callout)
-            .foregroundStyle(FusionPalette.secondaryText(scheme))
-            .truncationMode(.middle)
+            .animation(reduceMotion ? nil : .easeOut(duration: 0.24), value: centerSize)
+            .opacity(model.breadcrumb.isEmpty ? 0 : 1)
+    }
+
+    /// The disk line's tooltip, over the whole center disc: the pointer layer below has nothing to
+    /// do there at the root (the center only goes up, and the root has no level above).
+    @ViewBuilder
+    private func diskHelp(_ geometry: ChartGeometry) -> some View {
+        if let disk = model.diskAtRoot {
+            Circle()
+                .fill(.clear)
+                .contentShape(Circle())
+                .frame(width: 2 * geometry.centerRadius, height: 2 * geometry.centerRadius)
+                .help(Text(verbatim: disk.explanation(scanned: centerSize)))
+                .position(geometry.center)
+                .accessibilityHidden(true)
         }
-        .lineLimit(1)
-        .minimumScaleFactor(0.7)
-        .multilineTextAlignment(.center)
-        .frame(width: geometry.centerRadius * 1.6)
-        .overlay(alignment: .top) {
-            CenterChevron(hover: hover, canGoUp: canGoUp)
-                .offset(y: -18)
-        }
-        .animation(reduceMotion ? nil : .easeOut(duration: 0.24), value: centerSize)
-        .opacity(model.breadcrumb.isEmpty ? 0 : 1)
     }
 
     // MARK: Drawing
@@ -289,5 +286,42 @@ struct SunburstView: View {
         path.addArc(center: center, radius: inner, startAngle: a1, endAngle: a0, clockwise: true)
         path.closeSubpath()
         return path
+    }
+}
+
+/// The center disc's text: the folder's size, its name and, at the root of a finished
+/// startup-disk scan, the disk's used space as a fact of its own (never "di <capacity>", which
+/// reads as a scan still running).
+struct SunburstCenterLabel: View {
+    let size: UInt64
+    let name: String
+    /// Shown as a third, smaller line; nil: none.
+    let disk: DiskUsage?
+    let geometry: ChartGeometry
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        VStack(spacing: 2) {
+            CountingText(size) { Text(verbatim: Formatters.bytes($0)) }
+                .font(.system(size: geometry.centerFontSize, weight: .semibold))
+                .monospacedDigit()
+                .foregroundStyle(FusionPalette.primaryText(scheme))
+            Text(verbatim: name)
+                .font(.callout)
+                .foregroundStyle(FusionPalette.secondaryText(scheme))
+                .truncationMode(.middle)
+            if let disk {
+                // A small disc has no room for it on one line: it wraps after the figure.
+                Text(verbatim: disk.line)
+                    .font(.caption)
+                    .monospacedDigit()
+                    .foregroundStyle(FusionPalette.secondaryText(scheme))
+                    .lineLimit(2)
+            }
+        }
+        .lineLimit(1)
+        .minimumScaleFactor(0.7)
+        .multilineTextAlignment(.center)
+        .frame(width: geometry.centerRadius * 1.6)
     }
 }

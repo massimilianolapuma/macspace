@@ -37,7 +37,7 @@ struct BreadcrumbView: View {
             Text(verbatim: row.name).truncationMode(.middle)
         } icon: {
             if index == 0 {
-                Image(systemName: model.capacity != nil ? "internaldrive" : "folder")
+                Image(systemName: model.scansStartupDisk ? "internaldrive" : "folder")
             }
         }
         .labelStyle(CrumbLabelStyle())
