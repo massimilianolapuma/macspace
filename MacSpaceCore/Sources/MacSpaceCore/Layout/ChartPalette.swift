@@ -105,6 +105,48 @@ public enum ChartPalette {
         scheme == .dark ? rgb(0x98989D) : rgb(0x6E665C)
     }
 
+    /// The scheme's primary text color.
+    public static func primaryText(_ scheme: Scheme) -> Contrast.RGB {
+        scheme == .dark ? rgb(0xFFFFFF) : rgb(0x1F1B16)
+    }
+
+    // MARK: List rows
+
+    /// Opacity of `primaryText` laid over a list row while it is hovered (or lit from the chart).
+    public static let rowHoverOpacity = 0.07
+    /// Opacity of `primaryText` laid over the hover highlight while the row is pressed.
+    public static let rowPressedOpacity = 0.11
+
+    /// A list row's surface: `surface` under the hover highlight and, while pressed, the press on top
+    /// (a row is only pressed under the pointer, so the press always sits on the highlight).
+    public static func rowSurface(hovered: Bool, pressed: Bool, scheme: Scheme) -> Contrast.RGB {
+        let text = primaryText(scheme)
+        var result = surface(scheme)
+        if hovered || pressed { result = mix(text, over: result, rowHoverOpacity) }
+        if pressed { result = mix(text, over: result, rowPressedOpacity) }
+        return result
+    }
+
+    /// Secondary text on a list row: `secondaryText` moved toward `primaryText` just enough to keep
+    /// `sectionContrast` on the darkest row state (pressed). One tone for every state, so hovering
+    /// changes only the row's fill and the row's text never shifts.
+    public static func rowSecondaryText(_ scheme: Scheme) -> Contrast.RGB {
+        let base = secondaryText(scheme), toward = primaryText(scheme)
+        let darkest = rowSurface(hovered: true, pressed: true, scheme: scheme)
+        if Contrast.ratio(base, darkest) >= sectionContrast { return base }
+        var low = 0.0, high = 1.0  // contrast grows as the tone nears the primary text
+        for _ in 0..<12 {
+            let mid = (low + high) / 2
+            if Contrast.ratio(mix(toward, over: base, mid), darkest) >= sectionContrast { high = mid } else { low = mid }
+        }
+        return mix(toward, over: base, high)
+    }
+
+    /// `top` laid over `base` at opacity `a`.
+    private static func mix(_ top: Contrast.RGB, over base: Contrast.RGB, _ a: Double) -> Contrast.RGB {
+        Contrast.RGB(base.r + (top.r - base.r) * a, base.g + (top.g - base.g) * a, base.b + (top.b - base.b) * a)
+    }
+
     /// Strongest tint of a treemap section surface, before the header's contrast limits it.
     private static func sectionTint(_ scheme: Scheme) -> Double { scheme == .dark ? 0.22 : 0.18 }
     /// Contrast kept for section headers: AA plus a little margin for rounding.
