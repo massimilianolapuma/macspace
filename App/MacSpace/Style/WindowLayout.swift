@@ -24,11 +24,11 @@ enum WindowLayout {
     static let inspectorIdealWidth: CGFloat = 300
     static let inspectorMaxWidth: CGFloat = 420
 
-    /// The smallest window, inspector shown or not: the toolbar's widest state (a startup-disk
-    /// scan's progress bar and "Analisi in corso… 8.888.888 file · 888,88 GB", plus "Interrompi"
-    /// and the inspector button) fits without any item going into the overflow menu. The content
-    /// area's minimum is this less the inspector's current width.
-    static let minWindowWidth: CGFloat = 1100
+    /// The smallest window, inspector shown or not: the toolbar's controls never go into the
+    /// overflow menu, and the path row holds its widest facts (the treemap's total, a startup-disk
+    /// scan's file line with unreadable folders and the disk line) beside the scan root's name. The
+    /// content area's minimum is this less the inspector's current width.
+    static let minWindowWidth: CGFloat = 900
     /// The content's minimum height; with the content under the toolbar, the window's minimum is
     /// 572 pt, as before.
     static let minContentHeight: CGFloat = 468

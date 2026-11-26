@@ -7,6 +7,7 @@ struct SidebarView: View {
     let model: ScanModel
     let colorMode: ColorMode
     @Binding var tab: Tab
+    @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     enum Tab: Hashable {
@@ -44,6 +45,8 @@ struct SidebarView: View {
         // Never measured narrower than the column can be: text that wraps instead of truncating
         // would otherwise report a min height for a zero width and stretch the window.
         .frame(minWidth: WindowLayout.inspectorMinWidth)
+        // The window's surface, up under the toolbar; the system's hairline still parts it from the chart.
+        .background(FusionPalette.background(scheme))
         .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: model.selection.isEmpty)
         .onChange(of: tab) {
             // The outlines belong to the suggestions: leaving them clears them.
