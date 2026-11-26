@@ -1,1 +1,6 @@
 .superpowers/
+Local.xcconfig
+*.xcodeproj
+.build/
+DerivedData/
+.swiftpm/
