@@ -28,9 +28,11 @@ final class ScanModel {
         }
     }
     private(set) var isScanning = false
-    /// A scan is running, or one has left a folder to show: the chart, its path and its legend take
-    /// the content area. Read instead of `phase`, which changes on every progress update.
-    var hasScan: Bool { isScanning || !breadcrumb.isEmpty }
+    /// A scan has started in this window: from then on the chart, its path and its legend take the
+    /// content area, through scanning, its end and every later scan. Stored, set in the same turn as
+    /// the first `.scanning` phase, so no frame between scans or at a scan's end shows the idle
+    /// state; read instead of `phase`, which changes on every progress update.
+    private(set) var hasScan = false
     /// Folders the last finished scan could not read (0 while scanning or before any scan).
     var unreadableFolders: Int {
         if case let .done(summary) = phase { summary.unreadable } else { 0 }
@@ -349,7 +351,10 @@ final class ScanModel {
         segments = []
         tiles = []
         biggest = []
-        breadcrumb = []
+        // The root's crumb from the first frame: the path row names what is being scanned before
+        // the first refresh lands.
+        breadcrumb = [NodeRow(id: FileTree.root, name: rootName, size: 0, kind: .directory, flags: [],
+                              hasChildren: false)]
         categoryTotals = [:]
         ageTotals = [:]
         showsMerged = false
@@ -365,6 +370,7 @@ final class ScanModel {
         trashReport = nil
         storeGeneration += 1
         phase = .scanning(ScanProgress(filesSeen: 0, bytesSeen: 0, directoriesPending: 1))
+        hasScan = true
         if let environment {
             // The same apps, judged at the current time (rules measure ages from `now`) with the
             // apps running now.
