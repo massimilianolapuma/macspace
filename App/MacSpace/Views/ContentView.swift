@@ -80,7 +80,7 @@ struct ContentView: View {
     }
 
     /// Before any scan, one empty state; from the moment a scan starts, the path row, the chart and
-    /// (whenever it has something to show) the legend, at fixed places.
+    /// the legend row, at fixed places.
     @ViewBuilder
     private var content: some View {
         if model.hasScan {
@@ -101,9 +101,7 @@ struct ContentView: View {
                     }
                 }
                 .reportsChartSize(to: model)
-                if ChartLegend.hasContent(model, mode: colorMode) {
-                    ChartLegend(model: model, mode: colorMode)
-                }
+                ChartLegend(model: model, mode: colorMode)
             }
             .padding(WindowLayout.windowMargin)
         } else {

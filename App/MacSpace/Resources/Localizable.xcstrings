@@ -88,6 +88,9 @@
     "Aggiornato" : {
 
     },
+    "Altre %lld voci" : {
+
+    },
     "Altri %@ elementi" : {
 
     },
@@ -582,6 +585,9 @@
 
     },
     "Ultimo uso: %@" : {
+
+    },
+    "Un'altra voce" : {
 
     },
     "Uso più recente (stimato): %@" : {
