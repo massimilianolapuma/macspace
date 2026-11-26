@@ -44,7 +44,10 @@ struct TreemapPointerLayer: View {
     private var tooltip: some View {
         if let pointer, let hovered = model.hoveredTile {
             let size = canvas.size
-            SegmentTooltip(tile: hovered, total: total)
+            let node = hovered.node
+            SegmentTooltip(subject: .init(tile: hovered, verdict: node.flatMap { model.verdicts[$0] },
+                                          spotlightLastUsed: node.flatMap { model.spotlightLastUsed[$0] }),
+                           total: total)
                 .fixedSize()
                 .alignmentGuide(.leading) { d in
                     pointer.x + 16 + d.width > size.width ? d.width + 10 - pointer.x : -(pointer.x + 16)
@@ -71,10 +74,15 @@ struct TreemapPointerLayer: View {
         }
     }
 
-    /// A tile with children drills into it; on a section that includes its header.
+    /// A tile with children drills into it; on a section that includes its header. A ⌘-click
+    /// selects or deselects the tile instead.
     private func click(at point: CGPoint) {
-        guard let tile = motion.hitTest(point, canvas: canvas, at: .now), let node = tile.node,
-              tile.hasChildren else { return }
+        guard let tile = motion.hitTest(point, canvas: canvas, at: .now) else { return }
+        if ChartSelection.isSelectClick {
+            ChartSelection.toggle(tile.node, in: model)
+            return
+        }
+        guard let node = tile.node, tile.hasChildren else { return }
         model.drill(into: node)
     }
 }

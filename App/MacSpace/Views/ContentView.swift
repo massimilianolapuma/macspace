@@ -9,7 +9,10 @@ struct ContentView: View {
     @State private var chosenFolder: (url: URL, name: String)?
     @State private var choosingFolder = false
     @State private var showOnboarding = false
-    @AppStorage(ColorMode.storageKey) private var colorMode: ColorMode = .neutral
+    @State private var showHistory = false
+    /// Shared by every window (`MacSpaceApp`); starts itself once, on the first window.
+    @Environment(SafetyEnvironmentProvider.self) private var safety
+    @AppStorage(ColorMode.storageKey) private var colorMode: ColorMode = .deletable
     @AppStorage(ChartKind.storageKey) private var chart: ChartKind = .sunburst
     @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -41,8 +44,8 @@ struct ContentView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
             Divider()
-            BiggestListView(model: model, colorMode: colorMode)
-                .frame(width: 260)
+            SidebarView(model: model, colorMode: colorMode)
+                .frame(width: 300)
                 .frame(maxHeight: .infinity)
         }
         .frame(minWidth: 760, minHeight: 520)
@@ -59,6 +62,10 @@ struct ContentView: View {
             // Only relays out the current folder: a running scan carries on.
             model.chart = chart
         }
+        .onChange(of: safety.revision, initial: true) {
+            model.updateEnvironment(safety.environment)
+        }
+        .task { safety.start() }
         .navigationTitle(Text(verbatim: model.breadcrumb.last?.name ?? "MacSpace"))
         .toolbar(removing: .title)
         .toolbar { toolbar }
@@ -71,10 +78,13 @@ struct ContentView: View {
         }
         .onChange(of: target) {
             // Picking another target mid-scan replaces the running scan.
-            if model.isScanning { model.start(target) }
+            if model.isScanning { startScan() }
         }
         .sheet(isPresented: $showOnboarding) {
             OnboardingView(dismiss: { showOnboarding = false })
+        }
+        .sheet(isPresented: trashSheetShown) {
+            TrashSheet(model: model)
         }
         .onAppear { showOnboarding = !FullDiskAccess.isGranted }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
@@ -124,17 +134,45 @@ struct ContentView: View {
             status
         }
         ToolbarItem(placement: .primaryAction) {
+            if !model.history.isEmpty {
+                Button("Cronologia", systemImage: "clock.arrow.circlepath") { showHistory.toggle() }
+                    .help(Text("Elementi spostati nel Cestino in questa sessione"))
+                    .popover(isPresented: $showHistory, arrowEdge: .bottom) {
+                        HistoryPopover(entries: model.history)
+                    }
+            }
+        }
+        ToolbarItem(placement: .primaryAction) {
             if model.isScanning {
                 Button("Interrompi", systemImage: "stop.fill") { model.cancel() }
                     .labelStyle(.titleAndIcon)
             } else {
-                Button("Analizza", systemImage: "play.fill") { model.start(target) }
+                Button("Analizza", systemImage: "play.fill") { startScan() }
                     .labelStyle(.titleAndIcon)
             }
         }
     }
 
-    /// Scan state and file count; the byte total lives only in the chart's center.
+    /// Scans `target`; the installed apps are indexed again meanwhile (apps installed or removed
+    /// since launch), keeping the previous index until the new one lands.
+    private func startScan() {
+        safety.rebuildApps()
+        model.start(target)
+    }
+
+    /// `line`, then " · N cartelle non leggibili" when the scan could not read some folders, so the
+    /// count never reads as the whole disk.
+    private static func withUnreadable(_ line: String, _ summary: ScanSummary) -> String {
+        guard summary.unreadable > 0 else { return line }
+        // Two strings rather than a catalog plural: the count is formatted like the file count.
+        let folders = summary.unreadable == 1
+            ? String(localized: "1 cartella non leggibile")
+            : String(localized: "\(Formatters.count(summary.unreadable)) cartelle non leggibili")
+        return line + " · " + folders
+    }
+
+    /// Scan state and file count (and the folders it could not read); the byte total lives only
+    /// in the chart's center.
     @ViewBuilder
     private var status: some View {
         switch model.phase {
@@ -153,14 +191,15 @@ struct ContentView: View {
         case let .done(summary) where summary.wasCancelled:
             HStack(spacing: 6) {
                 Image(systemName: "pause.circle")
-                Text("Analisi interrotta · \(Formatters.count(summary.files)) file")
+                Text(verbatim: Self.withUnreadable(
+                    String(localized: "Analisi interrotta · \(Formatters.count(summary.files)) file"), summary))
                     .monospacedDigit()
                     .lineLimit(1)
             }
             .foregroundStyle(.secondary)
             .padding(.horizontal, 12)
         case let .done(summary):
-            Text("\(Formatters.count(summary.files)) file")
+            Text(verbatim: Self.withUnreadable(String(localized: "\(Formatters.count(summary.files)) file"), summary))
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
@@ -185,6 +224,18 @@ struct ContentView: View {
         .monospacedDigit()
         .lineLimit(1)
         .fixedSize()
+    }
+
+    /// Up while the Trash confirmation or its result shows; closing it (never during a move)
+    /// drops both.
+    private var trashSheetShown: Binding<Bool> {
+        Binding {
+            model.pendingTrash != nil || model.trashReport != nil
+        } set: { shown in
+            guard !shown, !model.isTrashing else { return }
+            model.pendingTrash = nil
+            model.trashReport = nil
+        }
     }
 
     /// The target's name after resolving links, as the chart root shows it.

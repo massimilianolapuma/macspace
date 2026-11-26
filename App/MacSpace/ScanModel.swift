@@ -28,9 +28,18 @@ final class ScanModel {
         }
     }
     private(set) var isScanning = false
+    /// Folders the last finished scan could not read (0 while scanning or before any scan).
+    var unreadableFolders: Int {
+        if case let .done(summary) = phase { summary.unreadable } else { 0 }
+    }
     /// The folder the chart and the list are centred on.
     var center: NodeID = FileTree.root
-    var segments: [ArcSegment] = []
+    var segments: [ArcSegment] = [] {
+        didSet { segmentParents = Self.parentMap(segments.lazy.compactMap { s in s.node.map { ($0, s.parent) } }) }
+    }
+    /// Each node in `segments` → the folder above it, for `isInsideSelection`: rebuilt only when
+    /// `segments` is set, so a lookup per chart element does not rebuild it.
+    private(set) var segmentParents: [NodeID: NodeID] = [:]
     var biggest: [NodeRow] = []
     /// From the scan root down to `center`.
     var breadcrumb: [NodeRow] = []
@@ -40,10 +49,20 @@ final class ScanModel {
     var ageTotals: [AgeBucket: UInt64] = [:]
     /// Whether the active chart shows a merged "Altri N elementi" element (for the legend).
     var showsMerged = false
+    /// The safety verdict of every node in `segments`, `tiles`, `biggest` and `breadcrumb`.
+    /// Provisional while scanning (sizes and last uses still grow); recomputed when the scan ends.
+    var verdicts: [NodeID: SafetyVerdict] = [:]
+    /// Spotlight's last-used date (seconds since 1970) of hovered files, looked up once per file
+    /// and scan (`scheduleLastUsedLookup`); a file Spotlight has no date for is absent.
+    private(set) var spotlightLastUsed: [NodeID: UInt32] = [:]
     /// The hovered sunburst segment (sunburst chart only).
-    var hovered: ArcSegment?
+    var hovered: ArcSegment? {
+        didSet { if hovered?.node != oldValue?.node { scheduleLastUsedLookup() } }
+    }
     /// The hovered treemap tile (treemap chart only).
-    var hoveredTile: TreemapTile?
+    var hoveredTile: TreemapTile? {
+        didSet { if hoveredTile?.node != oldValue?.node { scheduleLastUsedLookup() } }
+    }
     /// Which chart is on screen; only that one is laid out. Mirrors `@AppStorage(ChartKind.storageKey)`.
     /// Changing it relays out the current folder: the scan, `center` and the hovered node stay.
     var chart: ChartKind = .sunburst {
@@ -55,18 +74,131 @@ final class ScanModel {
         didSet { if chartSize != oldValue, chart == .treemap { Task { await refreshViews() } } }
     }
     /// Treemap tiles below `center`, laid out for `tilesSize`; empty unless `chart` is `.treemap`.
-    var tiles: [TreemapTile] = []
+    var tiles: [TreemapTile] = [] {
+        didSet { tileParents = Self.parentMap(tiles.lazy.compactMap { t in t.node.map { ($0, t.parent) } }) }
+    }
+    /// Each node in `tiles` → the folder above it, as `segmentParents` for `segments`.
+    private(set) var tileParents: [NodeID: NodeID] = [:]
     /// The canvas size `tiles` were laid out for.
     private(set) var tilesSize: CGSize = .zero
     /// Total capacity of the scanned volume; set only when scanning the startup disk.
     var capacity: UInt64?
 
+    // Selection and suggestions (`ScanModel+Selection.swift`).
+
+    /// Items picked for the Trash, as `ScanStore.resolveSelection` keeps them: top-most, never the
+    /// root or protected. Change it with `toggleSelection` and `clearSelection`.
+    var selection: Set<NodeID> = []
+    /// Bytes in `selection`, each counted once.
+    var selectionTotal: UInt64 = 0
+    /// The items of the suggestion whose header was clicked, outlined wherever they are on screen.
+    var highlighted: Set<NodeID> = []
+    /// The store's suggestions, recomputed when a scan ends, when the environment changes and after
+    /// each trash (`refreshSuggestions`); empty while scanning.
+    var suggestions: [Suggestion] = []
+    /// Ticks the user changed in the suggestions; every other item is ticked when `preselected`.
+    var suggestionTicks: [NodeID: Bool] = [:]
+    /// Items "Sposta nel Cestino…" asked to move; the confirmation sheet shows them (nil: none).
+    var pendingTrash: [NodeID]?
+    /// Whether the installed apps index is ready, so `~/Library` items have been judged.
+    private(set) var appsReady = false
+    /// The last scan's end has fully landed: verdicts judged again on the finished tree, the
+    /// selection re-resolved and the suggestions recomputed. Until then the Trash stays unavailable,
+    /// so no request is made on provisional verdicts.
+    private(set) var scanSettled = true
+    /// Environment updates still being applied (verdicts, selection, suggestions); the Trash waits.
+    private(set) var environmentUpdates = 0
+
+    // Moving to the Trash (`ScanModel+Trash.swift`).
+
+    /// The finished move the sheet shows in place of the confirmation (nil: none). The sheet is up
+    /// while this or `pendingTrash` is set.
+    var trashReport: TrashReport?
+    /// Every item moved to the Trash in this session, newest first; not saved.
+    var history: [HistoryEntry] = []
+    /// A move is running; another one is refused until it ends.
+    var isTrashing = false
+    /// Bumped each time an environment update has fully landed (verdicts may have changed), so an
+    /// open confirmation sheet re-reads its rows.
+    var verdictRevision = 0
+    /// Bumped whenever a new store replaces the old one, so a sheet opened on the old one's items
+    /// can tell they no longer exist.
+    @ObservationIgnored var storeGeneration = 0
+
     static let ringDepth = 3
     static let biggestLimit = 20
     static let refreshInterval: Duration = .milliseconds(250)
 
-    @ObservationIgnored private var store: ScanStore?
+    /// Internal, not private, for the `ScanModel+…` extensions.
+    @ObservationIgnored private(set) var store: ScanStore?
+    /// Selection changes run one after the other, each against the outcome of the previous one.
+    @ObservationIgnored var selectionWork: Task<Void, Never>?
     @ObservationIgnored private var scanTask: Task<Void, Never>?
+    /// What verdicts are judged against (`updateEnvironment`, or the live one `trash` reads); nil
+    /// until the provider's first one.
+    @ObservationIgnored var environment: SafetyEnvironment?
+    /// Nodes whose Spotlight last use was asked for in this scan (found or not).
+    @ObservationIgnored private var lastUsedRequested: Set<NodeID> = []
+    /// Waits for the pointer to rest on a node before looking it up.
+    @ObservationIgnored private var lastUsedRest: Task<Void, Never>?
+    /// A Spotlight lookup is running; at most one runs at a time.
+    @ObservationIgnored private var lastUsedInFlight = false
+
+    /// How long the pointer must rest on a file before Spotlight is asked about it.
+    static let lastUsedRestDelay: Duration = .milliseconds(150)
+
+    /// Judges verdicts against `env` from now on (the apps index became ready, an app launched or
+    /// quit): hands it to the current store, and to every store a later scan creates, and refreshes.
+    /// Suggestions and the selection follow (a running app's data becomes protected, and leaves both).
+    func updateEnvironment(_ env: SafetyEnvironment) {
+        environment = env
+        if appsReady != (env.apps != nil) { appsReady = env.apps != nil }
+        guard let store else { return }
+        environmentUpdates += 1
+        Task {
+            defer { environmentUpdates -= 1 }
+            // Read when the task runs, so of two quick updates the store ends with the latest.
+            guard let latest = environment else { return }
+            await store.setEnvironment(latest)
+            guard store === self.store else { return }
+            await refreshViews()
+            await selectionWork?.value  // the re-resolve `refreshViews` queued
+            await refreshSuggestions()
+            if store === self.store { verdictRevision += 1 }
+        }
+    }
+
+    /// Looks up the hovered node's Spotlight last-used date once the pointer has rested on it for
+    /// `lastUsedRestDelay`, so sweeping across the chart asks Spotlight nothing.
+    private func scheduleLastUsedLookup() {
+        lastUsedRest?.cancel()
+        guard hoveredNode != nil else { return }
+        lastUsedRest = Task {
+            try? await Task.sleep(for: Self.lastUsedRestDelay)
+            guard !Task.isCancelled else { return }
+            lookUpHoveredLastUsed()
+        }
+    }
+
+    /// Looks up the hovered node's Spotlight last-used date, once per node and scan, off the main
+    /// actor; only files (a folder's date says nothing about its contents). One lookup at a time:
+    /// when it ends, the node hovered by then (if any, and not asked yet) goes next. The result lands
+    /// in `spotlightLastUsed`.
+    private func lookUpHoveredLastUsed() {
+        guard !lastUsedInFlight, let store, let node = hoveredNode, lastUsedRequested.insert(node).inserted else { return }
+        lastUsedInFlight = true
+        Task {
+            defer {
+                lastUsedInFlight = false
+                lookUpHoveredLastUsed()
+            }
+            // A node from an earlier scan's store may not exist in this one: no row, no path.
+            guard await store.row(node)?.kind == .file, let path = await store.path(of: node) else { return }
+            let date = await Task.detached(priority: .utility) { SpotlightLastUsed.lastUsed(path: path) }.value
+            guard store === self.store, let date else { return }
+            spotlightLastUsed[node] = date
+        }
+    }
 
     /// Starts scanning `target`, cancelling any running scan first.
     func start(_ target: ScanTarget) {
@@ -152,6 +284,7 @@ final class ScanModel {
             tiles = snapshot.tiles
             biggest = snapshot.biggest
             breadcrumb = snapshot.breadcrumb
+            if verdicts != snapshot.verdicts { verdicts = snapshot.verdicts }
             if categoryTotals != snapshot.categoryTotals { categoryTotals = snapshot.categoryTotals }
             if ageTotals != snapshot.ageTotals { ageTotals = snapshot.ageTotals }
             let merged = switch chart {
@@ -166,6 +299,8 @@ final class ScanModel {
                 if tile != hoveredTile { hoveredTile = tile }
             }
         }
+        // Sizes grow while scanning and verdicts move with the environment: re-judge the selection.
+        if !selection.isEmpty { changeSelection { $0 } }
     }
 
     private func run(_ target: ScanTarget) async {
@@ -182,10 +317,16 @@ final class ScanModel {
         }
 
         let store = ScanStore(rootName: rootName, rootPath: rootPath)
+        // Everything that names a node of the old store goes in the same main-actor turn as the
+        // store itself, before any await: node IDs are per store.
         self.store = store
         center = FileTree.root
         hovered = nil
         hoveredTile = nil
+        verdicts = [:]
+        spotlightLastUsed = [:]
+        lastUsedRequested = []
+        lastUsedRest?.cancel()
         capacity = if case .startupDisk = target { Self.startupDiskCapacity() } else { nil }
         segments = []
         tiles = []
@@ -194,7 +335,25 @@ final class ScanModel {
         categoryTotals = [:]
         ageTotals = [:]
         showsMerged = false
+        // Changes still queued for the old store drop themselves (they check the store).
+        selectionWork = nil
+        scanSettled = false
+        selection = []
+        selectionTotal = 0
+        highlighted = []
+        suggestions = []
+        suggestionTicks = [:]
+        pendingTrash = nil
+        trashReport = nil
+        storeGeneration += 1
         phase = .scanning(ScanProgress(filesSeen: 0, bytesSeen: 0, directoriesPending: 1))
+        if let environment {
+            // The same apps, judged at the current time (rules measure ages from `now`) with the
+            // apps running now.
+            let fresh = SafetyEnvironmentProvider.environment(apps: environment.apps)
+            self.environment = fresh
+            await store.setEnvironment(fresh)
+        }
 
         let latest = LatestProgress()
         let ticker = Task {
@@ -211,8 +370,13 @@ final class ScanModel {
         await ticker.value
 
         phase = .done(summary)
-        // The last timer refresh predates the final inserts: show the finished tree.
+        // Verdicts judged mid-scan saw partial sizes and last uses; the last timer refresh also
+        // predates the final inserts: judge and show the finished tree.
+        await store.invalidateVerdicts()
         await refreshViews()
+        await selectionWork?.value  // the re-resolve `refreshViews` queued, on the final verdicts
+        await refreshSuggestions()
+        if store === self.store { scanSettled = true }
     }
 
     /// The startup volume's name as Finder shows it ("Macintosh HD" unless renamed).

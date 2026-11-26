@@ -47,7 +47,10 @@ struct SunburstPointerLayer: View {
     private var tooltip: some View {
         if let pointer, let hovered = model.hovered {
             let size = geometry.size
-            SegmentTooltip(segment: hovered, total: total)
+            let node = hovered.node
+            SegmentTooltip(subject: .init(segment: hovered, verdict: node.flatMap { model.verdicts[$0] },
+                                          spotlightLastUsed: node.flatMap { model.spotlightLastUsed[$0] }),
+                           total: total)
                 .fixedSize()
                 .alignmentGuide(.leading) { d in
                     pointer.x + 16 + d.width > size.width ? d.width + 10 - pointer.x : -(pointer.x + 16)
@@ -96,8 +99,15 @@ struct SunburstPointerLayer: View {
         }
     }
 
+    /// A click drills into a folder (the center goes up); a ⌘-click selects or deselects a segment.
     private func click(at point: CGPoint) {
-        switch target(at: point) {
+        let target = target(at: point)
+        if ChartSelection.isSelectClick {
+            guard case let .segment(segment) = target else { return }
+            ChartSelection.toggle(segment.node, in: model)
+            return
+        }
+        switch target {
         case .center:
             if canGoUp { model.goUp() }
         case let .segment(segment):

@@ -78,19 +78,89 @@ private struct BiggestRow: View {
     private var highlighted: Bool { model.hoveredNode == row.id }
 
     var body: some View {
-        // Folders are buttons, so they take keyboard focus and VoiceOver can open them.
-        Group {
+        HStack(spacing: 0) {
+            selectionSlot
+            // Folders are buttons, so they take keyboard focus and VoiceOver can open them.
             if canOpen {
                 Button(action: open) { content }
-                    .buttonStyle(RowButtonStyle(highlighted: highlighted))
+                    .buttonStyle(RowButtonStyle())
                     .pointerStyle(.link)
             } else {
-                content.background(RowButtonStyle.fill(highlighted: highlighted, pressed: false, scheme: scheme))
+                content
             }
         }
+        .background(RowButtonStyle.fill(highlighted: highlighted, pressed: false, scheme: scheme))
         .onHover(perform: hover)
         .accessibilityElement(children: .combine)
+        // Spelled out, so VoiceOver says the level and its reason whatever the color mode.
+        .accessibilityLabel(Text(verbatim: spokenLabel))
+        .accessibilityValue(Text(verbatim: spokenValue))
+        .selectionAction(node: row.id, model: model)
     }
+
+    private var verdict: SafetyVerdict? { model.verdicts[row.id] }
+
+    private var isProtected: Bool { (verdict?.level ?? row.safety) == .protected }
+
+    /// The row's checkbox; none for a protected row, which keeps its lock: the one on its detail line
+    /// in "Eliminabili", here otherwise. Inside a selected folder the box is ticked and disabled.
+    @ViewBuilder
+    private var selectionSlot: some View {
+        Group {
+            if isProtected {
+                if colorMode != .deletable {
+                    Image(systemName: "lock.fill")
+                        .font(.system(size: 9, weight: .semibold))
+                        .foregroundStyle(FusionPalette.secondaryText(scheme))
+                        .help(Text(SafetyLevel.protected.title))
+                } else {
+                    Color.clear.frame(height: 1)
+                }
+            } else {
+                let selected = model.selection.contains(row.id)
+                let inFolder = model.isInsideSelection(row.id)
+                Toggle(isOn: Binding(get: { model.isCoveredBySelection(row.id) },
+                                     set: { _ in model.toggleSelection(row.id) })) { EmptyView() }
+                    .toggleStyle(.checkbox)
+                    .labelsHidden()
+                    .disabled(inFolder)
+                    .help(inFolder ? Text("Fa già parte di una cartella selezionata")
+                                   : selected ? Text("Deseleziona") : Text("Seleziona"))
+            }
+        }
+        .frame(width: 24)
+        .padding(.leading, 4)
+        // The row's own "Seleziona"/"Deseleziona" action stands for it.
+        .accessibilityHidden(true)
+    }
+
+    /// Name, the safety level unless normal, and "Non leggibile".
+    private var spokenLabel: String {
+        var parts = [row.name]
+        if let level = (verdict?.level ?? row.safety).spokenTitle { parts.append(level) }
+        if row.flags.contains(.unreadable) { parts.append(String(localized: "Non leggibile")) }
+        return parts.joined(separator: ", ")
+    }
+
+    /// Size, the detail line in words (type or last use; nothing extra in "Eliminabili") and the
+    /// safety reason.
+    private var spokenValue: String {
+        var parts = [Formatters.bytes(row.size)]
+        switch colorMode {
+        case .deletable:
+            break
+        case .category:
+            parts.append(String(localized: "Tipo: \(String(localized: row.category.title))"))
+        case .lastUse where isFolderWithContents:
+            parts.append(String(localized: "Per lo più: \(String(localized: row.ageBucket.title))"))
+        case .lastUse:
+            parts.append(String(localized: "Ultimo uso (stimato): \(Formatters.lastUsedAge(row.lastUsed))"))
+        }
+        if let sentence = verdict?.sentence { parts.append(sentence) }
+        return parts.joined(separator: ", ")
+    }
+
+    private var isFolderWithContents: Bool { row.kind == .directory && row.hasChildren }
 
     private var content: some View {
         HStack(spacing: 8) {
@@ -120,31 +190,37 @@ private struct BiggestRow: View {
                 share
             }
         }
-        .padding(.horizontal, 10)
+        .padding(.leading, 2)
+        .padding(.trailing, 10)
         .padding(.vertical, 6)
         .contentShape(Rectangle())
     }
 
-    /// The row's file type (by type), or by last use a folder's dominant age bucket and a file's
-    /// relative last use, with its chart color; nothing in neutral mode. Worded as the hover card
-    /// words it: a folder with contents says "Per lo più: <bucket>"; an empty folder, like a file,
-    /// its own last use.
+    /// The row's safety level and reason (Eliminabili), file type (by type), or by last use a
+    /// folder's dominant age bucket and a file's relative last use, each with its chart mark.
+    /// Worded as the hover card words it: a folder with contents says "Per lo più: <bucket>"; an
+    /// empty folder, like a file, its own last use. An ordinary item has no reason: no line.
     @ViewBuilder
     private var detail: some View {
         switch colorMode {
-        case .neutral:
-            EmptyView()
+        case .deletable:
+            if let verdict, let sentence = verdict.sentence {
+                // Up to two lines, so the consequence is not cut off; the help tag has it all.
+                RowDetail(text: sentence, lines: 2) {
+                    SafetySwatch(level: verdict.level, diameter: ColorDot.size)
+                }
+                    .help(Text(verbatim: sentence))
+            }
         case .category:
             RowDetail(color: FusionPalette.swatch(row.category, scheme: scheme),
                       text: String(localized: row.category.title))
-        case .lastUse where row.kind == .directory && row.hasChildren:
+        case .lastUse where isFolderWithContents:
             // A folder: the age of most of its bytes, not of its latest touch.
             RowDetail(color: FusionPalette.swatch(row.ageBucket, scheme: scheme),
                       text: String(localized: "Per lo più: \(String(localized: row.ageBucket.title))"))
         case .lastUse:
-            let age = Formatters.lastUsedAge(row.lastUsed)
-            RowDetail(color: FusionPalette.swatch(row.ageBucket, scheme: scheme), text: age)
-                .accessibilityLabel(Text("Ultimo uso (stimato): \(age)"))
+            RowDetail(color: FusionPalette.swatch(row.ageBucket, scheme: scheme),
+                      text: Formatters.lastUsedAge(row.lastUsed))
         }
     }
 
@@ -173,35 +249,59 @@ private struct BiggestRow: View {
     }
 }
 
-/// A small color dot and the words it stands for, under a row's name.
-private struct RowDetail: View {
-    let color: Color
+/// A small mark (a color dot, or a safety level's marker) and the words it stands for, under a
+/// row's name.
+private struct RowDetail<Marker: View>: View {
     let text: String
+    /// Most lines the text may take before it is cut with "…".
+    var lines = 1
+    @ViewBuilder let marker: Marker
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        HStack(spacing: 5) {
-            Circle()
-                .fill(color)
-                .overlay(Circle().strokeBorder(FusionPalette.swatchRing(scheme), lineWidth: 0.5))
-                .frame(width: 7, height: 7)
+        HStack(alignment: .firstTextBaseline, spacing: 5) {
+            marker
+                // Centered on the first line's lowercase letters, also when the text wraps.
+                .alignmentGuide(.firstTextBaseline) { $0[VerticalAlignment.center] + 3.5 }
                 .accessibilityHidden(true)
             Text(verbatim: text)
                 .font(.caption)
                 .foregroundStyle(FusionPalette.secondaryText(scheme))
-                .lineLimit(1)
+                .lineLimit(lines)
+                .truncationMode(.tail)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 }
 
-/// Row chrome: hover/linked highlight and pressed state.
+extension RowDetail where Marker == ColorDot {
+    init(color: Color, text: String) {
+        self.init(text: text) { ColorDot(color: color) }
+    }
+}
+
+/// A chart color as a small dot with a hairline ring.
+private struct ColorDot: View {
+    static let size = 7.0
+
+    let color: Color
+    @Environment(\.colorScheme) private var scheme
+
+    var body: some View {
+        Circle()
+            .fill(color)
+            .overlay(Circle().strokeBorder(FusionPalette.swatchRing(scheme), lineWidth: 0.5))
+            .frame(width: Self.size, height: Self.size)
+    }
+}
+
+/// Row chrome: the pressed state (the hover/linked highlight is the whole row's, `fill`).
 private struct RowButtonStyle: ButtonStyle {
-    let highlighted: Bool
     @Environment(\.colorScheme) private var scheme
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .background(Self.fill(highlighted: highlighted, pressed: configuration.isPressed, scheme: scheme))
+            .background(Self.fill(highlighted: false, pressed: configuration.isPressed, scheme: scheme))
     }
 
     static func fill(highlighted: Bool, pressed: Bool, scheme: ColorScheme) -> some View {

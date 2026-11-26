@@ -1,0 +1,137 @@
+import Foundation
+import Testing
+@testable import MacSpaceCore
+
+@Test func indexReadsBundlesAndHelpers() throws {
+    let fx = try Fixture(); defer { fx.cleanup() }
+    try fx.plist("Apps/Foo.app/Contents/Info.plist", ["CFBundleIdentifier": "com.foo.Foo", "CFBundleName": "Foo"])
+    try fx.plist("Apps/Foo.app/Contents/Library/LoginItems/FooHelper.app/Contents/Info.plist",
+                 ["CFBundleIdentifier": "com.foo.helper"])
+    try fx.plist("Apps/Utilities/Bar.app/Contents/Info.plist", ["CFBundleIdentifier": "org.bar.app"])
+    try fx.dir("Apps/NoPlist.app")
+    let idx = AppsIndex.build(roots: [fx.root.path + "/Apps"], readTeamIDs: false)
+    #expect(idx.count == 4)   // NoPlist.app is kept by name (R7)
+    #expect(idx.app(forIdentifier: "com.foo.helper")?.name == "Foo")
+    #expect(idx.app(forIdentifier: "COM.FOO.FOOBAR") == nil)   // not a dot-boundary prefix
+    #expect(idx.app(forIdentifier: "COM.FOO.FOO.savedState")?.bundleID == "com.foo.Foo")   // dot-boundary prefix
+    #expect(idx.app(forIdentifier: "org.bar.app.extension")?.bundleID == "org.bar.app")
+    #expect(idx.app(named: "bar")?.bundleID == "org.bar.app")
+}
+
+@Test func embeddedKindsAndDisplayNameAndExtraPaths() throws {
+    let fx = try Fixture(); defer { fx.cleanup() }
+    try fx.plist("Apps/Baz.app/Contents/Info.plist",
+                 ["CFBundleIdentifier": "com.baz.app", "CFBundleDisplayName": "Baz Pro", "CFBundleName": "Baz"])
+    try fx.plist("Apps/Baz.app/Contents/PlugIns/Share.appex/Contents/Info.plist", ["CFBundleIdentifier": "com.baz.app.share"])
+    try fx.plist("Apps/Baz.app/Contents/XPCServices/Svc.xpc/Contents/Info.plist", ["CFBundleIdentifier": "com.baz.svc"])
+    try fx.plist("Apps/Baz.app/Contents/Helpers/H.app/Contents/Info.plist", ["CFBundleIdentifier": "com.baz.hlp"])
+    try fx.plist("Elsewhere/Qux.app/Contents/Info.plist", ["CFBundleIdentifier": "net.qux.app"])
+    let apps = fx.root.path + "/Apps"
+    let extra = fx.root.path + "/Elsewhere/Qux.app"
+    let idx = AppsIndex.build(roots: [apps], extraAppPaths: [extra, extra, apps + "/Baz.app"], readTeamIDs: false)
+    #expect(idx.count == 5)
+    #expect(idx.app(named: "Baz Pro")?.bundleID == "com.baz.app")
+    #expect(idx.app(named: "Baz")?.bundleID == "com.baz.app")   // file name without .app
+    #expect(idx.app(forIdentifier: "com.baz.svc")?.name == "Baz Pro")
+    #expect(idx.app(forIdentifier: "com.baz.hlp")?.path == apps + "/Baz.app")
+    #expect(idx.app(forIdentifier: "net.qux.app") != nil)
+}
+
+@Test func launchServicesHelpersAreIndexedByFileName() throws {
+    let fx = try Fixture(); defer { fx.cleanup() }
+    try fx.plist("Apps/Foo.app/Contents/Info.plist", ["CFBundleIdentifier": "com.foo.app", "CFBundleName": "Foo"])
+    try fx.file("Apps/Foo.app/Contents/Library/LaunchServices/com.foo.PrivHelper", bytes: 8)
+    try fx.file("Apps/Foo.app/Contents/Library/LaunchServices/README", bytes: 8)
+    let idx = AppsIndex.build(roots: [fx.root.path + "/Apps/"], readTeamIDs: false)
+    #expect(idx.count == 2)
+    #expect(idx.app(forIdentifier: "com.foo.privhelper")?.name == "Foo")
+    #expect(idx.app(forIdentifier: "README") == nil)
+}
+
+@Test func appsWithoutBundleIDAreStillIndexed() throws {
+    let fx = try Fixture(); defer { fx.cleanup() }
+    try fx.plist("Apps/Odd.app/Contents/Info.plist", ["CFBundleName": "Odd Name"])
+    try fx.plist("Apps/Odd.app/Contents/PlugIns/X.appex/Contents/Info.plist", ["CFBundleIdentifier": "org.odd.ext"])
+    try fx.dir("Apps/Broken.APP")
+    let idx = AppsIndex.build(roots: [fx.root.path + "/Apps"], readTeamIDs: false)
+    #expect(idx.app(named: "odd name")?.path.hasSuffix("Odd.app") == true)
+    #expect(idx.app(named: "Odd")?.name == "Odd Name")
+    #expect(idx.app(named: "broken")?.bundleID == "")
+    #expect(idx.app(forIdentifier: "org.odd.ext")?.name == "Odd Name")
+    #expect(idx.app(forIdentifier: "") == nil)
+    #expect(AppsIndex(records: [AppRecord(bundleID: "", name: "N", teamID: "TEAM123456", path: "/A/N.app")])
+        .app(forIdentifier: "") == nil)
+}
+
+@Test func binaryPlistsAreRead() throws {
+    let fx = try Fixture(); defer { fx.cleanup() }
+    let data = try PropertyListSerialization.data(
+        fromPropertyList: ["CFBundleIdentifier": "com.bin.app"], format: .binary, options: 0)
+    try fx.write("Apps/Bin.app/Contents/Info.plist", data: data)
+    let idx = AppsIndex.build(roots: [fx.root.path + "/Apps"], readTeamIDs: false)
+    #expect(idx.app(forIdentifier: "com.bin.app") != nil)
+}
+
+@Test func prefixMatchNeedsTwoLabels() {
+    let idx = AppsIndex(records: [AppRecord(bundleID: "com.foo", name: "Foo", teamID: "ABCDE12345", path: "/A/Foo.app")])
+    #expect(idx.app(forIdentifier: "com.foo.mac") != nil && idx.app(forIdentifier: "com") == nil)
+    #expect(idx.app(forIdentifier: "com.foobar") == nil && idx.hasTeam("abcde12345"))
+}
+
+@Test func appIDLongerThanIdentifierMatches() {
+    let idx = AppsIndex(records: [AppRecord(bundleID: "com.foo.mac.app", name: "Foo", teamID: nil, path: "/A/Foo.app")])
+    #expect(idx.app(forIdentifier: "com.foo.mac") != nil)
+    #expect(idx.app(forIdentifier: "com.foo") != nil)
+    #expect(idx.app(forIdentifier: "com") == nil)
+    #expect(idx.app(forIdentifier: "com.foo.macx") == nil)
+    #expect(idx.app(forIdentifier: "com.fo") == nil)
+    #expect(AppsIndex.empty.count == 0 && AppsIndex.empty.app(forIdentifier: "com.foo") == nil)
+}
+
+@Test func spotlightHelpersDoNotCrash() {
+    #expect(AppsIndex.spotlightAppPaths().allSatisfy { $0.lowercased().hasSuffix(".app") })
+    #expect(SpotlightLastUsed.lastUsed(path: "/nonexistent/x") == nil)
+}
+
+@Test func realIndexFindsSystemApps() throws {   // tolerant smoke test on the owner's Mac
+    let idx = AppsIndex.build()
+    #expect(idx.app(forIdentifier: "com.apple.calculator") != nil)
+    let calc = try #require(idx.app(forIdentifier: "com.apple.calculator"))
+    #expect(calc.teamID == nil || !calc.teamID!.isEmpty)
+}
+
+/// Opt-in: `MACSPACE_BENCH=1 swift test -c release --filter appsIndexTiming`.
+@Test(.enabled(if: ProcessInfo.processInfo.environment["MACSPACE_BENCH"] == "1"))
+func appsIndexTiming() {
+    let clock = ContinuousClock()
+    var idx = AppsIndex.empty
+    let elapsed = clock.measure { idx = AppsIndex.build(extraAppPaths: AppsIndex.spotlightAppPaths()) }
+    print("APPSINDEX records=\(idx.count) seconds=\(elapsed)")
+}
+
+@Test func appForTeamIsCaseInsensitiveAndDeterministic() {
+    let idx = AppsIndex(records: [
+        AppRecord(bundleID: "com.b.app", name: "B", teamID: "ABCDE12345", path: "/Applications/B.app"),
+        AppRecord(bundleID: "com.a.app", name: "A", teamID: "ABCDE12345", path: "/Applications/A.app"),
+    ])
+    #expect(idx.app(forTeam: "abcde12345")?.name == "A")
+    #expect(idx.app(forTeam: "ZZZZZ99999") == nil)
+}
+
+@Test func appForVendorUsesTheFirstTwoLabelsAndLowestPath() {   // ruling R36
+    let idx = AppsIndex(records: [
+        AppRecord(bundleID: "com.openai.codex", name: "ChatGPT", teamID: nil, path: "/Applications/ChatGPT.app"),
+        AppRecord(bundleID: "com.openai.atlas", name: "Atlas", teamID: nil, path: "/Applications/Atlas.app"),
+        AppRecord(bundleID: "com.apple.Safari", name: "Safari", teamID: nil, path: "/Applications/Safari.app"),
+        AppRecord(bundleID: "single", name: "Single", teamID: nil, path: "/Applications/Single.app"),
+        AppRecord(bundleID: "", name: "NoID", teamID: nil, path: "/Applications/NoID.app"),
+    ])
+    #expect(idx.app(forVendorOf: "com.openai.chat")?.name == "Atlas")      // lowest path wins
+    #expect(idx.app(forVendorOf: "COM.OpenAI.chat.helper")?.name == "Atlas")
+    #expect(idx.app(forVendorOf: "com.openai")?.name == "Atlas")
+    #expect(idx.app(forVendorOf: "com.openaix.chat") == nil)
+    #expect(idx.app(forVendorOf: "com.apple.foo") == nil)                  // Apple is handled separately
+    #expect(idx.app(forVendorOf: "single") == nil)
+    #expect(idx.app(forVendorOf: "single.x") == nil)                       // "single" has one label: no vendor
+    #expect(idx.app(forVendorOf: "") == nil)
+}

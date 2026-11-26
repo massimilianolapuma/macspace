@@ -42,10 +42,10 @@ public final class FileTree {
     private static let categoryCount = FileCategory.allCases.count
     static let ageCount = AgeBucket.allCases.count
 
-    /// `rootCategory` is the root directory's context, `.other` for none; `now` is the time ages
+    /// `rootCategory` is the root directory's context, `.other` for none; `rootFlags` are its flags; `now` is the time ages
     /// are measured from (seconds since 1970).
     public init(rootName: String, rootPath: String, rootCategory: FileCategory = .other,
-                now: UInt32 = UInt32(clamping: Int64(Date().timeIntervalSince1970))) {
+                rootFlags: NodeFlags = [], now: UInt32 = UInt32(clamping: Int64(Date().timeIntervalSince1970))) {
         self.rootPath = rootPath
         self.now = now
         parents.append(-1)
@@ -53,7 +53,7 @@ public final class FileTree {
         nextSiblings.append(-1)
         sizes.append(0)
         kinds.append(.directory)
-        flagsStore.append([])
+        flagsStore.append(rootFlags)
         appendName(rootName)
         categories.append(rootCategory.rawValue)
         lastUsedStore.append(0)
@@ -112,6 +112,72 @@ public final class FileTree {
             p = parents[i]
         }
         return id
+    }
+
+    /// Takes `id` out of the tree after it was moved to the Trash: unlinks it from its parent's
+    /// children, subtracts its size, per-category bytes and per-age bytes from every ancestor
+    /// (exactly what `addChild` added for it and its subtree), and marks it and its whole
+    /// subtree `.removed`, so stale ids below it are recognised too. Ancestors' `lastUsed` is not
+    /// lowered (it would need a subtree rescan). O(depth + siblings + subtree).
+    /// Precondition: `id` exists, is not the root and is not already removed.
+    public func remove(_ id: NodeID) {
+        precondition(id > Self.root && Int(id) < count, "FileTree.remove: invalid node or the root")
+        precondition(!flagsStore[Int(id)].contains(.removed), "FileTree.remove: already removed")
+        let i = Int(id)
+        let parent = Int(parents[i])
+
+        // Unlink from the parent's singly linked child list.
+        if firstChildren[parent] == id {
+            firstChildren[parent] = nextSiblings[i]
+        } else {
+            var c = firstChildren[parent]
+            while c >= 0 {
+                let next = nextSiblings[Int(c)]
+                if next == id {
+                    nextSiblings[Int(c)] = nextSiblings[i]
+                    break
+                }
+                c = next
+            }
+        }
+        nextSiblings[i] = -1
+
+        // What the node contributed to each ancestor: a directory's own rows, or a file's size
+        // under its category and age bucket (as `addChild` computed them).
+        let size = sizes[i]
+        var categoryDelta = [UInt64](repeating: 0, count: Self.categoryCount)
+        var ageDelta = [UInt64](repeating: 0, count: Self.ageCount)
+        let slot = Int(dirSlots[i])
+        if slot >= 0 {
+            for column in 0..<Self.categoryCount { categoryDelta[column] = categoryBytes[slot * Self.categoryCount + column] }
+            for column in 0..<Self.ageCount { ageDelta[column] = ageBytes[slot * Self.ageCount + column] }
+        } else {
+            categoryDelta[Int(categories[i])] = size
+            ageDelta[AgeBucket(lastUsed: lastUsedStore[i], now: now).rawValue] = size
+        }
+        var p = parent
+        while p >= 0 {
+            sizes[p] &-= size
+            let ancestorSlot = Int(dirSlots[p])
+            for column in 0..<Self.categoryCount where categoryDelta[column] != 0 {
+                categoryBytes[ancestorSlot * Self.categoryCount + column] &-= categoryDelta[column]
+            }
+            for column in 0..<Self.ageCount where ageDelta[column] != 0 {
+                ageBytes[ancestorSlot * Self.ageCount + column] &-= ageDelta[column]
+            }
+            p = Int(parents[p])
+        }
+
+        // Mark the subtree (its child links are kept, so it can still be walked).
+        var stack = [id]
+        while let n = stack.popLast() {
+            flagsStore[Int(n)].insert(.removed)
+            var c = firstChildren[Int(n)]
+            while c >= 0 {
+                stack.append(c)
+                c = nextSiblings[Int(c)]
+            }
+        }
     }
 
     public func insertFlags(_ flags: NodeFlags, for id: NodeID) {
@@ -231,6 +297,41 @@ public final class FileTree {
             }
         }
         return String(decoding: bytes, as: UTF8.self)
+    }
+
+    /// The node at `path`, walking from the root and matching each component's UTF-8 bytes exactly
+    /// (no case folding or Unicode normalization); trailing slashes are ignored. Nil when nothing
+    /// is there yet, or `path` is not `rootPath` or below it.
+    public func node(atPath path: String) -> NodeID? {
+        let slash = UInt8(ascii: "/")
+        func trimmed(_ s: String) -> [UInt8] {
+            var bytes = Array(s.utf8)
+            while bytes.count > 1, bytes.last == slash { bytes.removeLast() }
+            return bytes
+        }
+        let query = trimmed(path)
+        var base = trimmed(rootPath)
+        if query == base { return Self.root }
+        if base == [slash] { base = [] }
+        guard query.count > base.count + 1, query.starts(with: base), query[base.count] == slash else { return nil }
+        var current = Self.root
+        for component in query[(base.count + 1)...].split(separator: slash, omittingEmptySubsequences: false) {
+            guard let next = child(of: current, named: component) else { return nil }
+            current = next
+        }
+        return current
+    }
+
+    /// The child of `id` whose name has exactly these UTF-8 bytes (the newest if several).
+    private func child(of id: NodeID, named name: ArraySlice<UInt8>) -> NodeID? {
+        nameBytes.withUnsafeBufferPointer { arena in
+            var c = firstChildren[Int(id)]
+            while c >= 0 {
+                if arena[nameRange(c)].elementsEqual(name) { return c }
+                c = nextSiblings[Int(c)]
+            }
+            return nil
+        }
     }
 
     /// Children sorted by size descending, then name ascending (as `String.<` orders them), then

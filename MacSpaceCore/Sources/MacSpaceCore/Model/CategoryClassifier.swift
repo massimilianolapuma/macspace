@@ -4,6 +4,7 @@ public struct CategoryClassifier: Sendable {
     private let fileExtensions: [UInt64: FileCategory]
     private let directoryNames: [UInt64: FileCategory]
     private let directoryExtensions: [UInt64: FileCategory]
+    private let packageKeys: Set<UInt64>
     private let developmentPrefixes: [[UInt8]]
     private let systemPrefixes: [[UInt8]]
     private let appDataPrefixes: [[UInt8]]
@@ -38,6 +39,7 @@ public struct CategoryClassifier: Sendable {
             dirExt[Self.key(of: Array(e.utf8))] = c
         }
         directoryExtensions = dirExt
+        packageKeys = Set(SafetyTables.packageExtensions.map { Self.key(of: Array($0.utf8)) })
 
         var h = home
         while h.count > 1, h.hasSuffix("/") { h.removeLast() }
@@ -70,6 +72,24 @@ public struct CategoryClassifier: Sendable {
         return name.withUTF8 { lookup(fileExtensions, $0) } ?? .other
     }
 
+    /// Whether a directory with this name is a package, by its extension.
+    public func isPackage(directoryName: String) -> Bool {
+        var name = directoryName
+        return name.withUTF8 { Self.extensionKey($0).map(packageKeys.contains) ?? false }
+    }
+
+    /// Whether a file with this name is an installer image or package, by its extension.
+    public func isInstaller(fileName: String) -> Bool { Self.isInstallerName(fileName) }
+
+    /// The one installer predicate (scan and safety rule 16): extension in `SafetyTables.installerExtensions`,
+    /// case-insensitive, allocation-free.
+    public static func isInstallerName(_ fileName: String) -> Bool {
+        var name = fileName
+        return name.withUTF8 { extensionKey($0).map(installerKeys.contains) ?? false }
+    }
+
+    private static let installerKeys = Set(SafetyTables.installerExtensions.map { key(of: Array($0.utf8)) })
+
     // MARK: - Internals
 
     private func classifyDirectory(_ name: String, _ path: UnsafeBufferPointer<UInt8>) -> FileCategory? {
@@ -84,8 +104,13 @@ public struct CategoryClassifier: Sendable {
     }
 
     private func lookup(_ table: [UInt64: FileCategory], _ bytes: UnsafeBufferPointer<UInt8>) -> FileCategory? {
+        Self.extensionKey(bytes).flatMap { table[$0] }
+    }
+
+    /// The FNV-1a key of the lowercased extension after the last dot, or nil if there is none or it is not ASCII.
+    private static func extensionKey(_ bytes: UnsafeBufferPointer<UInt8>) -> UInt64? {
         guard let dot = bytes.lastIndex(of: UInt8(ascii: ".")), dot > 0, dot < bytes.count - 1,
-              bytes.count - dot - 1 <= Self.maxKeyLength else { return nil }
+              bytes.count - dot - 1 <= maxKeyLength else { return nil }
         var h: UInt64 = 0xcbf29ce484222325
         for i in (dot + 1)..<bytes.count {
             var b = bytes[i]
@@ -93,7 +118,7 @@ public struct CategoryClassifier: Sendable {
             if b >= 65 && b <= 90 { b |= 0x20 }
             h = (h ^ UInt64(b)) &* 0x100000001b3
         }
-        return table[h]
+        return h
     }
 
     private static func fullNameKey(_ bytes: UnsafeBufferPointer<UInt8>) -> UInt64? {

@@ -1,10 +1,91 @@
 {
   "sourceLanguage" : "it",
   "strings" : {
+    "%@ cartelle non leggibili" : {
+
+    },
     "%@ file" : {
 
     },
+    "%@ occupati: parte dello spazio è condivisa con copie APFS, la stima è per difetto" : {
+
+    },
+    "%lld di %lld" : {
+
+    },
+    "%lld elementi spostati nel Cestino" : {
+      "localizations" : {
+        "it" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld elemento spostato nel Cestino"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld elementi spostati nel Cestino"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "%lld selezionati" : {
+      "localizations" : {
+        "it" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld selezionato"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld selezionati"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "+%lld altri" : {
+      "localizations" : {
+        "it" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "+%lld altro"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "+%lld altri"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "1 cartella non leggibile" : {
+
+    },
     "1–2 anni fa" : {
+
+    },
+    "Aggiornato" : {
 
     },
     "Altri %@ elementi" : {
@@ -16,6 +97,15 @@
     "Altro" : {
 
     },
+    "Analisi delle app in corso: riprova tra poco" : {
+
+    },
+    "Analisi delle app in corso…" : {
+
+    },
+    "Analisi in corso: riprova al termine" : {
+
+    },
     "Analisi in corso…" : {
 
     },
@@ -25,10 +115,31 @@
     "Analisi interrotta · %@ file" : {
 
     },
+    "Analisi interrotta: i suggerimenti possono essere incompleti" : {
+
+    },
     "Analizza" : {
 
     },
+    "Analizza per vedere i suggerimenti" : {
+
+    },
+    "Annulla" : {
+
+    },
+    "Aperto ora in un'app" : {
+
+    },
     "App" : {
+
+    },
+    "App in esecuzione" : {
+
+    },
+    "App: %@" : {
+
+    },
+    "Apre la conferma prima di spostare" : {
 
     },
     "Apri" : {
@@ -40,37 +151,247 @@
     "Archivi e installer" : {
 
     },
+    "Avanzi di app disinstallate" : {
+
+    },
+    "Avanzo di un'app non più installata" : {
+
+    },
+    "Avvio automatico di un programma non trovato: controlla prima di rimuoverlo" : {
+
+    },
+    "Cache di %@, app non in esecuzione: si rigenera da sola" : {
+
+    },
+    "Cache di %@, che è in esecuzione: chiudila prima" : {
+
+    },
+    "Cache di sistema: si rigenera, ma alcuni servizi la usano di continuo" : {
+
+    },
+    "Cache di un'app in esecuzione: chiudila prima" : {
+
+    },
+    "Cache per sviluppatori (%@): si rigenera da sola" : {
+
+    },
+    "Cache per sviluppatori: si rigenera da sola" : {
+
+    },
+    "Cache rigenerabili" : {
+
+    },
+    "Cache: si rigenera da sola" : {
+
+    },
+    "Calcolo…" : {
+
+    },
+    "Cartella essenziale del Mac o dell'utente" : {
+
+    },
+    "Cartella interna della Libreria: controlla prima" : {
+
+    },
     "Colori" : {
+
+    },
+    "Contiene dati di sistema di Apple" : {
+
+    },
+    "Contiene dati di un'app in esecuzione" : {
+
+    },
+    "Contiene elementi che MacSpace non ha potuto verificare" : {
+
+    },
+    "Contiene elementi protetti" : {
+
+    },
+    "Contiene un'app in esecuzione" : {
+
+    },
+    "Contiene una libreria di Foto" : {
 
     },
     "Continua senza" : {
 
     },
+    "Controllo dei file aperti…" : {
+
+    },
+    "Cronologia" : {
+
+    },
+    "Da controllare" : {
+
+    },
     "Dati delle app e cache" : {
+
+    },
+    "Dati di %@, che è in esecuzione" : {
+
+    },
+    "Dati di %@: rimuoverli azzera documenti o impostazioni" : {
+
+    },
+    "Dati di app che non sono più su questo Mac." : {
+
+    },
+    "Dati di sistema di Apple: rimuoverli rompe le app" : {
+
+    },
+    "Dati di un'app in esecuzione" : {
+
+    },
+    "Dati di un'app installata" : {
+
+    },
+    "Deseleziona" : {
 
     },
     "Documenti" : {
 
     },
+    "Elementi" : {
+
+    },
+    "Elementi spostati nel Cestino in questa sessione" : {
+
+    },
+    "Eliminabili" : {
+
+    },
+    "Errore: %@" : {
+
+    },
+    "Evidenzia nel grafico" : {
+
+    },
+    "Fa già parte di una cartella selezionata" : {
+
+    },
+    "Fa parte di un pacchetto" : {
+
+    },
+    "Fa parte di un pacchetto: si può spostare solo il pacchetto intero" : {
+
+    },
+    "File d'installazione" : {
+
+    },
+    "File d'installazione: %@ è già installata" : {
+
+    },
+    "File di sistema protetto da macOS" : {
+
+    },
+    "Fine" : {
+
+    },
     "Foto e immagini" : {
+
+    },
+    "Gli elementi in grigio restano dove sono." : {
 
     },
     "Gli elementi più pesanti appariranno qui" : {
 
     },
+    "Gli elementi scelti non ci sono più o ora sono protetti." : {
+
+    },
+    "Immagini disco e pacchetti che servivano per installare." : {
+
+    },
+    "Impossibile verificare i file aperti" : {
+
+    },
+    "In questa sessione" : {
+
+    },
     "Interrompi" : {
+
+    },
+    "La situazione è cambiata: controlla di nuovo l'elenco" : {
+
+    },
+    "La sua valutazione è cambiata: controllalo di nuovo" : {
+
+    },
+    "Le app le ricreano da sole quando servono." : {
+
+    },
+    "Libreria di Foto: libera spazio da Foto › Impostazioni › «Ottimizza spazio»" : {
+
+    },
+    "Mostra %@ nel Cestino" : {
+
+    },
+    "Mostra meno" : {
+
+    },
+    "Mostra nel Cestino" : {
+
+    },
+    "Mostra tutti (%lld)" : {
 
     },
     "Musica e audio" : {
 
     },
-    "Neutri" : {
+    "Nessun elemento spostato nel Cestino" : {
+
+    },
+    "Nessun suggerimento nelle cartelle lette (%@ non leggibili)" : {
+
+    },
+    "Nessun suggerimento nelle cartelle lette (1 non leggibile)" : {
+
+    },
+    "Nessun suggerimento: qui è tutto in ordine" : {
+
+    },
+    "Niente da spostare" : {
+
+    },
+    "Non esiste più" : {
+
+    },
+    "Non hai i permessi per spostarlo" : {
 
     },
     "Non leggibile" : {
 
     },
+    "Non più nel Cestino" : {
+
+    },
+    "Non più selezionabile" : {
+
+    },
+    "Non spostati" : {
+
+    },
+    "Non spuntato" : {
+
+    },
+    "Non usato da oltre 2 anni (stima)" : {
+
+    },
+    "Normale" : {
+
+    },
+    "OK" : {
+
+    },
     "Oltre 2 anni" : {
+
+    },
+    "Ora è protetto. %@" : {
+
+    },
+    "Pannello" : {
 
     },
     "Per lo più: %@" : {
@@ -85,13 +406,28 @@
     "Per vedere tutto lo spazio, MacSpace deve poter leggere anche le cartelle di sistema e la Libreria. Puoi analizzare anche senza: le cartelle non leggibili saranno segnate." : {
 
     },
+    "Percorso insolito: per sicurezza non si può spostare" : {
+
+    },
     "Più pesanti in %@" : {
+
+    },
+    "Potrai ripristinarli dal Cestino del Finder." : {
+
+    },
+    "Potrai ripristinarlo dal Cestino del Finder." : {
 
     },
     "Privacy e sicurezza › Accesso completo al disco › MacSpace" : {
 
     },
+    "Protetto" : {
+
+    },
     "Raggiera" : {
+
+    },
+    "Rifiutato per sicurezza" : {
 
     },
     "Scegli cartella…" : {
@@ -103,16 +439,101 @@
     "Sconosciuto" : {
 
     },
+    "Seleziona" : {
+
+    },
+    "Sembra un avanzo, ma %@ dello stesso sviluppatore è installata: controlla prima" : {
+
+    },
+    "Sembra un avanzo, ma un'app dello stesso sviluppatore è installata: controlla prima" : {
+
+    },
+    "Sembra un avanzo, ma è stato usato di recente: forse appartiene a un'app non trovata" : {
+
+    },
     "Serve l'accesso completo al disco" : {
 
     },
+    "Sicurezza: %@" : {
+
+    },
+    "Sicuro da eliminare" : {
+
+    },
+    "Sincronizzato con %@: verrà eliminato anche da %@ e dagli altri dispositivi." : {
+
+    },
+    "Sincronizzato nel cloud: verrà eliminato anche dagli altri dispositivi." : {
+
+    },
     "Sistema" : {
+
+    },
+    "Solo nel cloud: non occupa spazio su questo Mac" : {
+
+    },
+    "Spazio recuperabile svuotando il Cestino:" : {
+
+    },
+    "Spazio recuperabile svuotando il Cestino: almeno %@" : {
+
+    },
+    "Spazio recuperabile svuotando il Cestino: circa %@" : {
+
+    },
+    "Sposta nel Cestino" : {
+
+    },
+    "Sposta nel Cestino…" : {
+
+    },
+    "Spostamento nel Cestino…" : {
+
+    },
+    "Spostare %lld elementi nel Cestino?" : {
+      "localizations" : {
+        "it" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Spostare %lld elemento nel Cestino?"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Spostare %lld elementi nel Cestino?"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "Spostati nel Cestino" : {
+
+    },
+    "Spunta" : {
+
+    },
+    "Spuntato" : {
+
+    },
+    "Suggerimenti" : {
 
     },
     "Sviluppo" : {
 
     },
     "Tipo: %@" : {
+
+    },
+    "Togli l'evidenziazione" : {
+
+    },
+    "Togli la spunta" : {
 
     },
     "Torna su" : {
@@ -133,7 +554,13 @@
     "Ultimo uso (stimato): %@" : {
 
     },
+    "Ultimo uso: %@" : {
+
+    },
     "Uso più recente (stimato): %@" : {
+
+    },
+    "Versioni non salvate dei documenti: controlla prima" : {
 
     },
     "Video" : {
@@ -142,7 +569,25 @@
     "Vista" : {
 
     },
+    "almeno %@ da recuperare svuotando il Cestino" : {
+
+    },
+    "circa %@ da recuperare svuotando il Cestino" : {
+
+    },
     "di %@" : {
+
+    },
+    "recuperabili circa %@" : {
+
+    },
+    "È cambiato dopo l'analisi" : {
+
+    },
+    "È il Cestino: svuotalo dal Finder" : {
+
+    },
+    "È la cartella analizzata" : {
 
     }
   },

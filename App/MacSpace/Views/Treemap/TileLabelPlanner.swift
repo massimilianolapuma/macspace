@@ -32,13 +32,16 @@ final class TileLabelPlanner {
         }
     }
 
-    /// A section header: the uppercased name and, right-aligned, the size when both fit.
+    /// A section header: the lock when the section is protected (in "Eliminabili"), the uppercased
+    /// name and, right-aligned, the size when both fit.
     struct Header {
         let name: FittedText
         let size: FittedText?
+        let locked: Bool
         /// Drawn width the header needs.
         var width: Double {
-            name.width + (size.map { $0.width + TileLabelPlanner.headerSpacing } ?? 0) + 2 * TileLabelPlanner.padding
+            (locked ? TileLabelPlanner.lockRoom : 0) + name.width
+                + (size.map { $0.width + TileLabelPlanner.headerSpacing } ?? 0) + 2 * TileLabelPlanner.padding
         }
     }
 
@@ -60,7 +63,7 @@ final class TileLabelPlanner {
 
     private var generation = -1
     private var size = CGSize.zero
-    private var mode = ColorMode.neutral
+    private var mode = ColorMode.deletable
     private var scheme = ColorScheme.light
     private var leaves: [PlanKey: Leaf?] = [:]
     private var headers: [PlanKey: Header?] = [:]
@@ -140,7 +143,7 @@ final class TileLabelPlanner {
         var plan: Leaf?
         if let rect = canvas.drawn(Self.settledRect(item)), rect.width >= Self.minLabelWidth,
            rect.height >= Self.minLabelHeight {
-            let locked = item.tile.flags.contains(.unreadable)
+            let locked = Self.isLocked(item.tile, mode: mode)
             let room = rect.width - 2 * Self.padding
             if let name = fitter.fitted(TreemapView.title(of: item.tile), width: room - (locked ? Self.lockRoom : 0),
                                         line: .name, in: context) {
@@ -153,22 +156,29 @@ final class TileLabelPlanner {
         return plan
     }
 
+    /// Whether `tile`'s label or header starts with the lock: unreadable in every mode, protected in
+    /// "Eliminabili", where the lock is the level's mark.
+    private static func isLocked(_ tile: TreemapTile, mode: ColorMode) -> Bool {
+        tile.flags.contains(.unreadable) || FusionPalette.FillSubject(tile).isLocked(in: mode)
+    }
+
     /// The header of section `item`, fitted to its settled rect.
     func header(for item: TreemapMotion.Item, canvas: TreemapCanvas, in context: GraphicsContext) -> Header? {
         let key = Self.key(item)
         if let plan = headers[key] { return plan }
         var plan: Header?
         if let rect = canvas.drawn(Self.settledRect(item)) {
-            let room = rect.width - 2 * Self.padding
+            let locked = Self.isLocked(item.tile, mode: mode)
+            let room = rect.width - 2 * Self.padding - (locked ? Self.lockRoom : 0)
             let name = item.tile.name.uppercased(with: Locale(identifier: "it_IT"))
             let size = fitter.fitted(Formatters.bytes(item.tile.size), width: room, line: .headerSize, in: context)
             // The size stays only while the name keeps a useful width beside it.
             if let size, room - size.width - Self.headerSpacing >= Self.headerNameMinWidth,
                let fittedName = fitter.fitted(name, width: room - size.width - Self.headerSpacing, line: .header,
                                               in: context) {
-                plan = Header(name: fittedName, size: size)
+                plan = Header(name: fittedName, size: size, locked: locked)
             } else if let fittedName = fitter.fitted(name, width: room, line: .header, in: context) {
-                plan = Header(name: fittedName, size: nil)
+                plan = Header(name: fittedName, size: nil, locked: locked)
             }
         }
         headers[key] = plan

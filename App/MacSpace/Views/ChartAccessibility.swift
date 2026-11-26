@@ -1,3 +1,4 @@
+import AppKit
 import MacSpaceCore
 import SwiftUI
 
@@ -16,34 +17,77 @@ enum ChartAccessibility {
 }
 
 extension SegmentTooltip.Subject {
-    @MainActor init(segment: ArcSegment) {
+    /// `verdict` is the segment's node's (nil for merged "altri"); `spotlightLastUsed`, a file's
+    /// Spotlight last use when known.
+    @MainActor init(segment: ArcSegment, verdict: SafetyVerdict?, spotlightLastUsed: UInt32? = nil) {
         self.init(title: SunburstView.title(of: segment), size: segment.size, isMerged: segment.node == nil,
                   hasChildren: segment.hasChildren, category: segment.category,
-                  ageBucket: segment.ageBucket, lastUsed: segment.lastUsed, flags: segment.flags)
+                  ageBucket: segment.ageBucket, lastUsed: segment.lastUsed, flags: segment.flags,
+                  verdict: segment.node == nil ? nil : verdict, spotlightLastUsed: spotlightLastUsed)
     }
 
-    @MainActor init(tile: TreemapTile) {
+    @MainActor init(tile: TreemapTile, verdict: SafetyVerdict?, spotlightLastUsed: UInt32? = nil) {
         self.init(title: TreemapView.title(of: tile), size: tile.size, isMerged: tile.node == nil,
                   hasChildren: tile.hasChildren, category: tile.category, ageBucket: tile.ageBucket,
-                  lastUsed: tile.lastUsed, flags: tile.flags)
+                  lastUsed: tile.lastUsed, flags: tile.flags,
+                  verdict: tile.node == nil ? nil : verdict, spotlightLastUsed: spotlightLastUsed)
     }
 
-    /// Size, type and last use in words: the tooltip's lines, joined for VoiceOver.
+    /// The element's name and, unless normal, its safety level: VoiceOver's label.
+    var spokenTitle: String {
+        [title, verdict?.level.spokenTitle].compactMap { $0 }.joined(separator: ", ")
+    }
+
+    /// Size, type, last use and the safety reason in words: the tooltip's lines, joined for VoiceOver.
     var spokenValue: String {
         var parts = [Formatters.bytes(size)]
         if !isMerged { parts.append(String(localized: "Tipo: \(String(localized: category.title))")) }
         if isMerged || hasChildren {
             parts.append(String(localized: "Per lo più: \(String(localized: ageBucket.title))"))
             parts.append(String(localized: "Uso più recente (stimato): \(Formatters.lastUsedDate(lastUsed))"))
+        } else if let spotlightLastUsed {
+            parts.append(String(localized: "Ultimo uso: \(Formatters.lastUsedDate(spotlightLastUsed))"))
         } else {
             parts.append(String(localized: "Ultimo uso (stimato): \(Formatters.lastUsedDate(lastUsed))"))
         }
+        if let sentence = verdict?.sentence { parts.append(sentence) }
+        if let app = verdict?.appName { parts.append(String(localized: "App: \(app)")) }
         if flags.contains(.unreadable) { parts.append(String(localized: "Non leggibile")) }
         return parts.joined(separator: ", ")
     }
 }
 
+/// Selecting chart elements and list rows for the Trash.
+enum ChartSelection {
+    /// Whether the click being handled was a ⌘-click: the click event's own modifiers, not the keys
+    /// held by the time the gesture fires.
+    @MainActor
+    static var isSelectClick: Bool {
+        (NSApp.currentEvent?.modifierFlags ?? NSEvent.modifierFlags).contains(.command)
+    }
+
+    /// Selects or deselects `node` (nil: a merged "altri" element, never selectable); the Mac beeps
+    /// when the store refuses it (the root, a protected item, or one inside a selected folder).
+    @MainActor
+    static func toggle(_ node: NodeID?, in model: ScanModel) {
+        guard let node, model.isSelectable(node) else {
+            NSSound.beep()
+            return
+        }
+        let change = model.toggleSelection(node)
+        Task { if await !change.value { NSSound.beep() } }
+    }
+}
+
 extension View {
+    /// "Seleziona" or "Deseleziona" on a segment, tile or list row that may be selected, and the
+    /// selected trait while it is; inside a selected folder, no action but the selected trait and a
+    /// hint saying why. The selection is read in the modifier, so a change to it
+    /// re-evaluates only the elements, not the chart around them.
+    func selectionAction(node: NodeID?, model: ScanModel) -> some View {
+        modifier(SelectionAction(node: node, model: model))
+    }
+
     /// "Torna su" on the chart itself; registered only while there is a level above.
     @ViewBuilder
     func chartUpAction(enabled: Bool, _ goUp: @escaping () -> Void) -> some View {
@@ -54,5 +98,28 @@ extension View {
     @ViewBuilder
     func chartOpenAction(node: NodeID?, hasChildren: Bool, _ open: @escaping (NodeID) -> Void) -> some View {
         if let node, hasChildren { accessibilityAction(named: Text("Apri")) { open(node) } } else { self }
+    }
+}
+
+private struct SelectionAction: ViewModifier {
+    let node: NodeID?
+    let model: ScanModel
+
+    func body(content: Content) -> some View {
+        if let node, model.isInsideSelection(node) {
+            // Goes with its selected folder: nothing to select on its own, but say so.
+            content
+                .accessibilityAddTraits(.isSelected)
+                .accessibilityHint(Text("Fa già parte di una cartella selezionata"))
+        } else if let node, model.isSelectable(node) {
+            let selected = model.selection.contains(node)
+            content
+                .accessibilityAction(named: selected ? Text("Deseleziona") : Text("Seleziona")) {
+                    model.toggleSelection(node)
+                }
+                .accessibilityAddTraits(selected ? .isSelected : [])
+        } else {
+            content
+        }
     }
 }

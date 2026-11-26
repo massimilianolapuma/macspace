@@ -16,11 +16,14 @@ public struct DirectoryEntry: Sendable, Equatable {
     public let modificationTime: UInt32
     /// Last access, seconds since 1970 clamped to `UInt32` (0 = unknown).
     public let accessTime: UInt32
+    /// Bytes that deleting this object alone would free (not shared with a clone or snapshot,
+    /// `ATTR_CMNEXT_PRIVATESIZE`). Only read on request; nil when not requested or not reported.
+    public let privateSize: UInt64?
 
     public init(
         name: String, kind: NodeKind, allocatedSize: UInt64, device: Int32, inode: UInt64,
         linkCount: UInt32, isMountPoint: Bool, isDataless: Bool,
-        modificationTime: UInt32 = 0, accessTime: UInt32 = 0
+        modificationTime: UInt32 = 0, accessTime: UInt32 = 0, privateSize: UInt64? = nil
     ) {
         self.name = name
         self.kind = kind
@@ -32,6 +35,7 @@ public struct DirectoryEntry: Sendable, Equatable {
         self.isDataless = isDataless
         self.modificationTime = modificationTime
         self.accessTime = accessTime
+        self.privateSize = privateSize
     }
 }
 

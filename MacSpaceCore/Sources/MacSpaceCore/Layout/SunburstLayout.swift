@@ -23,11 +23,14 @@ public struct ArcSegment: Sendable, Hashable, Identifiable {
     /// The node's age bucket by bytes (`FileTree.dominantAgeBucket`); for "altri", the bucket
     /// holding most of the merged siblings' bytes.
     public var ageBucket: AgeBucket
+    /// The node's `SafetyVerdict` level, stamped by `ScanStore`; always `.normal` for "altri".
+    public var safety: SafetyLevel
 
     public init(id: String, node: NodeID?, parent: NodeID, depth: Int, startAngle: Double,
                 endAngle: Double, size: UInt64, name: String, otherCount: Int,
                 flags: NodeFlags = [], hasChildren: Bool = false,
-                category: FileCategory = .other, lastUsed: UInt32 = 0, ageBucket: AgeBucket = .unknown) {
+                category: FileCategory = .other, lastUsed: UInt32 = 0, ageBucket: AgeBucket = .unknown,
+                safety: SafetyLevel = .normal) {
         self.id = id
         self.node = node
         self.parent = parent
@@ -42,6 +45,7 @@ public struct ArcSegment: Sendable, Hashable, Identifiable {
         self.category = category
         self.lastUsed = lastUsed
         self.ageBucket = ageBucket
+        self.safety = safety
     }
 }
 

@@ -38,8 +38,10 @@ struct TreemapHoverLayer: View {
         labels.prepare(generation: generation, size: canvas.size, mode: colorMode, scheme: scheme)
         let lift = FusionPalette.hoverLift
         guard item.isSection, let node = item.tile.node else {
+            var locks = SafetyDecor.Locks()
             TreemapView.drawTile(item, pose: pose, rect: rect, canvas: canvas, motion: motion, labels: labels,
-                                 mode: colorMode, lift: lift, scheme: scheme, scale: displayScale, in: context)
+                                 mode: colorMode, lift: lift, scheme: scheme, scale: displayScale, locks: &locks,
+                                 in: context)
             return
         }
         // A section: lift only what shows of it, its children keep their own fills.

@@ -45,6 +45,10 @@ struct SunburstHoverLayer: View {
             let fill = FusionPalette.fill(subject, mode: colorMode, depth: pose.shadeDepth, step: pose.shadeStep,
                                           lift: FusionPalette.hoverLift, scheme: scheme)
             ring.fill(path, with: .color(fill.opacity(pose.alpha)))
+            if subject.isHatched(in: colorMode) {
+                SafetyDecor.hatch(in: path, color: FusionPalette.hatch(scheme, lift: FusionPalette.hoverLift)
+                    .opacity(pose.alpha), canvas: geometry.size, in: ring)
+            }
             if geometry.hasSeparator(pose, inner: inner) {
                 ring.stroke(path, with: .color(FusionPalette.background(scheme).opacity(pose.alpha)), lineWidth: 1)
             }
@@ -53,12 +57,16 @@ struct SunburstHoverLayer: View {
                                         start: pose.start, end: pose.end, color: outline.opacity(pose.alpha), in: ring)
             }
             // The label as the rings canvas placed it: replay placement up to this arc.
-            labels.prepare(generation: generation, size: geometry.size)
+            labels.prepare(generation: generation, size: geometry.size, mode: colorMode)
             if let label = RingLabel.place(motion.poses(at: date), geometry: geometry, planner: labels, in: ring,
                                            through: hoveredID).last, label.id == hoveredID {
                 let ink = FusionPalette.label(subject, mode: colorMode, depth: pose.shadeDepth, step: pose.shadeStep,
                                               lift: FusionPalette.hoverLift, scheme: scheme)
                 RingLabel.draw(label, ink: ink, in: ring)
+            } else {
+                var locks = SafetyDecor.Locks()
+                SunburstView.drawLock(current.arc.segment, pose: pose, geometry: geometry, mode: colorMode,
+                                      lift: FusionPalette.hoverLift, scheme: scheme, locks: &locks, in: ring)
             }
         }
         if overCenter {

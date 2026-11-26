@@ -13,7 +13,8 @@ final class ChartHover {
 ///
 /// Layers, bottom to top: the rings canvas (fills, separators, labels), which redraws only when
 /// the arcs change or animate; the hover layer, which exists only while a sector is hovered or
-/// the center disc is a target, and draws just that; the center label; and the pointer layer, which tracks the
+/// the center disc is a target, and draws just that; the selection layer, which exists only while
+/// something is selected or highlighted; the center label; and the pointer layer, which tracks the
 /// mouse. `body` reads neither `model.hovered` nor `hover`, so hovering redraws only the small
 /// layers that show it.
 struct SunburstView: View {
@@ -49,6 +50,7 @@ struct SunburstView: View {
                 SunburstHoverLayer(model: model, hover: hover, motion: motion, labels: labels,
                                    generation: generation, geometry: geometry, canGoUp: canGoUp,
                                    colorMode: colorMode, moving: moving)
+                SunburstSelectionLayer(model: model, motion: motion, geometry: geometry, moving: moving)
                 centerLabel(geometry)
                     .position(geometry.center)
                     .allowsHitTesting(false)
@@ -89,16 +91,17 @@ struct SunburstView: View {
         GeometryReader { proxy in
             let geometry = ChartGeometry(size: proxy.size)
             ForEach(LargestElements.of(model.segments) { $0.size }) { segment in
-                let subject = SegmentTooltip.Subject(segment: segment)
+                let subject = SegmentTooltip.Subject(segment: segment, verdict: segment.node.flatMap { model.verdicts[$0] })
                 let spot = geometry.point(angle: (segment.startAngle + segment.endAngle) / 2,
                                           radius: geometry.innerRadius(depth: Double(segment.depth) + 0.5))
                 Color.clear
                     .frame(width: geometry.ringWidth, height: geometry.ringWidth)
                     .position(spot)
                     .accessibilityElement()
-                    .accessibilityLabel(Text(verbatim: subject.title))
+                    .accessibilityLabel(Text(verbatim: subject.spokenTitle))
                     .accessibilityValue(Text(verbatim: subject.spokenValue))
                     .chartOpenAction(node: segment.node, hasChildren: segment.hasChildren) { model.drill(into: $0) }
+                    .selectionAction(node: segment.node, model: model)
             }
         }
     }
@@ -179,13 +182,18 @@ struct SunburstView: View {
 
         var drawn: [(path: Path, pose: ArcPose, inner: Double)] = []
         drawn.reserveCapacity(poses.count)
+        let hatch = FusionPalette.hatch(scheme)
         for (arc, pose) in poses {
             guard let inner = geometry.drawableInner(pose) else { continue }
             let path = Self.sector(center: geometry.center, inner: inner, outer: inner + geometry.ringWidth,
                                    start: pose.start, end: pose.end)
-            let fill = FusionPalette.fill(.init(arc.segment), mode: colorMode, depth: pose.shadeDepth,
+            let subject = FusionPalette.FillSubject(arc.segment)
+            let fill = FusionPalette.fill(subject, mode: colorMode, depth: pose.shadeDepth,
                                           step: pose.shadeStep, scheme: scheme)
             rings.fill(path, with: .color(fill.opacity(pose.alpha)))
+            if subject.isHatched(in: colorMode) {
+                SafetyDecor.hatch(in: path, color: hatch.opacity(pose.alpha), canvas: geometry.size, in: rings)
+            }
             drawn.append((path, pose, inner))
         }
         for item in drawn where geometry.hasSeparator(item.pose, inner: item.inner) {
@@ -197,11 +205,21 @@ struct SunburstView: View {
             MergedOutline.strokeArc(center: geometry.center, inner: inner, outer: inner + geometry.ringWidth,
                                     start: pose.start, end: pose.end, color: outline.opacity(pose.alpha), in: rings)
         }
-        labels.prepare(generation: generation, size: geometry.size)
-        for label in RingLabel.place(poses, geometry: geometry, planner: labels, in: rings) {
+        labels.prepare(generation: generation, size: geometry.size, mode: colorMode)
+        let placed = RingLabel.place(poses, geometry: geometry, planner: labels, in: rings)
+        for label in placed {
             let ink = FusionPalette.label(.init(label.segment), mode: colorMode, depth: label.pose.shadeDepth,
                                           step: label.pose.shadeStep, scheme: scheme)
             RingLabel.draw(label, ink: ink, in: rings)
+        }
+        if colorMode == .deletable {
+            // Protected arcs without a label (which carries the lock itself) get a standalone one.
+            let labelled = Set(placed.map(\.id))
+            var locks = SafetyDecor.Locks()
+            for (arc, pose) in poses where arc.isCurrent && !labelled.contains(arc.segment.id) {
+                Self.drawLock(arc.segment, pose: pose, geometry: geometry, mode: colorMode, lift: 0, scheme: scheme,
+                              locks: &locks, in: rings)
+            }
         }
 
         let disc = Path(ellipseIn: geometry.rect(radius: geometry.centerRadius - 0.5))
@@ -236,6 +254,20 @@ struct SunburstView: View {
             context.stroke(Path(ellipseIn: geometry.rect(radius: r)),
                            with: .color(FusionPalette.background(scheme)), lineWidth: 1.5)
         }
+    }
+
+    /// The lock of a protected `segment` posed at `pose`, at the middle of its arc, when the arc
+    /// is at least `SafetyDecor.lockMinSide` across both ways (radially and along its mid radius).
+    static func drawLock(_ segment: ArcSegment, pose: ArcPose, geometry: ChartGeometry, mode: ColorMode, lift: Double,
+                         scheme: ColorScheme, locks: inout SafetyDecor.Locks, in context: GraphicsContext) {
+        let subject = FusionPalette.FillSubject(segment)
+        guard subject.isLocked(in: mode), pose.alpha > 0.5, let inner = geometry.drawableInner(pose) else { return }
+        let mid = max(inner, 0) + geometry.ringWidth / 2
+        guard SafetyDecor.fitsLock(width: mid * (pose.end - pose.start), height: geometry.ringWidth) else { return }
+        let ink = FusionPalette.label(subject, mode: mode, depth: pose.shadeDepth, step: pose.shadeStep, lift: lift,
+                                      scheme: scheme)
+        locks.lock(at: geometry.point(angle: (pose.start + pose.end) / 2, radius: mid), ink: ink, alpha: pose.alpha,
+                   in: context)
     }
 
     static func title(of segment: ArcSegment) -> String {

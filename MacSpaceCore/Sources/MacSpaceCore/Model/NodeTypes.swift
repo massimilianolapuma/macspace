@@ -11,6 +11,12 @@ public struct NodeFlags: OptionSet, Sendable, Hashable {
     public static let dataless = NodeFlags(rawValue: 1 << 1)
     public static let mountPoint = NodeFlags(rawValue: 1 << 2)
     public static let hardLinkDuplicate = NodeFlags(rawValue: 1 << 3)
+    /// A directory that is a package (bundle or library).
+    public static let package = NodeFlags(rawValue: 1 << 4)
+    /// Anything below a package.
+    public static let insidePackage = NodeFlags(rawValue: 1 << 5)
+    /// Moved to the Trash since the scan.
+    public static let removed = NodeFlags(rawValue: 1 << 6)
 }
 
 public struct NodeRow: Sendable, Hashable, Identifiable {
@@ -26,9 +32,12 @@ public struct NodeRow: Sendable, Hashable, Identifiable {
     public let lastUsed: UInt32
     /// A file's age bucket; for a directory, the bucket holding most of its bytes.
     public let ageBucket: AgeBucket
+    /// The node's `SafetyVerdict` level, stamped by `ScanStore` (`.normal` until then).
+    public var safety: SafetyLevel
 
     public init(id: NodeID, name: String, size: UInt64, kind: NodeKind, flags: NodeFlags, hasChildren: Bool,
-                category: FileCategory = .other, lastUsed: UInt32 = 0, ageBucket: AgeBucket = .unknown) {
+                category: FileCategory = .other, lastUsed: UInt32 = 0, ageBucket: AgeBucket = .unknown,
+                safety: SafetyLevel = .normal) {
         self.id = id
         self.name = name
         self.size = size
@@ -38,5 +47,6 @@ public struct NodeRow: Sendable, Hashable, Identifiable {
         self.category = category
         self.lastUsed = lastUsed
         self.ageBucket = ageBucket
+        self.safety = safety
     }
 }
