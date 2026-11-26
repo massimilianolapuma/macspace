@@ -34,7 +34,12 @@ final class ScanModel {
     }
     /// The folder the chart and the list are centred on.
     var center: NodeID = FileTree.root
-    var segments: [ArcSegment] = []
+    var segments: [ArcSegment] = [] {
+        didSet { segmentParents = Self.parentMap(segments.lazy.compactMap { s in s.node.map { ($0, s.parent) } }) }
+    }
+    /// Each node in `segments` → the folder above it, for `isInsideSelection`: rebuilt only when
+    /// `segments` is set, so a lookup per chart element does not rebuild it.
+    private(set) var segmentParents: [NodeID: NodeID] = [:]
     var biggest: [NodeRow] = []
     /// From the scan root down to `center`.
     var breadcrumb: [NodeRow] = []
@@ -69,7 +74,11 @@ final class ScanModel {
         didSet { if chartSize != oldValue, chart == .treemap { Task { await refreshViews() } } }
     }
     /// Treemap tiles below `center`, laid out for `tilesSize`; empty unless `chart` is `.treemap`.
-    var tiles: [TreemapTile] = []
+    var tiles: [TreemapTile] = [] {
+        didSet { tileParents = Self.parentMap(tiles.lazy.compactMap { t in t.node.map { ($0, t.parent) } }) }
+    }
+    /// Each node in `tiles` → the folder above it, as `segmentParents` for `segments`.
+    private(set) var tileParents: [NodeID: NodeID] = [:]
     /// The canvas size `tiles` were laid out for.
     private(set) var tilesSize: CGSize = .zero
     /// Total capacity of the scanned volume; set only when scanning the startup disk.

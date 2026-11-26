@@ -5,6 +5,11 @@ import MacSpaceCore
 extension ScanModel {
     // MARK: Selection
 
+    /// Child → parent over `links`; the first link wins for a node listed twice.
+    static func parentMap(_ links: some Sequence<(NodeID, NodeID)>) -> [NodeID: NodeID] {
+        Dictionary(links, uniquingKeysWith: { first, _ in first })
+    }
+
     /// Selects `node`, or deselects it when selected. The store decides what stays
     /// (`ScanStore.resolveSelection`): the root and protected items are refused, selecting a folder
     /// drops what was selected inside it, and selecting inside a selected folder changes nothing.
@@ -26,15 +31,15 @@ extension ScanModel {
     }
 
     /// Whether `node` is not selected itself but lies inside a selected folder: the breadcrumb or,
-    /// for deeper chart elements, the folders on screen above it.
+    /// for deeper chart elements, the folders on screen above it (`segmentParents`/`tileParents`,
+    /// kept with the chart elements, so this costs a walk up, not a map per call).
     func isInsideSelection(_ node: NodeID) -> Bool {
         guard !selection.isEmpty, !selection.contains(node) else { return false }
         if breadcrumb.contains(where: { selection.contains($0.id) }) { return true }
-        let links: [(NodeID, NodeID)] = switch chart {
-        case .sunburst: segments.compactMap { s in s.node.map { ($0, s.parent) } }
-        case .treemap: tiles.compactMap { t in t.node.map { ($0, t.parent) } }
+        let parents = switch chart {
+        case .sunburst: segmentParents
+        case .treemap: tileParents
         }
-        let parents = Dictionary(links, uniquingKeysWith: { first, _ in first })
         var up = parents[node]
         while let folder = up {
             if selection.contains(folder) { return true }
