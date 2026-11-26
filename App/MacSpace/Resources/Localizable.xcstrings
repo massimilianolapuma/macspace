@@ -109,7 +109,7 @@
     "Analisi in corso…" : {
 
     },
-    "Analisi in corso… %@ file" : {
+    "Analisi in corso… %@ file · %@" : {
 
     },
     "Analisi interrotta · %@ file" : {

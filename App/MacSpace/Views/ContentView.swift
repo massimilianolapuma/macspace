@@ -247,8 +247,8 @@ private struct OnboardingView: View {
     }
 }
 
-/// The toolbar's scan state and file count (and the folders it could not read); the byte total
-/// lives only in the chart. While a startup-disk scan runs, an estimated progress bar against the
+/// The toolbar's scan state, file count and bytes counted so far (and, once done, the folders it
+/// could not read). While a startup-disk scan runs, an estimated progress bar against the
 /// disk's used space; scanning a folder (whose total is unknown), a spinner.
 /// Reads the progress itself, so the content view is not re-evaluated on every progress update.
 struct ScanStatus: View {
@@ -275,11 +275,18 @@ struct ScanStatus: View {
                     ProgressView()
                         .controlSize(.small)
                 }
-                CountingText(UInt64(progress.filesSeen)) { Text("Analisi in corso… \(Formatters.count(Int($0))) file") }
-                    .monospacedDigit()
+                ZStack(alignment: .leading) {
+                    // The widest line it is likely to reach, hidden: the width holds while the
+                    // numbers grow, so the toolbar never shifts.
+                    Self.line(files: 8_888_888, bytes: Formatters.bytes(888_880_000_000)).hidden()
+                    CountingText(UInt64(progress.filesSeen)) {
+                        Self.line(files: Int($0), bytes: Formatters.bytes(progress.bytesSeen))
+                    }
                     .animation(reduceMotion ? nil : .easeOut(duration: 0.24), value: progress.filesSeen)
-                    .lineLimit(1)
-                    .frame(minWidth: 190, alignment: .leading)
+                }
+                .monospacedDigit()
+                .lineLimit(1)
+                .fixedSize()
             }
             .foregroundStyle(.secondary)
             .padding(.horizontal, 12)
@@ -302,6 +309,11 @@ struct ScanStatus: View {
         case .idle:
             EmptyView()
         }
+    }
+
+    /// "Analisi in corso… <files> file · <bytes>".
+    private static func line(files: Int, bytes: String) -> Text {
+        Text("Analisi in corso… \(Formatters.count(files)) file · \(bytes)")
     }
 
     /// `line`, then " · N cartelle non leggibili" when the scan could not read some folders, so the
