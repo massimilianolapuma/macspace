@@ -160,7 +160,15 @@ struct ContentView: View {
         model.start(target)
     }
 
-    /// Scan state and file count; the byte total lives only in the chart's center.
+    /// `line`, then " · N cartelle non leggibili" when the scan could not read some folders, so the
+    /// count never reads as the whole disk.
+    private static func withUnreadable(_ line: String, _ summary: ScanSummary) -> String {
+        guard summary.unreadable > 0 else { return line }
+        return line + " · " + String(localized: "\(summary.unreadable) cartelle non leggibili")
+    }
+
+    /// Scan state and file count (and the folders it could not read); the byte total lives only
+    /// in the chart's center.
     @ViewBuilder
     private var status: some View {
         switch model.phase {
@@ -179,14 +187,15 @@ struct ContentView: View {
         case let .done(summary) where summary.wasCancelled:
             HStack(spacing: 6) {
                 Image(systemName: "pause.circle")
-                Text("Analisi interrotta · \(Formatters.count(summary.files)) file")
+                Text(verbatim: Self.withUnreadable(
+                    String(localized: "Analisi interrotta · \(Formatters.count(summary.files)) file"), summary))
                     .monospacedDigit()
                     .lineLimit(1)
             }
             .foregroundStyle(.secondary)
             .padding(.horizontal, 12)
         case let .done(summary):
-            Text("\(Formatters.count(summary.files)) file")
+            Text(verbatim: Self.withUnreadable(String(localized: "\(Formatters.count(summary.files)) file"), summary))
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
                 .lineLimit(1)

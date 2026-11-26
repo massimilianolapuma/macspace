@@ -46,9 +46,20 @@ struct TrashReport: Sendable {
     var moved: [TrashOutcome.Moved]
     /// What stayed: the store's skips, then the rows the sheet left out (open, withdrawn).
     var skipped: [SkippedItem]
-    /// The estimate of the space each moved item frees (`PrivateSize.freed`), when the sheet had
-    /// finished it before the move; the result view estimates the others in the Trash.
-    var freed: [NodeID: UInt64]
+    /// The estimate of the space each moved item frees once the Trash is emptied
+    /// (`PrivateSize.freed`, partial or not), when the sheet had finished it before the move; the
+    /// result view estimates the others in the Trash.
+    var freed: [NodeID: PrivateSize.Estimate]
+}
+
+extension PrivateSize.Estimate {
+    /// The estimates added up (saturating); partial when any of them is.
+    static func sum(_ estimates: some Sequence<PrivateSize.Estimate>) -> PrivateSize.Estimate {
+        estimates.reduce(PrivateSize.Estimate(bytes: 0, isPartial: false)) { total, next in
+            let (bytes, overflow) = total.bytes.addingReportingOverflow(next.bytes)
+            return PrivateSize.Estimate(bytes: overflow ? .max : bytes, isPartial: total.isPartial || next.isPartial)
+        }
+    }
 }
 
 /// Moving confirmed items to the Trash (spec §5.6). `ScanStore.trash` re-checks every item and is

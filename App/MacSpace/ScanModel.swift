@@ -28,6 +28,10 @@ final class ScanModel {
         }
     }
     private(set) var isScanning = false
+    /// Folders the last finished scan could not read (0 while scanning or before any scan).
+    var unreadableFolders: Int {
+        if case let .done(summary) = phase { summary.unreadable } else { 0 }
+    }
     /// The folder the chart and the list are centred on.
     var center: NodeID = FileTree.root
     var segments: [ArcSegment] = []

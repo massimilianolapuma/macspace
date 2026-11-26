@@ -19,7 +19,7 @@ struct TrashSheet: View {
 }
 
 /// "Spostare <N> elementi nel Cestino?" (spec §5.6): the items, each with its level and, for those
-/// to look at first, why; what moving them frees; and the move itself. On appear, off the main
+/// to look at first, why; the space emptying the Trash would then recover; and the move itself. On appear, off the main
 /// actor, it reads the open files (open items are left out) and estimates each item's private size.
 /// The rows follow the store: after an environment update they are read again (changed ones say
 /// "Aggiornato"), and right before moving too, so nothing moves with a verdict the user did not see.
@@ -40,7 +40,7 @@ struct TrashConfirmationSheet: View {
     @State private var updated: Set<NodeID> = []
     @State private var openCheck = OpenCheck.running
     /// `PrivateSize.freed` of each item, as each estimate finishes.
-    @State private var freed: [NodeID: UInt64] = [:]
+    @State private var freed: [NodeID: PrivateSize.Estimate] = [:]
     @State private var moving = false
     /// A move was stopped because the rows had changed: they were refreshed for another look.
     @State private var changedBeforeMove = false
@@ -106,7 +106,8 @@ struct TrashConfirmationSheet: View {
                     if index > 0 { Divider().padding(.leading, 46) }
                     TrashCandidateRow(candidate: candidate, stays: staysNote(candidate),
                                       isWithdrawn: withdrawn[candidate.id] != nil,
-                                      isUpdated: updated.contains(candidate.id), freed: freed[candidate.id])
+                                      isUpdated: updated.contains(candidate.id),
+                                      freed: freed[candidate.id].flatMap { $0.isPartial ? nil : $0.bytes })
                 }
             }
             .padding(.vertical, 4)
@@ -146,18 +147,23 @@ struct TrashConfirmationSheet: View {
         }
     }
 
-    /// "Spazio liberato: circa <X>" over the items that will move ("Calcolo…" until every estimate
-    /// is in), and what they take when that is more (clones and hard links share their space).
+    /// "Spazio recuperabile svuotando il Cestino: circa <X>" over the items that will move ("almeno
+    /// <X>" when an estimate could not see everything, "Calcolo…" until every estimate is in): moving
+    /// to the Trash frees nothing by itself. When every estimate is complete, also what the items
+    /// take when that is more (clones and hard links share their space).
     private func freedSummary(_ included: [TrashCandidate]) -> some View {
         let size = included.reduce(UInt64(0)) { $0 + $1.size }
         let estimates = included.map { freed[$0.id] }
-        let total: UInt64? = estimates.contains(nil) ? nil : estimates.reduce(UInt64(0)) { $0 + ($1 ?? 0) }
+        let total: PrivateSize.Estimate? = estimates.contains(nil) ? nil : .sum(estimates.compactMap { $0 })
         return VStack(alignment: .leading, spacing: 3) {
             if let total {
-                Text("Spazio liberato: circa \(Formatters.bytes(total))")
+                let bytes = Formatters.bytes(total.bytes)
+                (total.isPartial ? Text("Spazio recuperabile svuotando il Cestino: almeno \(bytes)")
+                    : Text("Spazio recuperabile svuotando il Cestino: circa \(bytes)"))
                     .font(.headline)
                     .foregroundStyle(FusionPalette.primaryText(scheme))
-                if Self.isShared(freed: total, size: size) {
+                    .fixedSize(horizontal: false, vertical: true)
+                if !total.isPartial, Self.isShared(freed: total.bytes, size: size) {
                     Text("\(Formatters.bytes(size)) occupati: parte dello spazio è condivisa con copie APFS, la stima è per difetto")
                         .font(.callout)
                         .foregroundStyle(FusionPalette.secondaryText(scheme))
@@ -165,7 +171,7 @@ struct TrashConfirmationSheet: View {
                 }
             } else {
                 HStack(spacing: 6) {
-                    Text("Spazio liberato:")
+                    Text("Spazio recuperabile svuotando il Cestino:")
                         .foregroundStyle(FusionPalette.primaryText(scheme))
                     Text("Calcolo…")
                         .foregroundStyle(FusionPalette.secondaryText(scheme))
@@ -305,8 +311,8 @@ struct TrashConfirmationSheet: View {
                 switch check {
                 case let .open(set):
                     openCheck = set.isComplete ? .done(Set(found.filter { Self.isOpen($0, in: set) }.map(\.id))) : .incomplete
-                case let .freed(id, bytes):
-                    freed[id] = bytes
+                case let .freed(id, estimate):
+                    freed[id] = estimate
                     if let next = queue.next() {
                         group.addTask { .freed(next.id, await Self.estimate(next.path)) }
                     }
@@ -361,7 +367,7 @@ struct TrashConfirmationSheet: View {
 
     private enum Check: Sendable {
         case open(OpenFileSet)
-        case freed(NodeID, UInt64)
+        case freed(NodeID, PrivateSize.Estimate)
     }
 
     private static func isOpen(_ candidate: TrashCandidate, in set: OpenFileSet) -> Bool {
@@ -370,7 +376,9 @@ struct TrashConfirmationSheet: View {
 
     @concurrent nonisolated private static func openFiles() async -> OpenFileSet { OpenFileSet.current() }
 
-    @concurrent nonisolated static func estimate(_ path: String) async -> UInt64 { PrivateSize.freed(path: path) }
+    @concurrent nonisolated static func estimate(_ path: String) async -> PrivateSize.Estimate {
+        PrivateSize.freed(path: path)
+    }
 
     /// What was on screen when "Sposta nel Cestino" was pressed.
     private struct Shown {
@@ -488,7 +496,7 @@ private struct TrashCandidateRow: View {
     /// The store no longer allows it: its marker shows its state now, not the old level.
     let isWithdrawn: Bool
     let isUpdated: Bool
-    /// Its estimate, once known.
+    /// Its estimate, once known and complete (a partial one only counts towards the total, as "almeno").
     let freed: UInt64?
     @Environment(\.colorScheme) private var scheme
 

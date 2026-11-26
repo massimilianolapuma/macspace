@@ -1,16 +1,18 @@
 import MacSpaceCore
 import SwiftUI
 
-/// What a move to the Trash did: "<N> elementi spostati nel Cestino · liberati circa <X>", then what
-/// stayed and why. The space freed is the estimate of what really moved, never the tree sizes; an
-/// item moved before its estimate finished is estimated where it now is in the Trash.
+/// What a move to the Trash did: "<N> elementi spostati nel Cestino · circa <X> da recuperare
+/// svuotando il Cestino" ("almeno <X>" when an estimate could not see everything), then what stayed
+/// and why. Moving frees nothing until the Trash is emptied: the space is the estimate of what really
+/// moved, never the tree sizes; an item moved before its estimate finished is estimated where it now
+/// is in the Trash.
 struct TrashResultView: View {
     let report: TrashReport
     let done: () -> Void
     @Environment(\.colorScheme) private var scheme
 
     /// Estimates made here, in the Trash, for moved items the sheet had not finished.
-    @State private var trashEstimates: [NodeID: UInt64] = [:]
+    @State private var trashEstimates: [NodeID: PrivateSize.Estimate] = [:]
     /// Some moved item still has no estimate (only those with a known place in the Trash get one).
     @State private var estimating: Bool
 
@@ -62,7 +64,8 @@ struct TrashResultView: View {
         .accessibilityElement(children: .combine)
     }
 
-    /// "<N> elementi spostati nel Cestino · liberati circa <X>" ("Calcolo…" while estimating).
+    /// "<N> elementi spostati nel Cestino · circa <X> da recuperare svuotando il Cestino" ("almeno
+    /// <X>" when partial, "Calcolo…" while estimating).
     private var summary: some View {
         // One line while it fits; else the space freed goes under the count, never truncated.
         ViewThatFits(in: .horizontal) {
@@ -86,7 +89,9 @@ struct TrashResultView: View {
     @ViewBuilder
     private var freedText: some View {
         if let freed = freedTotal {
-            Text("liberati circa \(Formatters.bytes(freed))").fixedSize()
+            let bytes = Formatters.bytes(freed.bytes)
+            (freed.isPartial ? Text("almeno \(bytes) da recuperare svuotando il Cestino")
+                : Text("circa \(bytes) da recuperare svuotando il Cestino")).fixedSize()
         } else {
             Text("Calcolo…").foregroundStyle(FusionPalette.secondaryText(scheme))
         }
@@ -122,11 +127,14 @@ struct TrashResultView: View {
         .padding(.bottom, 8)
     }
 
-    /// The sum of the estimates of the moved items; nil while some are still being estimated. An
-    /// item with no estimate and no known place in the Trash counts nothing.
-    private var freedTotal: UInt64? {
+    /// The sum of the estimates of the moved items, partial when any is; nil while some are still
+    /// being estimated. An item with no estimate and no known place in the Trash counts nothing, and
+    /// makes the sum partial.
+    private var freedTotal: PrivateSize.Estimate? {
         if estimating { return nil }
-        return report.moved.reduce(UInt64(0)) { $0 + (report.freed[$1.node] ?? trashEstimates[$1.node] ?? 0) }
+        return .sum(report.moved.map {
+            report.freed[$0.node] ?? trashEstimates[$0.node] ?? PrivateSize.Estimate(bytes: 0, isPartial: true)
+        })
     }
 
     /// Estimates, where they now are in the Trash, the moved items the sheet had not finished;
@@ -135,9 +143,9 @@ struct TrashResultView: View {
         let missing = report.moved.filter { report.freed[$0.node] == nil }
         for item in missing {
             guard let path = item.trashedPath else { continue }
-            let bytes = await TrashConfirmationSheet.estimate(path)
+            let estimate = await TrashConfirmationSheet.estimate(path)
             guard !Task.isCancelled else { return }
-            trashEstimates[item.node] = bytes
+            trashEstimates[item.node] = estimate
         }
         estimating = false
     }

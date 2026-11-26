@@ -7,6 +7,28 @@
     "%@ occupati: parte dello spazio è condivisa con copie APFS, la stima è per difetto" : {
 
     },
+    "%lld cartelle non leggibili" : {
+      "localizations" : {
+        "it" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld cartella non leggibile"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "%lld cartelle non leggibili"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "%lld di %lld" : {
 
     },
@@ -337,6 +359,28 @@
     "Nessun elemento spostato nel Cestino" : {
 
     },
+    "Nessun suggerimento nelle cartelle lette (%lld non leggibili)" : {
+      "localizations" : {
+        "it" : {
+          "variations" : {
+            "plural" : {
+              "one" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Nessun suggerimento nelle cartelle lette (%lld non leggibile)"
+                }
+              },
+              "other" : {
+                "stringUnit" : {
+                  "state" : "translated",
+                  "value" : "Nessun suggerimento nelle cartelle lette (%lld non leggibili)"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "Nessun suggerimento: qui è tutto in ordine" : {
 
     },
@@ -460,10 +504,13 @@
     "Solo nel cloud: non occupa spazio su questo Mac" : {
 
     },
-    "Spazio liberato:" : {
+    "Spazio recuperabile svuotando il Cestino:" : {
 
     },
-    "Spazio liberato: circa %@" : {
+    "Spazio recuperabile svuotando il Cestino: almeno %@" : {
+
+    },
+    "Spazio recuperabile svuotando il Cestino: circa %@" : {
 
     },
     "Sposta nel Cestino" : {
@@ -554,13 +601,16 @@
     "Vista" : {
 
     },
+    "almeno %@ da recuperare svuotando il Cestino" : {
+
+    },
+    "circa %@ da recuperare svuotando il Cestino" : {
+
+    },
     "di %@" : {
 
     },
     "libera circa %@" : {
-
-    },
-    "liberati circa %@" : {
 
     },
     "È cambiato dopo l'analisi" : {

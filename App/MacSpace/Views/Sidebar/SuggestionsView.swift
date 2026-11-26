@@ -38,7 +38,8 @@ struct SuggestionsView: View {
     }
 
     /// No scan yet; scanning, or its end still landing (no flash of "nothing found"); apps index
-    /// not ready; a cancelled scan; or nothing to suggest.
+    /// not ready; a cancelled scan; or nothing to suggest (in the folders it could read, when some
+    /// could not be).
     private var empty: some View {
         VStack(spacing: 10) {
             switch model.phase {
@@ -64,7 +65,12 @@ struct SuggestionsView: View {
                     .font(.title2)
                     .foregroundStyle(FusionPalette.secondaryText(scheme))
                     .accessibilityHidden(true)
-                message("Nessun suggerimento: qui è tutto in ordine", emphasized: true)
+                if model.unreadableFolders > 0 {
+                    message("Nessun suggerimento nelle cartelle lette (\(model.unreadableFolders) non leggibili)",
+                            emphasized: true)
+                } else {
+                    message("Nessun suggerimento: qui è tutto in ordine", emphasized: true)
+                }
             }
         }
         .font(.callout)
