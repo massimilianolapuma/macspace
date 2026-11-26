@@ -22,7 +22,8 @@ public enum TrashSkip: Sendable, Hashable {
     case insidePackage
     /// `TrashGuard` refused it.
     case refused
-    /// The list of open files could not be read in full, so nothing was moved.
+    /// The open files could not all be read (the process list, or a process of this user, could
+    /// not be listed in full: `OpenFileSet.isComplete`), so nothing was moved.
     case cannotCheckOpenFiles
     /// A folder whose contents were not all seen (a mount point, an unreadable or dataless folder, a
     /// folder a cancelled scan did not finish listing, or one whose listing left an entry out), so
