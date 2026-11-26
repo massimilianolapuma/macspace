@@ -21,8 +21,9 @@ public enum DirectoryReader {
 
     /// Lists the entries of the directory at `path` ("." and ".." are never reported).
     /// The listing is complete only when every entry the file system returned was parsed: an entry
-    /// it reports a per-entry error for, or a malformed record (which also ends its batch, since
-    /// the records after it cannot be located), is left out and makes `isComplete` false.
+    /// it reports a per-entry error for, or a malformed record, is left out (parsing goes on with the
+    /// next record) and makes `isComplete` false; so does a record length of 0 or past the buffer,
+    /// which ends its batch, since the records after it cannot be located (`parseBatch`).
     /// When the calling task is cancelled, reading stops between batches and the listing so far
     /// is returned, incomplete, without throwing.
     /// With `includePrivateSize`, each entry also carries `privateSize` where the volume reports

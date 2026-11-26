@@ -209,9 +209,10 @@ extension ScanStore {
 
     /// Why the folder `id` at `path` may not go because of what it holds, or nil:
     /// `.containsUnverified` when it or a folder below it (not removed) is a mount point, unreadable,
-    /// or in `unverifiedDirectories` (dataless, not descended, not fully listed); `.containsProtected(reason)` for a folder below it whose fresh verdict
-    /// is protected for one of `subtreeBlockingReasons`, or for a running app's bundle at or below
-    /// it (compared as `SafetyPaths.folded`, by component).
+    /// or in `unverifiedDirectories` (dataless, not descended, not fully listed);
+    /// `.containsProtected(reason)` for a folder below it whose fresh verdict is protected for one
+    /// of `subtreeBlockingReasons`, or for a running app's bundle at or below it (compared as
+    /// `SafetyPaths.folded`, by component).
     private func subtreeBlocker(_ id: NodeID, path: String) -> TrashSkip? {
         if !tree.flags(id).isDisjoint(with: Self.unverifiedFlags) || unverifiedDirectories.contains(id) {
             return .containsUnverified

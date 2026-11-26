@@ -105,10 +105,10 @@ extension ScanModel {
     /// Moves `ids` to the Trash through `ScanStore.trash`, which re-checks each one right before
     /// moving it (still there and unchanged, not open, not protected, not inside a package, and with
     /// the verdict in `expectedVerdicts`, level, reason and owner alike: what the user saw and
-    /// confirmed; an item missing from it is skipped) and skips with a reason whatever fails. The store gets the apps running at this
-    /// moment with the move itself (ruling R41), not the debounced environment the views show: an
-    /// app launched since protects its data and bundle, and a verdict that changed with it skips
-    /// `.verdictChanged`.
+    /// confirmed; an item missing from it is skipped) and skips with a reason whatever fails. The
+    /// store gets the apps running at this moment with the move itself (ruling R41), not the
+    /// debounced environment the views show: an app launched since protects its data and bundle,
+    /// and a verdict that changed with it skips `.verdictChanged`.
     /// Then: the history gains what moved, the selection, ticks and outlines lose it, the views and
     /// suggestions are refreshed (the tree was updated in place).
     /// Refused while another move runs or while the Trash is unavailable: nothing is moved then.

@@ -19,8 +19,9 @@ struct TrashSheet: View {
 }
 
 /// "Spostare <N> elementi nel Cestino?" (spec §5.6): the items, each with its level and, for those
-/// to look at first, why; the space emptying the Trash would then recover; and the move itself. On appear, off the main
-/// actor, it reads the open files (open items are left out) and estimates each item's private size.
+/// to look at first, why; the space emptying the Trash would then recover; and the move itself. On
+/// appear, off the main actor, it reads the open files (open items are left out) and estimates each
+/// item's private size.
 /// The rows follow the store: after an environment update they are read again (changed ones say
 /// "Aggiornato"), and right before moving too, so nothing moves with a verdict the user did not see.
 /// Nothing moves here: `ScanModel.trash` hands the items to the store, which checks them again.
@@ -496,7 +497,8 @@ private struct TrashCandidateRow: View {
     /// The store no longer allows it: its marker shows its state now, not the old level.
     let isWithdrawn: Bool
     let isUpdated: Bool
-    /// Its estimate, once known and complete (a partial one only counts towards the total, as "almeno").
+    /// Its estimate, once known and complete ("recuperabili circa <X>"); a partial one only counts
+    /// towards the total, as "almeno".
     let freed: UInt64?
     @Environment(\.colorScheme) private var scheme
 
@@ -526,7 +528,7 @@ private struct TrashCandidateRow: View {
                             .truncationMode(.middle)
                         Spacer(minLength: 8)
                         if let freed, TrashConfirmationSheet.isShared(freed: freed, size: candidate.size) {
-                            Text("libera circa \(Formatters.bytes(freed))")
+                            Text("recuperabili circa \(Formatters.bytes(freed))")
                                 .monospacedDigit()
                                 .fixedSize()
                         }
