@@ -54,14 +54,6 @@ struct SunburstView: View {
                 centerLabel(geometry)
                     .position(geometry.center)
                     .allowsHitTesting(false)
-                if model.breadcrumb.isEmpty && !model.isScanning {
-                    Text("Scegli cosa analizzare e premi Analizza")
-                        .font(.title3)
-                        .foregroundStyle(FusionPalette.secondaryText(scheme))
-                        .multilineTextAlignment(.center)
-                        .frame(width: geometry.centerRadius * 1.7)
-                        .position(geometry.center)
-                }
                 SunburstPointerLayer(model: model, motion: motion, motionGeneration: motionGeneration,
                                      geometry: geometry, canGoUp: canGoUp, total: centerSize, hover: hover)
                 diskHelp(geometry)

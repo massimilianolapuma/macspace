@@ -5,9 +5,9 @@ import SwiftUI
 /// caution, protected; normal is the neutral rest); otherwise one chip per category (by file type)
 /// or age bucket (by last use) present in the current folder, with how much it takes, plus "Altri
 /// (misti)" when the chart shows merged elements. Categories run largest first, buckets in age
-/// order. Empty before a scan.
+/// order. Shown only when it has something to show (`hasContent`).
 ///
-/// Ruling AE: the legend always keeps the room the fullest legend could need at the current
+/// Ruling AE: while shown, the legend keeps the room the fullest legend could need at the current
 /// width (every category, "Altri (misti)", every bucket, each with the widest figure, in the order
 /// that wraps worst, and the safety levels), so a scan, a drill, a mode or chart switch never
 /// resizes the chart.
@@ -26,31 +26,40 @@ struct ChartLegend: View {
                    reservedGroups: [FileCategory.allCases.count + 1, AgeBucket.allCases.count,
                                     Self.safetyLevels.count]) {
             reserve
-            if !model.breadcrumb.isEmpty {
-                switch mode {
-                case .deletable:
-                    ForEach(Self.safetyLevels, id: \.self) { level in
-                        LegendChip(title: level.title, detail: nil) { SafetySwatch(level: level) }
-                    }
-                case .category:
-                    ForEach(categories, id: \.category) { entry in
-                        LegendChip(color: FusionPalette.swatch(entry.category, scheme: scheme),
-                                   title: entry.category.title, detail: Formatters.bytes(entry.bytes))
-                    }
-                    if model.showsMerged {
-                        let swatch = FusionPalette.mergedSwatch(scheme: scheme)
-                        LegendChip(color: swatch.fill, dashedOutline: swatch.outline, title: "Altri (misti)",
-                                   detail: nil)
-                    }
-                case .lastUse:
-                    ForEach(ages, id: \.bucket) { entry in
-                        LegendChip(color: FusionPalette.swatch(entry.bucket, scheme: scheme),
-                                   title: entry.bucket.title, detail: Formatters.bytes(entry.bytes))
-                    }
+            switch mode {
+            case .deletable:
+                ForEach(Self.safetyLevels, id: \.self) { level in
+                    LegendChip(title: level.title, detail: nil) { SafetySwatch(level: level) }
+                }
+            case .category:
+                ForEach(categories, id: \.category) { entry in
+                    LegendChip(color: FusionPalette.swatch(entry.category, scheme: scheme),
+                               title: entry.category.title, detail: Formatters.bytes(entry.bytes))
+                }
+                if model.showsMerged {
+                    let swatch = FusionPalette.mergedSwatch(scheme: scheme)
+                    LegendChip(color: swatch.fill, dashedOutline: swatch.outline, title: "Altri (misti)",
+                               detail: nil)
+                }
+            case .lastUse:
+                ForEach(ages, id: \.bucket) { entry in
+                    LegendChip(color: FusionPalette.swatch(entry.bucket, scheme: scheme),
+                               title: entry.bucket.title, detail: Formatters.bytes(entry.bytes))
                 }
             }
         }
         .accessibilityElement(children: .contain)
+    }
+
+    /// Whether the legend has chips to show: the safety levels from the moment a scan starts; a
+    /// category or age chip once some bytes below the current folder have one. Without, the legend
+    /// takes no room at all.
+    static func hasContent(_ model: ScanModel, mode: ColorMode) -> Bool {
+        switch mode {
+        case .deletable: model.hasScan
+        case .category: !model.categoryTotals.isEmpty || model.showsMerged
+        case .lastUse: !model.ageTotals.isEmpty
+        }
     }
 
     /// The fullest legends, invisible, for `LegendFlow` to measure: every category and "Altri

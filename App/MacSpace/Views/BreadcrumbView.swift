@@ -19,7 +19,7 @@ struct BreadcrumbView: View {
                     crumb(row, index: index)
                         .fontWeight(.semibold)
                         .foregroundStyle(FusionPalette.primaryText(scheme))
-                        .padding(.horizontal, 6)
+                        .padding(.horizontal, CrumbButtonStyle.horizontalPadding)
                         .layoutPriority(1)
                         .accessibilityAddTraits(.isHeader)
                 } else {
@@ -53,21 +53,30 @@ private struct CrumbLabelStyle: LabelStyle {
     }
 }
 
-private struct CrumbButtonStyle: ButtonStyle {
+/// A path component's chrome (and the list's back button's): a soft highlight while hovered or
+/// pressed; dimmed and inert while disabled.
+struct CrumbButtonStyle: ButtonStyle {
+    static let horizontalPadding: CGFloat = WindowLayout.chromeBleed
+    static let verticalPadding: CGFloat = 3
+
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.isEnabled) private var isEnabled
     @State private var hovering = false
 
     func makeBody(configuration: Configuration) -> some View {
+        let active = isEnabled && hovering
         configuration.label
-            .foregroundStyle(hovering ? FusionPalette.primaryText(scheme) : FusionPalette.secondaryText(scheme))
-            .padding(.horizontal, 6)
-            .padding(.vertical, 3)
+            .foregroundStyle(active ? FusionPalette.primaryText(scheme) : FusionPalette.secondaryText(scheme))
+            .opacity(isEnabled ? 1 : 0.45)
+            .padding(.horizontal, Self.horizontalPadding)
+            .padding(.vertical, Self.verticalPadding)
             .background(
                 RoundedRectangle(cornerRadius: 5, style: .continuous)
-                    .fill(FusionPalette.primaryText(scheme).opacity(configuration.isPressed ? 0.12 : hovering ? 0.06 : 0))
+                    .fill(FusionPalette.primaryText(scheme).opacity(
+                        isEnabled && configuration.isPressed ? 0.12 : active ? 0.06 : 0))
             )
             .contentShape(Rectangle())
             .onHover { hovering = $0 }
-            .pointerStyle(.link)
+            .pointerStyle(isEnabled ? .link : nil)
     }
 }

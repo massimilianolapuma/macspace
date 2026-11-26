@@ -9,7 +9,16 @@ struct SuggestionsView: View {
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        if model.suggestions.isEmpty || !model.scanSettled {
+        if !model.hasScan {
+            ContentUnavailableView {
+                Label("Nessun suggerimento", systemImage: "lightbulb")
+            } description: {
+                Text("Analizza per vedere i suggerimenti")
+            }
+            // Level with the chart's empty state, as the items' one.
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.bottom, WindowLayout.windowMargin + WindowLayout.rowHeight)
+        } else if model.suggestions.isEmpty || !model.scanSettled {
             empty
         } else {
             ScrollView {
@@ -25,7 +34,7 @@ struct SuggestionsView: View {
                         SuggestionSection(model: model, suggestion: suggestion)
                     }
                 }
-                .padding(.horizontal, 8)
+                .padding(.horizontal, WindowLayout.inspectorMargin - WindowLayout.chromeBleed)
                 .padding(.top, 12)
                 .padding(.bottom, 12)
             }
@@ -37,15 +46,13 @@ struct SuggestionsView: View {
         return false
     }
 
-    /// No scan yet; scanning, or its end still landing (no flash of "nothing found"); apps index
-    /// not ready; a cancelled scan; or nothing to suggest (in the folders it could read, when some
-    /// could not be).
+    /// Once a scan has started: scanning, or its end still landing (no flash of "nothing found");
+    /// apps index not ready; a cancelled scan; or nothing to suggest (in the folders it could read,
+    /// when some could not be).
     private var empty: some View {
         VStack(spacing: 10) {
             switch model.phase {
-            case .idle:
-                message("Analizza per vedere i suggerimenti")
-            case .scanning:
+            case .idle, .scanning:
                 ProgressView().controlSize(.small)
                 message("Analisi in corso…")
             case .done where !model.scanSettled:
@@ -101,7 +108,7 @@ struct SuggestionsView: View {
         }
         .font(.caption)
         .foregroundStyle(FusionPalette.secondaryText(scheme))
-        .padding(.horizontal, 10)
+        .padding(.horizontal, WindowLayout.chromeBleed)
     }
 }
 
@@ -129,7 +136,7 @@ private struct SuggestionSection: View {
                 Button(expanded ? "Mostra meno" : "Mostra tutti (\(suggestion.items.count))") { expanded.toggle() }
                     .buttonStyle(.link)
                     .font(.caption)
-                    .padding(.leading, 38)
+                    .padding(.leading, 40)
                     .padding(.vertical, 2)
             }
             HStack(spacing: 8) {
@@ -152,7 +159,7 @@ private struct SuggestionSection: View {
                 }
                 .controlSize(.small)
             }
-            .padding(.horizontal, 10)
+            .padding(.horizontal, WindowLayout.chromeBleed)
             .padding(.top, 6)
         }
     }
@@ -177,7 +184,7 @@ private struct SuggestionSection: View {
                     .foregroundStyle(FusionPalette.secondaryText(scheme))
                     .fixedSize(horizontal: false, vertical: true)
             }
-            .padding(.horizontal, 10)
+            .padding(.horizontal, WindowLayout.chromeBleed)
             .padding(.vertical, 7)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(
@@ -210,8 +217,8 @@ private struct SuggestionItemRow: View {
             Toggle(isOn: Binding(get: { model.isTicked(item) }, set: { model.setTicked(item, $0) })) { EmptyView() }
                 .toggleStyle(.checkbox)
                 .labelsHidden()
-                .frame(width: 24)
-                .padding(.leading, 4)
+                .frame(width: WindowLayout.rowSlot)
+                .padding(.leading, WindowLayout.chromeBleed)
                 .accessibilityHidden(true)
             Button { model.reveal(item.id) } label: { content }
                 .buttonStyle(.plain)
@@ -283,7 +290,7 @@ private struct SuggestionItemRow: View {
             }
         }
         .padding(.leading, 2)
-        .padding(.trailing, 10)
+        .padding(.trailing, WindowLayout.chromeBleed)
         .padding(.vertical, 6)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(Rectangle())

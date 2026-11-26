@@ -44,13 +44,6 @@ struct TreemapView: View {
                 TreemapHoverLayer(model: model, motion: motion, labels: labels, generation: generation,
                                   canvas: canvas, colorMode: colorMode, moving: animating)
                 TreemapSelectionLayer(model: model, motion: motion, canvas: canvas, moving: animating)
-                if model.breadcrumb.isEmpty && !model.isScanning {
-                    Text("Scegli cosa analizzare e premi Analizza")
-                        .font(.title3)
-                        .foregroundStyle(FusionPalette.secondaryText(scheme))
-                        .multilineTextAlignment(.center)
-                        .frame(maxWidth: 320)
-                }
                 TreemapPointerLayer(model: model, motion: motion, motionGeneration: motionGeneration,
                                     canvas: canvas, total: model.breadcrumb.last?.size ?? 0)
             }

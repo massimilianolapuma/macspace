@@ -10,6 +10,13 @@ struct ContentView: View {
     @State private var choosingFolder = false
     @State private var showOnboarding = false
     @State private var showHistory = false
+    /// The inspector's tab, kept here so hiding and showing the inspector keeps it.
+    @State private var inspectorTab = SidebarView.Tab.items
+    /// Whether the inspector shows; app-wide and kept across launches (window restoration is off
+    /// whenever "Close windows when quitting an app" is on, the system default).
+    @AppStorage("inspectorShown") private var inspectorShown = true
+    /// The inspector's current width: the content's minimum is what the window's minimum leaves beside it.
+    @State private var inspectorWidth = WindowLayout.inspectorIdealWidth
     /// Shared by every window (`MacSpaceApp`); starts itself once, on the first window.
     @Environment(SafetyEnvironmentProvider.self) private var safety
     @AppStorage(ColorMode.storageKey) private var colorMode: ColorMode = .deletable
@@ -17,17 +24,76 @@ struct ContentView: View {
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        HStack(spacing: 0) {
-            VStack(spacing: 0) {
+        content
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .frame(minWidth: WindowLayout.minWindowWidth - (inspectorShown ? inspectorWidth : 0),
+                   minHeight: WindowLayout.minContentHeight)
+            // One surface from the window's top edge down: the toolbar floats over it, no band.
+            .containerBackground(FusionPalette.background(scheme), for: .window)
+            .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+            .inspector(isPresented: $inspectorShown) {
+                SidebarView(model: model, colorMode: colorMode, tab: $inspectorTab)
+                    .inspectorColumnWidth(min: WindowLayout.inspectorMinWidth, ideal: WindowLayout.inspectorIdealWidth,
+                                          max: WindowLayout.inspectorMaxWidth)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { inspectorWidth = $0 }
+            }
+            .background {
+                // ⌘↑ and ⌘[ go up a level, as in Finder.
+                ZStack {
+                    upShortcut(.upArrow)
+                    upShortcut("[")
+                }
+            }
+            .goesUpOnMouseBack(model: model)
+            .onChange(of: chart, initial: true) {
+                // Only relays out the current folder: a running scan carries on.
+                model.chart = chart
+            }
+            .onChange(of: safety.revision, initial: true) {
+                model.updateEnvironment(safety.environment)
+            }
+            .task { safety.start() }
+            .navigationTitle(Text(verbatim: model.breadcrumb.last?.name ?? "MacSpace"))
+            .toolbar(removing: .title)
+            .toolbar { toolbar }
+            .fileImporter(isPresented: $choosingFolder, allowedContentTypes: [.folder]) { result in
+                if case let .success(url) = result {
+                    // Resolved here, once: the toolbar reads the name on every progress update.
+                    chosenFolder = (url, ScanModel.root(of: .folder(url)).name)
+                    target = .folder(url)
+                }
+            }
+            .onChange(of: target) {
+                // Picking another target mid-scan replaces the running scan.
+                if model.isScanning { startScan() }
+            }
+            .sheet(isPresented: $showOnboarding) {
+                OnboardingView(dismiss: { showOnboarding = false })
+            }
+            .sheet(isPresented: trashSheetShown) {
+                TrashSheet(model: model)
+            }
+            .onAppear { showOnboarding = !FullDiskAccess.isGranted }
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+                if FullDiskAccess.isGranted { showOnboarding = false }
+            }
+    }
+
+    /// Before any scan, one empty state; from the moment a scan starts, the path row, the chart and
+    /// (whenever it has something to show) the legend, at fixed places.
+    @ViewBuilder
+    private var content: some View {
+        if model.hasScan {
+            VStack(spacing: WindowLayout.gap) {
                 HStack(spacing: 12) {
                     BreadcrumbView(model: model)
-                    if chart == .treemap {
-                        FolderTotal(size: model.breadcrumb.last?.size ?? 0, disk: model.diskAtRoot)
+                    if chart == .treemap, let folder = model.breadcrumb.last {
+                        FolderTotal(size: folder.size, disk: model.diskAtRoot)
                     }
                 }
-                .padding(.horizontal, 12)
-                .frame(height: 40)
-                .opacity(model.breadcrumb.isEmpty ? 0 : 1)
+                .frame(height: WindowLayout.rowHeight)
+                // The path's text, not its hover highlight, lines up with the chart's edge.
+                .padding(.leading, -WindowLayout.chromeBleed)
                 Group {
                     switch chart {
                     case .sunburst: SunburstView(model: model, colorMode: colorMode)
@@ -35,60 +101,27 @@ struct ContentView: View {
                     }
                 }
                 .reportsChartSize(to: model)
-                .padding(.horizontal, 8)
-                .padding(.bottom, 4)
-                ChartLegend(model: model, mode: colorMode)
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 12)
+                if ChartLegend.hasContent(model, mode: colorMode) {
+                    ChartLegend(model: model, mode: colorMode)
+                }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            Divider()
-            SidebarView(model: model, colorMode: colorMode)
-                .frame(width: 300)
-                .frame(maxHeight: .infinity)
-        }
-        .frame(minWidth: 760, minHeight: 520)
-        .background(FusionPalette.background(scheme))
-        .background {
-            // ⌘↑ goes up a level, as in Finder.
-            Button { model.goUp() } label: { EmptyView() }
-                .keyboardShortcut(.upArrow, modifiers: .command)
-                .disabled(model.breadcrumb.count < 2)
-                .opacity(0)
-                .accessibilityHidden(true)
-        }
-        .onChange(of: chart, initial: true) {
-            // Only relays out the current folder: a running scan carries on.
-            model.chart = chart
-        }
-        .onChange(of: safety.revision, initial: true) {
-            model.updateEnvironment(safety.environment)
-        }
-        .task { safety.start() }
-        .navigationTitle(Text(verbatim: model.breadcrumb.last?.name ?? "MacSpace"))
-        .toolbar(removing: .title)
-        .toolbar { toolbar }
-        .fileImporter(isPresented: $choosingFolder, allowedContentTypes: [.folder]) { result in
-            if case let .success(url) = result {
-                // Resolved here, once: the toolbar reads the name on every progress update.
-                chosenFolder = (url, ScanModel.root(of: .folder(url)).name)
-                target = .folder(url)
+            .padding(WindowLayout.windowMargin)
+        } else {
+            ContentUnavailableView {
+                Label("Nessuna analisi", systemImage: "internaldrive")
+            } description: {
+                Text("Scegli cosa analizzare e premi Analizza")
             }
         }
-        .onChange(of: target) {
-            // Picking another target mid-scan replaces the running scan.
-            if model.isScanning { startScan() }
-        }
-        .sheet(isPresented: $showOnboarding) {
-            OnboardingView(dismiss: { showOnboarding = false })
-        }
-        .sheet(isPresented: trashSheetShown) {
-            TrashSheet(model: model)
-        }
-        .onAppear { showOnboarding = !FullDiskAccess.isGranted }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            if FullDiskAccess.isGranted { showOnboarding = false }
-        }
+    }
+
+    /// A hidden button carrying a "go up a level" shortcut (⌘ + `key`).
+    private func upShortcut(_ key: KeyEquivalent) -> some View {
+        Button { model.goUp() } label: { EmptyView() }
+            .keyboardShortcut(key, modifiers: .command)
+            .disabled(model.breadcrumb.count < 2)
+            .opacity(0)
+            .accessibilityHidden(true)
     }
 
     @ToolbarContentBuilder
@@ -150,6 +183,10 @@ struct ContentView: View {
                     .labelStyle(.titleAndIcon)
             }
         }
+        ToolbarItem(placement: .primaryAction) {
+            Button("Pannello", systemImage: "sidebar.trailing") { inspectorShown.toggle() }
+                .help(Text("Mostra o nasconde il pannello"))
+        }
     }
 
     /// Scans `target`; the installed apps are indexed again meanwhile (apps installed or removed
@@ -207,6 +244,69 @@ private struct ChartSizeReporter: ViewModifier {
 
 private extension View {
     func reportsChartSize(to model: ScanModel) -> some View { modifier(ChartSizeReporter(model: model)) }
+}
+
+private extension View {
+    /// The mouse's back button (button 3) goes up a level, as in Finder.
+    func goesUpOnMouseBack(model: ScanModel) -> some View { modifier(MouseBackGoesUp(model: model)) }
+}
+
+/// Watches the mouse's back button while the window's content is on screen. Only clicks in this
+/// window count, and none while a sheet (the Trash confirmation, the folder picker) is up.
+private struct MouseBackGoesUp: ViewModifier {
+    let model: ScanModel
+    @State private var window = WindowReference()
+    @State private var monitor: Any?
+
+    func body(content: Content) -> some View {
+        content
+            .background(WindowReader(reference: window))
+            .onAppear {
+                guard monitor == nil else { return }
+                monitor = NSEvent.addLocalMonitorForEvents(matching: .otherMouseDown) { [window, model] event in
+                    // Local monitors run on the main thread.
+                    let handled = MainActor.assumeIsolated {
+                        guard event.buttonNumber == 3, let own = window.window, event.window === own,
+                              own.attachedSheet == nil, model.breadcrumb.count > 1
+                        else { return false }
+                        model.goUp()
+                        return true
+                    }
+                    return handled ? nil : event
+                }
+            }
+            .onDisappear {
+                if let monitor { NSEvent.removeMonitor(monitor) }
+                monitor = nil
+            }
+    }
+}
+
+/// The window a view is in, once it is in one.
+@MainActor
+private final class WindowReference {
+    weak var window: NSWindow?
+}
+
+private struct WindowReader: NSViewRepresentable {
+    let reference: WindowReference
+
+    func makeNSView(context: Context) -> ReaderView {
+        let view = ReaderView()
+        view.reference = reference
+        return view
+    }
+
+    func updateNSView(_ view: ReaderView, context: Context) {}
+
+    final class ReaderView: NSView {
+        var reference: WindowReference?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            reference?.window = window
+        }
+    }
 }
 
 private struct OnboardingView: View {

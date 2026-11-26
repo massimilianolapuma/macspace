@@ -11,5 +11,9 @@ struct MacSpaceApp: App {
                 .environment(safety)
         }
         .defaultSize(width: 1100, height: 720)
+        .commands {
+            // The View menu's show/hide inspector item and its ⌃⌘I shortcut.
+            InspectorCommands()
+        }
     }
 }

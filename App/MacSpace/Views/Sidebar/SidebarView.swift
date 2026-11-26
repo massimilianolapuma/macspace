@@ -1,12 +1,12 @@
 import MacSpaceCore
 import SwiftUI
 
-/// The column next to the chart: "Elementi" (the largest items here) or "Suggerimenti", and the
+/// The inspector next to the chart: "Elementi" (the largest items here) or "Suggerimenti", and the
 /// selection bar at the bottom while something is selected.
 struct SidebarView: View {
     let model: ScanModel
     let colorMode: ColorMode
-    @State private var tab = Tab.items
+    @Binding var tab: Tab
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     enum Tab: Hashable {
@@ -24,8 +24,11 @@ struct SidebarView: View {
             .pickerStyle(.segmented)
             .labelsHidden()
             .accessibilityLabel(Text("Pannello"))
-            .padding(.horizontal, 12)
-            .padding(.top, 10)
+            // Centered between the margins, on the path row's line across the window.
+            .frame(maxWidth: .infinity)
+            .frame(height: WindowLayout.rowHeight)
+            .padding(.horizontal, WindowLayout.inspectorMargin)
+            .padding(.top, WindowLayout.windowMargin)
             Group {
                 switch tab {
                 case .items: BiggestListView(model: model, colorMode: colorMode)
@@ -38,6 +41,9 @@ struct SidebarView: View {
                     .transition(.move(edge: .bottom).combined(with: .opacity))
             }
         }
+        // Never measured narrower than the column can be: text that wraps instead of truncating
+        // would otherwise report a min height for a zero width and stretch the window.
+        .frame(minWidth: WindowLayout.inspectorMinWidth)
         .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: model.selection.isEmpty)
         .onChange(of: tab) {
             // The outlines belong to the suggestions: leaving them clears them.
@@ -63,7 +69,7 @@ private struct SelectionBar: View {
             }
             .controlSize(.regular)
         }
-        .padding(.horizontal, 14)
+        .padding(.horizontal, WindowLayout.inspectorMargin)
         .padding(.vertical, 12)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(FusionPalette.tooltipFill(scheme))

@@ -346,13 +346,22 @@
     "Mostra nel Cestino" : {
 
     },
+    "Mostra o nasconde il pannello" : {
+
+    },
     "Mostra tutti (%lld)" : {
 
     },
     "Musica e audio" : {
 
     },
+    "Nessun elemento" : {
+
+    },
     "Nessun elemento spostato nel Cestino" : {
+
+    },
+    "Nessun suggerimento" : {
 
     },
     "Nessun suggerimento nelle cartelle lette (%@ non leggibili)" : {
@@ -362,6 +371,9 @@
 
     },
     "Nessun suggerimento: qui è tutto in ordine" : {
+
+    },
+    "Nessuna analisi" : {
 
     },
     "Niente da spostare" : {
@@ -546,6 +558,9 @@
 
     },
     "Togli la spunta" : {
+
+    },
+    "Torna a %@" : {
 
     },
     "Torna su" : {

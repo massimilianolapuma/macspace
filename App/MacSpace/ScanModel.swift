@@ -28,6 +28,9 @@ final class ScanModel {
         }
     }
     private(set) var isScanning = false
+    /// A scan is running, or one has left a folder to show: the chart, its path and its legend take
+    /// the content area. Read instead of `phase`, which changes on every progress update.
+    var hasScan: Bool { isScanning || !breadcrumb.isEmpty }
     /// Folders the last finished scan could not read (0 while scanning or before any scan).
     var unreadableFolders: Int {
         if case let .done(summary) = phase { summary.unreadable } else { 0 }
