@@ -19,13 +19,14 @@ struct ContentView: View {
     @AppStorage(Self.inspectorShownKey) private var lastInspectorShown = true
     private static let inspectorShownKey = "inspectorShown"
     /// The path row's widest facts beside its narrowest path, measured (`BreadcrumbView.Narrowest`,
-    /// `PathRowFacts.Widest`).
-    @State private var pathRowNeed: CGFloat = 0
+    /// `PathRowFacts.Widest`); until the first measurement, the value measured with the system font.
+    @State private var pathRowNeed = WindowLayout.measuredPathRowNeed
     /// Shared by every window (`MacSpaceApp`); starts itself once, on the first window.
     @Environment(SafetyEnvironmentProvider.self) private var safety
     @AppStorage(ColorMode.storageKey) private var colorMode: ColorMode = .deletable
     @AppStorage(ChartKind.storageKey) private var chart: ChartKind = .sunburst
     @Environment(\.colorScheme) private var scheme
+
 
     var body: some View {
         content
@@ -54,12 +55,12 @@ struct ContentView: View {
                     .inspectorColumnWidth(min: WindowLayout.inspectorMinWidth, ideal: WindowLayout.inspectorIdealWidth,
                                           max: WindowLayout.inspectorMaxWidth)
             }
-            .focusedSceneValue(\.scanModel, model)
+            .focusedSceneValue(\.goUp, canGoUp ? GoUpAction(model: model) : nil)
             .background {
                 // ⌘[ also goes up a level, as in Finder (⌘↑ is "Vai › Cartella superiore").
                 Button { model.goUp() } label: { EmptyView() }
                     .keyboardShortcut("[", modifiers: .command)
-                    .disabled(model.breadcrumb.count < 2)
+                    .disabled(!canGoUp)
                     .opacity(0)
                     .accessibilityHidden(true)
             }
@@ -97,6 +98,13 @@ struct ContentView: View {
             .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
                 if FullDiskAccess.isGranted { showOnboarding = false }
             }
+    }
+
+    /// Below the scan root, with no sheet up (the Trash confirmation or its result, the onboarding,
+    /// the folder picker): what the mouse's back button also requires.
+    private var canGoUp: Bool {
+        model.breadcrumb.count > 1 && model.pendingTrash == nil && model.trashReport == nil
+            && !showOnboarding && !choosingFolder
     }
 
     /// Before any scan, one empty state; from the moment a scan starts, the path row, the chart and

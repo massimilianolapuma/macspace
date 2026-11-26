@@ -53,7 +53,8 @@ struct ChartLegend: View {
     private struct OverflowSubject: Equatable {
         let mode: ColorMode
         let center: NodeID
-        let hidden: [Entry.Key]
+        /// A set: chips swapping places in the fold while a scan grows them change nothing.
+        let hidden: Set<Entry.Key>
     }
 
     var body: some View {
@@ -94,7 +95,7 @@ struct ChartLegend: View {
             }
         }
         .accessibilityElement(children: .contain)
-        .onChange(of: OverflowSubject(mode: mode, center: model.center, hidden: hidden.map(\.key))) {
+        .onChange(of: OverflowSubject(mode: mode, center: model.center, hidden: Set(hidden.map(\.key)))) {
             if showsOverflow { showsOverflow = false }
         }
     }
