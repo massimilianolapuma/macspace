@@ -94,6 +94,93 @@ import Testing
     #expect(!set.isOpen("/u/1"))
 }
 
+private func processName(_ pid: pid_t) -> String {
+    var name = [UInt8](repeating: 0, count: 256)
+    proc_name(pid, &name, UInt32(name.count))
+    return String(decoding: name.prefix { $0 != 0 }, as: UTF8.self)
+}
+
+@Test func listCallEndings() {
+    #expect(OpenFileSet.listCall(result: 360, errno: 0) == .bytes(360))
+    // A process with no descriptors at all: the kernel fills 0 bytes and reports no error.
+    #expect(OpenFileSet.listCall(result: 0, errno: 0) == .bytes(0))
+    #expect(OpenFileSet.listCall(result: 0, errno: ESRCH) == .gone)
+    #expect(OpenFileSet.listCall(result: 0, errno: EPERM) == .failed(errno: EPERM))
+    #expect(OpenFileSet.listCall(result: -1, errno: EINVAL) == .failed(errno: EINVAL))
+}
+
+@Test func descriptorsWhosePathsCannotBeReadKeepTheSetComplete() {
+    let vnode = UInt32(PROX_FDTYPE_VNODE)
+    let fds = [proc_fdinfo(proc_fd: 0, proc_fdtype: vnode), proc_fdinfo(proc_fd: 1, proc_fdtype: vnode),
+               proc_fdinfo(proc_fd: 2, proc_fdtype: UInt32(PROX_FDTYPE_SOCKET))]
+    // Every path read fails (EBADF, ENOENT on a revoked terminal, EPERM…): skipped, still complete.
+    let unreadable = OpenFileSet.listing(fds, truncated: false) { _ in nil }
+    #expect(unreadable == .listed(paths: [], truncated: false))
+    #expect(OpenFileSet.collect(pids: [7]) { _ in unreadable }.isComplete)
+    // Only vnode descriptors are asked for.
+    var asked: [Int32] = []
+    let some = OpenFileSet.listing(fds, truncated: false) { fd in asked.append(fd); return fd == 1 ? "/u/f" : nil }
+    #expect(some == .listed(paths: ["/u/f"], truncated: false) && asked == [0, 1])
+    #expect(OpenFileSet.listing([], truncated: true) { _ in nil } == .listed(paths: [], truncated: true))
+}
+
+/// Starts `/bin/sleep 30` with `fileActions`, every other descriptor closed (`POSIX_SPAWN_CLOEXEC_DEFAULT`).
+private func spawnSleep(_ fileActions: inout posix_spawn_file_actions_t?) throws -> pid_t {
+    var attributes: posix_spawnattr_t?
+    posix_spawnattr_init(&attributes)
+    defer { posix_spawnattr_destroy(&attributes) }
+    posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_CLOEXEC_DEFAULT))
+    var pid: pid_t = 0
+    let argv: [UnsafeMutablePointer<CChar>?] = [strdup("/bin/sleep"), strdup("30"), nil]
+    defer { argv.forEach { free($0) } }
+    let code = posix_spawn(&pid, "/bin/sleep", &fileActions, &attributes, argv, nil)
+    try #require(code == 0)
+    return pid
+}
+
+private func reap(_ pid: pid_t) {
+    kill(pid, SIGKILL)
+    var status: Int32 = 0
+    waitpid(pid, &status, 0)
+}
+
+private func inspection(of pid: pid_t) throws -> OpenFileSet.Inspection {
+    let all = try #require(OpenFileSet.inspectAll())
+    return try #require(all.first { $0.pid == pid }).inspection
+}
+
+@Test func processWithNoDescriptorsIsListedEmpty() throws {   // review I2
+    var actions: posix_spawn_file_actions_t?
+    posix_spawn_file_actions_init(&actions)
+    defer { posix_spawn_file_actions_destroy(&actions) }
+    let pid = try spawnSleep(&actions)
+    defer { reap(pid) }
+    usleep(200_000)   // let it exec
+    #expect(try inspection(of: pid) == .listed(paths: [], truncated: false))
+    #expect(OpenFileSet.current().isComplete)
+}
+
+@Test func processHoldingARevokedTerminalKeepsTheSetComplete() throws {   // review I1
+    let master = posix_openpt(O_RDWR | O_NOCTTY)
+    try #require(master >= 0)
+    defer { close(master) }
+    try #require(grantpt(master) == 0 && unlockpt(master) == 0)
+    let slave = String(cString: try #require(ptsname(master)))
+    var actions: posix_spawn_file_actions_t?
+    posix_spawn_file_actions_init(&actions)
+    defer { posix_spawn_file_actions_destroy(&actions) }
+    posix_spawn_file_actions_addopen(&actions, 0, slave, O_RDWR | O_NOCTTY, 0)
+    let pid = try spawnSleep(&actions)
+    defer { reap(pid) }
+    usleep(200_000)
+    #expect(try inspection(of: pid) == .listed(paths: [slave], truncated: false))
+    // Its terminal is revoked (as when the session that owned it ends): the descriptor stays, but
+    // its path can no longer be read.
+    try #require(revoke(slave) == 0)
+    #expect(try inspection(of: pid) == .listed(paths: [], truncated: false))
+    #expect(OpenFileSet.current().isComplete)
+}
+
 /// Opt-in: `MACSPACE_OPENFILES=1 swift test --filter openFilesCompleteInNormalConditions`.
 /// Reads the open files repeatedly and prints any process of this user that could not be listed.
 @Test(.enabled(if: ProcessInfo.processInfo.environment["MACSPACE_OPENFILES"] == "1"))
@@ -108,9 +195,7 @@ func openFilesCompleteInNormalConditions() throws {
             case .otherUser: counts["otherUser", default: 0] += 1
             case let .failed(code):
                 counts["failed", default: 0] += 1
-                var name = [CChar](repeating: 0, count: 256)
-                proc_name(pid, &name, UInt32(name.count))
-                print("own process \(pid) \(String(cString: name)): errno \(code) (\(String(cString: strerror(code))))")
+                print("own process \(pid) \(processName(pid)): errno \(code) (\(String(cString: strerror(code))))")
             case let .listed(paths, truncated):
                 counts["listed", default: 0] += 1
                 counts["paths", default: 0] += paths.count

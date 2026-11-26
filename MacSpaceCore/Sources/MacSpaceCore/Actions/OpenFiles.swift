@@ -6,15 +6,24 @@ import Foundation
 /// processes of other users (root daemons, setuid helpers), which may not be inspected. It never
 /// reports a file that is not open.
 ///
-/// `isComplete` is false when a process this user owns might have an open file the set does not
-/// hold: the process list could not be read in full, or one of this user's processes could not be
-/// examined (its owner or its descriptor list could not be read, other than because it exited) or
-/// its descriptor list was still truncated after the retries. Then callers must not treat the set as
-/// authoritative (`ScanStore.trash` skips everything as `.cannotCheckOpenFiles`). Benign, and still
-/// complete: a process that exited meanwhile; another user's process; a descriptor closed meanwhile
-/// (`EBADF`); a descriptor whose file this process may not examine (`EPERM`/`EACCES`, as for files
-/// in Apple's protected data folders, seen on own-user system agents in normal use; such files are
-/// in folders the scan cannot list either, which are then unverified).
+/// `isComplete` is false exactly when one of these happened, so a file this user's processes hold
+/// open may be missing from the set:
+/// - the process list could not be read in full;
+/// - a process's owner could not be read, for a reason other than the process having exited;
+/// - a process of this user's descriptor list could not be read, for a reason other than the
+///   process having exited (a list of zero descriptors is a complete, empty list);
+/// - a process of this user's descriptor list was still truncated after the retries.
+/// Then callers must not treat the set as authoritative (`ScanStore.trash` skips everything as
+/// `.cannotCheckOpenFiles`). Anything else keeps it complete: a process that exited meanwhile, or
+/// another user's process (skipped).
+///
+/// Residual (documented): a descriptor whose path cannot be read, for whatever reason (any errno —
+/// closed meanwhile, a revoked terminal or dead vnode, a file this process may not examine, as on
+/// Apple's own agents in normal use — a short read, an empty path, a path with no NUL), is skipped:
+/// its file is not seen as open. Such files are assumed to sit in folders the scan cannot list
+/// either (a per-entry error makes a listing incomplete, so its folder is unverified), or to no
+/// longer name a file at all; that is reasoned, not proven for every case. Per-descriptor reasons
+/// are an open set, and counting any of them as incomplete would block every move.
 ///
 /// Paths are compared in NFC, byte by byte. The root-level symbolic links `/var`, `/tmp` and
 /// `/etc` are mapped to `/private/…` (the kernel's form) on both sides, so either spelling matches.
@@ -153,21 +162,43 @@ public struct OpenFileSet: Sendable {
             return failure(errno)
         }
         guard info.pbsi_uid == user else { return .otherUser }
-        let listed: (descriptors: ArraySlice<proc_fdinfo>, truncated: Bool)
         switch fds.descriptors(of: pid) {
-        case let .failure(error): return failure(error.code)
-        case let .success(value): listed = value
+        case let .failure(error):
+            return failure(error.code)
+        case let .success(listed):
+            return listing(listed.descriptors, truncated: listed.truncated) { vnodePath(pid: pid, fd: $0) }
         }
+    }
+
+    /// A process's inspection from its descriptor list: the paths `path` gives for its vnode
+    /// descriptors. A descriptor whose path cannot be read (nil) is skipped and leaves the listing
+    /// complete (see the type's residual); only `truncated` makes it incomplete.
+    static func listing(_ descriptors: some Sequence<proc_fdinfo>, truncated: Bool,
+                        path: (Int32) -> String?) -> Inspection {
         var paths: [String] = []
-        for fd in listed.descriptors where fd.proc_fdtype == UInt32(PROX_FDTYPE_VNODE) {
-            switch vnodePath(pid: pid, fd: fd.proc_fd) {
-            case .path(let path): paths.append(path)
-            case .skipped: continue
-            case .gone: return .gone
-            case .failed(let code): return .failed(errno: code)
-            }
+        for fd in descriptors where fd.proc_fdtype == UInt32(PROX_FDTYPE_VNODE) {
+            if let found = path(fd.proc_fd) { paths.append(found) }
         }
-        return .listed(paths: paths, truncated: listed.truncated)
+        return .listed(paths: paths, truncated: truncated)
+    }
+
+    /// How one `PROC_PIDLISTFDS` call ended.
+    enum ListCall: Equatable {
+        /// It filled this many bytes; 0 (with no error) means the process has no descriptors.
+        case bytes(Int)
+        /// The process exited (`ESRCH`).
+        case gone
+        case failed(errno: Int32)
+    }
+
+    /// Reads a `PROC_PIDLISTFDS` call's `result` and the `errno` it left (cleared before the call).
+    static func listCall(result: Int32, errno code: Int32) -> ListCall {
+        if result > 0 { return .bytes(Int(result)) }
+        switch code {
+        case 0: return .bytes(0)
+        case ESRCH: return .gone
+        default: return .failed(errno: code)
+        }
     }
 
     /// `.gone` for `ESRCH` (the process exited), else `.failed`.
@@ -184,23 +215,37 @@ public struct OpenFileSet: Sendable {
     private struct DescriptorBuffer {
         private var storage: [proc_fdinfo] = []
 
-        /// The pid's descriptors, and whether the table was still full after the retries (then the
-        /// ones read are valid, but there may be more); the `errno` when they cannot be read.
-        mutating func descriptors(of pid: pid_t) -> Result<(descriptors: ArraySlice<proc_fdinfo>, truncated: Bool), ProcError> {
+        /// The pid's descriptors (none for a process that has none), and whether the table was
+        /// still full after the retries (then the ones read are valid, but there may be more); the
+        /// `errno` when they cannot be read (`ESRCH`: it exited).
+        mutating func descriptors(
+            of pid: pid_t
+        ) -> Result<(descriptors: ArraySlice<proc_fdinfo>, truncated: Bool), ProcError> {
             let stride = MemoryLayout<proc_fdinfo>.stride
             errno = 0
-            let needed = Int(proc_pidinfo(pid, PROC_PIDLISTFDS, 0, nil, 0))
-            guard needed > 0 else { return .failure(ProcError(code: errno)) }
+            let estimate = proc_pidinfo(pid, PROC_PIDLISTFDS, 0, nil, 0)
+            let needed: Int
+            switch listCall(result: estimate, errno: errno) {
+            case .bytes(0): return .success(([], false))
+            case .bytes(let bytes): needed = bytes
+            case .gone: return .failure(ProcError(code: ESRCH))
+            case .failed(let code): return .failure(ProcError(code: code))
+            }
             var capacity = needed / stride + 32
             for attempt in 0..<4 {
                 if storage.count < capacity {
                     storage = [proc_fdinfo](repeating: proc_fdinfo(), count: capacity)
                 }
                 errno = 0
-                let bytes = Int(storage.withUnsafeMutableBytes {
+                let result = storage.withUnsafeMutableBytes {
                     proc_pidinfo(pid, PROC_PIDLISTFDS, 0, $0.baseAddress, Int32($0.count))
-                })
-                guard bytes > 0 else { return .failure(ProcError(code: errno)) }
+                }
+                let bytes: Int
+                switch listCall(result: result, errno: errno) {
+                case .bytes(let filled): bytes = filled
+                case .gone: return .failure(ProcError(code: ESRCH))
+                case .failed(let code): return .failure(ProcError(code: code))
+                }
                 let count = min(bytes / stride, storage.count)
                 if count < storage.count || attempt == 3 {
                     return .success((storage.prefix(count), count >= storage.count))
@@ -211,36 +256,16 @@ public struct OpenFileSet: Sendable {
         }
     }
 
-    /// What reading one descriptor's path gave.
-    private enum PathRead {
-        case path(String)
-        /// Benign: closed meanwhile (`EBADF`), a file this process may not examine (`EPERM`,
-        /// `EACCES`), or a vnode with no path.
-        case skipped
-        /// The process exited (`ESRCH`).
-        case gone
-        case failed(Int32)
-    }
-
-    private static func vnodePath(pid: pid_t, fd: Int32) -> PathRead {
+    /// The path of `pid`'s descriptor `fd`; nil when it cannot be read, for whatever reason (any
+    /// errno, a short read, an empty path, no NUL inside the buffer): the caller skips it.
+    private static func vnodePath(pid: pid_t, fd: Int32) -> String? {
         var info = vnode_fdinfowithpath()
         let size = Int32(MemoryLayout<vnode_fdinfowithpath>.size)
-        errno = 0
-        let read = proc_pidfdinfo(pid, fd, PROC_PIDFDVNODEPATHINFO, &info, size)
-        guard read == size else {
-            switch errno {
-            case EBADF, EPERM, EACCES: return .skipped
-            case ESRCH: return .gone
-            case 0: return .failed(EIO)   // a short read
-            case let code: return .failed(code)
-            }
-        }
-        return withUnsafeBytes(of: &info.pvip.vip_path) { raw -> PathRead in
+        guard proc_pidfdinfo(pid, fd, PROC_PIDFDVNODEPATHINFO, &info, size) == size else { return nil }
+        return withUnsafeBytes(of: &info.pvip.vip_path) { raw -> String? in
             let bytes = raw.prefix(while: { $0 != 0 })
-            if bytes.isEmpty { return .skipped }
-            // No NUL inside the buffer: the path was cut.
-            guard bytes.count < raw.count else { return .failed(ENAMETOOLONG) }
-            return .path(String(decoding: bytes, as: UTF8.self))
+            guard !bytes.isEmpty, bytes.count < raw.count else { return nil }
+            return String(decoding: bytes, as: UTF8.self)
         }
     }
 }
