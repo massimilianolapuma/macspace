@@ -1,33 +1,14 @@
 {
   "sourceLanguage" : "it",
   "strings" : {
+    "%@ cartelle non leggibili" : {
+
+    },
     "%@ file" : {
 
     },
     "%@ occupati: parte dello spazio è condivisa con copie APFS, la stima è per difetto" : {
 
-    },
-    "%lld cartelle non leggibili" : {
-      "localizations" : {
-        "it" : {
-          "variations" : {
-            "plural" : {
-              "one" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "%lld cartella non leggibile"
-                }
-              },
-              "other" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "%lld cartelle non leggibili"
-                }
-              }
-            }
-          }
-        }
-      }
     },
     "%lld di %lld" : {
 
@@ -97,6 +78,9 @@
           }
         }
       }
+    },
+    "1 cartella non leggibile" : {
+
     },
     "1–2 anni fa" : {
 
@@ -359,27 +343,11 @@
     "Nessun elemento spostato nel Cestino" : {
 
     },
-    "Nessun suggerimento nelle cartelle lette (%lld non leggibili)" : {
-      "localizations" : {
-        "it" : {
-          "variations" : {
-            "plural" : {
-              "one" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "Nessun suggerimento nelle cartelle lette (%lld non leggibile)"
-                }
-              },
-              "other" : {
-                "stringUnit" : {
-                  "state" : "translated",
-                  "value" : "Nessun suggerimento nelle cartelle lette (%lld non leggibili)"
-                }
-              }
-            }
-          }
-        }
-      }
+    "Nessun suggerimento nelle cartelle lette (%@ non leggibili)" : {
+
+    },
+    "Nessun suggerimento nelle cartelle lette (1 non leggibile)" : {
+
     },
     "Nessun suggerimento: qui è tutto in ordine" : {
 

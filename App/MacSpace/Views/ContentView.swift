@@ -164,7 +164,11 @@ struct ContentView: View {
     /// count never reads as the whole disk.
     private static func withUnreadable(_ line: String, _ summary: ScanSummary) -> String {
         guard summary.unreadable > 0 else { return line }
-        return line + " · " + String(localized: "\(summary.unreadable) cartelle non leggibili")
+        // Two strings rather than a catalog plural: the count is formatted like the file count.
+        let folders = summary.unreadable == 1
+            ? String(localized: "1 cartella non leggibile")
+            : String(localized: "\(Formatters.count(summary.unreadable)) cartelle non leggibili")
+        return line + " · " + folders
     }
 
     /// Scan state and file count (and the folders it could not read); the byte total lives only

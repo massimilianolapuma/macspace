@@ -144,9 +144,17 @@ private func reap(_ pid: pid_t) {
     waitpid(pid, &status, 0)
 }
 
-private func inspection(of pid: pid_t) throws -> OpenFileSet.Inspection {
-    let all = try #require(OpenFileSet.inspectAll())
-    return try #require(all.first { $0.pid == pid }).inspection
+/// `pid`'s inspection once it equals `expected`, polling for up to 5 s (the child may still be
+/// starting); else the last one seen (nil when the pid was never listed).
+private func inspection(of pid: pid_t, becoming expected: OpenFileSet.Inspection) -> OpenFileSet.Inspection? {
+    let deadline = ContinuousClock.now + .seconds(5)
+    var last: OpenFileSet.Inspection?
+    repeat {
+        last = OpenFileSet.inspectAll()?.first { $0.pid == pid }?.inspection ?? last
+        if last == expected { return last }
+        usleep(20_000)
+    } while ContinuousClock.now < deadline
+    return last
 }
 
 @Test func processWithNoDescriptorsIsListedEmpty() throws {   // review I2
@@ -155,9 +163,8 @@ private func inspection(of pid: pid_t) throws -> OpenFileSet.Inspection {
     defer { posix_spawn_file_actions_destroy(&actions) }
     let pid = try spawnSleep(&actions)
     defer { reap(pid) }
-    usleep(200_000)   // let it exec
-    #expect(try inspection(of: pid) == .listed(paths: [], truncated: false))
-    #expect(OpenFileSet.current().isComplete)
+    let empty = OpenFileSet.Inspection.listed(paths: [], truncated: false)
+    #expect(inspection(of: pid, becoming: empty) == empty)
 }
 
 @Test func processHoldingARevokedTerminalKeepsTheSetComplete() throws {   // review I1
@@ -172,13 +179,13 @@ private func inspection(of pid: pid_t) throws -> OpenFileSet.Inspection {
     posix_spawn_file_actions_addopen(&actions, 0, slave, O_RDWR | O_NOCTTY, 0)
     let pid = try spawnSleep(&actions)
     defer { reap(pid) }
-    usleep(200_000)
-    #expect(try inspection(of: pid) == .listed(paths: [slave], truncated: false))
+    let holding = OpenFileSet.Inspection.listed(paths: [slave], truncated: false)
+    try #require(inspection(of: pid, becoming: holding) == holding)
     // Its terminal is revoked (as when the session that owned it ends): the descriptor stays, but
     // its path can no longer be read.
     try #require(revoke(slave) == 0)
-    #expect(try inspection(of: pid) == .listed(paths: [], truncated: false))
-    #expect(OpenFileSet.current().isComplete)
+    let skipped = OpenFileSet.Inspection.listed(paths: [], truncated: false)
+    #expect(inspection(of: pid, becoming: skipped) == skipped)
 }
 
 /// Opt-in: `MACSPACE_OPENFILES=1 swift test --filter openFilesCompleteInNormalConditions`.

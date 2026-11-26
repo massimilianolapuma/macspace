@@ -65,8 +65,11 @@ struct SuggestionsView: View {
                     .font(.title2)
                     .foregroundStyle(FusionPalette.secondaryText(scheme))
                     .accessibilityHidden(true)
-                if model.unreadableFolders > 0 {
-                    message("Nessun suggerimento nelle cartelle lette (\(model.unreadableFolders) non leggibili)",
+                // Two strings rather than a catalog plural: the count is formatted like the file count.
+                if model.unreadableFolders == 1 {
+                    message("Nessun suggerimento nelle cartelle lette (1 non leggibile)", emphasized: true)
+                } else if model.unreadableFolders > 1 {
+                    message("Nessun suggerimento nelle cartelle lette (\(Formatters.count(model.unreadableFolders)) non leggibili)",
                             emphasized: true)
                 } else {
                     message("Nessun suggerimento: qui è tutto in ordine", emphasized: true)
