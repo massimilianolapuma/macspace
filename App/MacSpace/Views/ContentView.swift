@@ -157,9 +157,10 @@ struct ContentView: View {
                 Divider()
                 Button("Scegli cartella…") { choosingFolder = true }
             } label: {
-                Label(targetName, systemImage: target == .startupDisk ? "internaldrive" : "folder")
+                Label(Self.shortened(targetName), systemImage: target == .startupDisk ? "internaldrive" : "folder")
                     .labelStyle(.titleAndIcon)
             }
+            .help(Text(verbatim: targetName))
         }
         ToolbarItem(placement: .status) {
             ChartKindPicker(selection: $chart)
@@ -221,6 +222,17 @@ struct ContentView: View {
             model.pendingTrash = nil
             model.trashReport = nil
         }
+    }
+
+    /// Longest target name the toolbar shows; longer ones lose their middle, so the toolbar fits
+    /// at the window's minimum whatever folder was chosen. The help tag has the full name.
+    static let targetNameLimit = 24
+
+    /// `name` with its middle replaced by "…" when longer than `targetNameLimit` characters.
+    static func shortened(_ name: String) -> String {
+        guard name.count > targetNameLimit else { return name }
+        let keep = targetNameLimit - 1
+        return String(name.prefix(keep - keep / 2)) + "…" + String(name.suffix(keep / 2))
     }
 
     /// The target's name after resolving links, as the chart root shows it.
