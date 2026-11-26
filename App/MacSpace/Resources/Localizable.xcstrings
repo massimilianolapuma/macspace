@@ -256,6 +256,9 @@
     "Disco: %@ occupati" : {
 
     },
+    "Disco: %@ occupati su %@" : {
+
+    },
     "Disco: %@ occupati su %@. MacSpace conta %@ nelle cartelle che può leggere; il resto è spazio del sistema, istantanee APFS o cartelle non leggibili." : {
 
     },

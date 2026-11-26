@@ -91,6 +91,14 @@ struct SunburstView: View {
     private var accessibleSegments: some View {
         GeometryReader { proxy in
             let geometry = ChartGeometry(size: proxy.size)
+            if let disk = model.diskAtRoot {
+                // The center's disk line and its tooltip, as one element.
+                Color.clear
+                    .frame(width: 2 * geometry.centerRadius, height: 2 * geometry.centerRadius)
+                    .position(geometry.center)
+                    .accessibilityElement()
+                    .accessibilityLabel(Text(verbatim: disk.explanation(scanned: centerSize)))
+            }
             ForEach(LargestElements.of(model.segments) { $0.size }) { segment in
                 let subject = SegmentTooltip.Subject(segment: segment, verdict: segment.node.flatMap { model.verdicts[$0] })
                 let spot = geometry.point(angle: (segment.startAngle + segment.endAngle) / 2,
@@ -301,15 +309,21 @@ struct SunburstCenterLabel: View {
     @Environment(\.colorScheme) private var scheme
 
     var body: some View {
-        VStack(spacing: 2) {
-            CountingText(size) { Text(verbatim: Formatters.bytes($0)) }
-                .font(.system(size: geometry.centerFontSize, weight: .semibold))
-                .monospacedDigit()
-                .foregroundStyle(FusionPalette.primaryText(scheme))
-            Text(verbatim: name)
-                .font(.callout)
-                .foregroundStyle(FusionPalette.secondaryText(scheme))
-                .truncationMode(.middle)
+        // The disk line hangs under the name: the size and the name never move when it appears.
+        HangingLayout(gap: 2) {
+            VStack(spacing: 2) {
+                CountingText(size) { Text(verbatim: Formatters.bytes($0)) }
+                    .font(.system(size: geometry.centerFontSize, weight: .semibold))
+                    .monospacedDigit()
+                    .foregroundStyle(FusionPalette.primaryText(scheme))
+                Text(verbatim: name)
+                    .font(.callout)
+                    .foregroundStyle(FusionPalette.secondaryText(scheme))
+                    .truncationMode(.middle)
+            }
+            .lineLimit(1)
+            // Here, not on the layout: the disk line takes the width of this one.
+            .frame(width: geometry.centerRadius * 1.6)
             if let disk {
                 // A small disc has no room for it on one line: it wraps after the figure.
                 Text(verbatim: disk.line)
@@ -319,9 +333,28 @@ struct SunburstCenterLabel: View {
                     .lineLimit(2)
             }
         }
-        .lineLimit(1)
         .minimumScaleFactor(0.7)
         .multilineTextAlignment(.center)
-        .frame(width: geometry.centerRadius * 1.6)
+    }
+}
+
+/// Sized and placed by its first subview alone; a second one hangs `gap` below it, centred and as
+/// wide, outside its bounds (the content around never makes room for it, nor moves).
+private struct HangingLayout: Layout {
+    let gap: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        subviews.first?.sizeThatFits(proposal) ?? .zero
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        guard let main = subviews.first else { return }
+        main.place(at: bounds.origin, proposal: ProposedViewSize(bounds.size))
+        guard subviews.count > 1 else { return }
+        // A finite height, so the text wraps (and scales) to fit the width as it would in a stack.
+        let width = ProposedViewSize(width: bounds.width, height: 200)
+        let hanging = subviews[1].sizeThatFits(width)
+        subviews[1].place(at: CGPoint(x: bounds.midX, y: bounds.maxY + gap), anchor: .top,
+                          proposal: ProposedViewSize(width: bounds.width, height: hanging.height))
     }
 }

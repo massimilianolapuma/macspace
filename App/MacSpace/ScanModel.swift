@@ -86,10 +86,15 @@ final class ScanModel {
     /// The startup disk's used space and capacity, read when a startup-disk scan starts and again
     /// when it ends; nil for a folder scan, or when the volume does not report them.
     var disk: DiskUsage?
-    /// The disk's usage as a fact of its own: only at the root of a finished startup-disk scan
-    /// (while scanning, the scanned total would read as a progress towards it).
+    /// The disk's usage as a fact of its own: only at the root of a startup-disk scan that finished
+    /// (while scanning, the scanned total would read as a progress towards it; after a cancel, the
+    /// rest is not system space but simply not scanned). The breadcrumb must already show the root:
+    /// going up sets `center` before the views catch up.
     var diskAtRoot: DiskUsage? {
-        guard !isScanning, center == FileTree.root, !breadcrumb.isEmpty else { return nil }
+        // `isScanning` first: while scanning, `phase` (updated on every tick) is not read.
+        guard !isScanning, case let .done(summary) = phase, !summary.wasCancelled,
+              center == FileTree.root, breadcrumb.count == 1, breadcrumb[0].id == FileTree.root
+        else { return nil }
         return disk
     }
 
@@ -444,6 +449,11 @@ struct DiskUsage: Equatable {
     var line: String {
         let figure = String(Formatters.bytes(used).map { $0.isWhitespace ? "\u{00A0}" : $0 })
         return String(localized: "Disco: \(figure) occupati")
+    }
+
+    /// "Disco: 702,12 GB occupati su 994,61 GB": the chart's spoken summary.
+    var summary: String {
+        String(localized: "Disco: \(Formatters.bytes(used)) occupati su \(Formatters.bytes(capacity))")
     }
 
     /// The tooltip and the spoken label: used space and capacity, and why the scan counts less.
