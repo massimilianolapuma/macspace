@@ -56,7 +56,6 @@ struct BiggestListView: View {
         .frame(height: WindowLayout.rowHeight)
         .padding(.horizontal, WindowLayout.inspectorMargin)
         .padding(.top, WindowLayout.gap)
-        .padding(.bottom, 4)
     }
 
     private var rows: some View {
@@ -85,7 +84,7 @@ struct BiggestListView: View {
 
 private struct BiggestRow: View {
     /// From the checkbox column to the kind icon (and the header's title above it).
-    static let iconLead: CGFloat = 2
+    static let iconLead = WindowLayout.checkboxTextGap
 
     let model: ScanModel
     let row: NodeRow

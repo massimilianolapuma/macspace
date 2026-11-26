@@ -12,9 +12,12 @@ struct ContentView: View {
     @State private var showHistory = false
     /// The inspector's tab, kept here so hiding and showing the inspector keeps it.
     @State private var inspectorTab = SidebarView.Tab.items
-    /// Whether the inspector shows; app-wide and kept across launches (window restoration is off
-    /// whenever "Close windows when quitting an app" is on, the system default).
-    @AppStorage("inspectorShown") private var inspectorShown = true
+    /// Whether the inspector shows in this window. A new window starts with the last choice made in
+    /// any window, kept across launches (`lastInspectorShown`; window restoration is off whenever
+    /// "Close windows when quitting an app" is on, the system default).
+    @State private var inspectorShown = UserDefaults.standard.object(forKey: Self.inspectorShownKey) as? Bool ?? true
+    @AppStorage(Self.inspectorShownKey) private var lastInspectorShown = true
+    private static let inspectorShownKey = "inspectorShown"
     /// The path row's widest facts beside its narrowest path, measured (`BreadcrumbView.Narrowest`,
     /// `PathRowFacts.Widest`).
     @State private var pathRowNeed: CGFloat = 0
@@ -59,6 +62,7 @@ struct ContentView: View {
                 }
             }
             .goesUpOnMouseBack(model: model)
+            .onChange(of: inspectorShown) { lastInspectorShown = inspectorShown }
             .onChange(of: chart, initial: true) {
                 // Only relays out the current folder: a running scan carries on.
                 model.chart = chart
@@ -195,6 +199,7 @@ struct ContentView: View {
         ToolbarItem(placement: .primaryAction) {
             Button("Pannello", systemImage: "sidebar.trailing") { inspectorShown.toggle() }
                 .help(Text("Mostra o nasconde il pannello"))
+                .accessibilityValue(inspectorShown ? Text("Mostrato") : Text("Nascosto"))
         }
     }
 
@@ -424,7 +429,7 @@ struct PathRowFactsContent: View {
     static let progressWidth: CGFloat = 120
 
     var body: some View {
-        HStack(spacing: 4) {
+        HStack(spacing: WindowLayout.inlineSpacing) {
             if let total {
                 Text(verbatim: Formatters.bytes(total))
                     .fontWeight(.semibold)
@@ -464,7 +469,7 @@ struct PathRowFactsContent: View {
         Group {
             switch state {
             case let .scanning(progress, estimate):
-                HStack(spacing: 8) {
+                HStack(spacing: WindowLayout.gap) {
                     // The estimate needs the disk's used space; a chosen folder's total is unknown.
                     if let estimate, estimate.used > 0 {
                         let fraction = estimate.progress(bytesSeen: progress.bytesSeen)
@@ -490,7 +495,7 @@ struct PathRowFactsContent: View {
                     }
                 }
             case let .cancelled(files, unreadable):
-                HStack(spacing: 6) {
+                HStack(spacing: WindowLayout.inlineSpacing) {
                     Image(systemName: "pause.circle")
                         .accessibilityHidden(true)
                     Text(verbatim: Self.withUnreadable(

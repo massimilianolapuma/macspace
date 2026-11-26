@@ -22,7 +22,7 @@ struct SuggestionsView: View {
             empty
         } else {
             ScrollView {
-                LazyVStack(alignment: .leading, spacing: 18) {
+                LazyVStack(alignment: .leading, spacing: 2 * WindowLayout.gap) {
                     if wasCancelled {
                         note("Analisi interrotta: i suggerimenti possono essere incompleti",
                              systemImage: "pause.circle")
@@ -35,8 +35,7 @@ struct SuggestionsView: View {
                     }
                 }
                 .padding(.horizontal, WindowLayout.inspectorMargin - WindowLayout.chromeBleed)
-                .padding(.top, 12)
-                .padding(.bottom, 12)
+                .padding(.vertical, WindowLayout.gap)
             }
         }
     }
@@ -85,7 +84,7 @@ struct SuggestionsView: View {
         }
         .font(.callout)
         .multilineTextAlignment(.center)
-        .padding(24)
+        .padding(3 * WindowLayout.gap)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
@@ -136,7 +135,8 @@ private struct SuggestionSection: View {
                 Button(expanded ? "Mostra meno" : "Mostra tutti (\(suggestion.items.count))") { expanded.toggle() }
                     .buttonStyle(.link)
                     .font(.caption)
-                    .padding(.leading, 40)
+                    // Under the items' names.
+                    .padding(.leading, WindowLayout.chromeBleed + WindowLayout.rowSlot + WindowLayout.checkboxTextGap)
                     .padding(.vertical, 2)
             }
             HStack(spacing: 8) {
@@ -289,7 +289,7 @@ private struct SuggestionItemRow: View {
                 }
             }
         }
-        .padding(.leading, 2)
+        .padding(.leading, WindowLayout.checkboxTextGap)
         .padding(.trailing, WindowLayout.chromeBleed)
         .padding(.vertical, 6)
         .frame(maxWidth: .infinity, alignment: .leading)

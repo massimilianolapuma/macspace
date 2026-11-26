@@ -24,7 +24,7 @@ struct SidebarView: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            .accessibilityLabel(Text("Pannello"))
+            .accessibilityLabel(Text("Contenuto del pannello"))
             // Centered between the margins, on the path row's line across the window.
             .frame(maxWidth: .infinity)
             .frame(height: WindowLayout.rowHeight)
@@ -73,7 +73,7 @@ private struct SelectionBar: View {
             .controlSize(.regular)
         }
         .padding(.horizontal, WindowLayout.inspectorMargin)
-        .padding(.vertical, 12)
+        .padding(.vertical, WindowLayout.inspectorMargin)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(FusionPalette.tooltipFill(scheme))
         .overlay(alignment: .top) { Divider() }

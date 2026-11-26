@@ -19,6 +19,13 @@ enum WindowLayout {
     /// A list row's checkbox column, and the back button above it: the smallest comfortable target.
     static let rowSlot: CGFloat = 24
 
+    // Named exceptions to the 8 pt grid, inside one component rather than between elements.
+
+    /// Between the words, separators and marks of one line of text (the path row's facts).
+    static let inlineSpacing: CGFloat = 4
+    /// From the checkbox column to the text after it: AppKit's checkbox already leaves its own inset.
+    static let checkboxTextGap: CGFloat = 2
+
     /// The inspector's width range.
     static let inspectorMinWidth: CGFloat = 260
     static let inspectorIdealWidth: CGFloat = 300

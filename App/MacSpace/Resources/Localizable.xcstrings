@@ -205,6 +205,9 @@
     "Colori" : {
 
     },
+    "Contenuto del pannello" : {
+
+    },
     "Contiene dati di sistema di Apple" : {
 
     },
@@ -358,7 +361,13 @@
     "Mostra tutti (%lld)" : {
 
     },
+    "Mostrato" : {
+
+    },
     "Musica e audio" : {
+
+    },
+    "Nascosto" : {
 
     },
     "Nessun elemento" : {
