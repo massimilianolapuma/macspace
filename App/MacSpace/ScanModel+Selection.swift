@@ -174,14 +174,20 @@ extension ScanModel {
     /// Shows `node`: drills to its folder so it is a first-level element, then hovers it.
     func reveal(_ node: NodeID) {
         guard let store else { return }
+        let intent = noteUserIntent()
         Task {
-            guard let folder = await store.commonFolder(of: [node]), store === self.store else { return }
+            guard let folder = await store.commonFolder(of: [node]), store === self.store else {
+                abandonUserIntent(intent)
+                return
+            }
             if folder != center {
                 center = folder
                 hovered = nil
                 hoveredTile = nil
-                await refreshViews()
+                await refreshViews(userInitiated: true)
                 guard store === self.store, center == folder else { return }
+            } else {
+                abandonUserIntent(intent)
             }
             hoverFirstLevel(node)
         }

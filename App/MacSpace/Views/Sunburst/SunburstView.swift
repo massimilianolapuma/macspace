@@ -60,7 +60,7 @@ struct SunburstView: View {
             }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Text(verbatim: ChartAccessibility.label(for: model)))
+        .modifier(ChartAccessibility.Label(model: model))
         .chartUpAction(enabled: canGoUp) { model.goUp() }
         .accessibilityChildren { accessibleSegments }
         .onAppear {

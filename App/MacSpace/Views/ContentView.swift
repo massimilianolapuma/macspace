@@ -43,8 +43,8 @@ struct ContentView: View {
                 HStack(spacing: WindowLayout.pathRowSpacing) {
                     BreadcrumbView.Narrowest()
                     HStack(spacing: WindowLayout.inlineSpacing) {
-                        PathRowFacts.Widest()
                         WaitSlot(active: false)
+                        PathRowFacts.Widest()
                     }
                 }
                 .fixedSize()
@@ -105,6 +105,12 @@ struct ContentView: View {
             }
     }
 
+    /// Whether the status already shows a spinner of its own (a chosen folder's scan, whose total is
+    /// unknown): the wait slot then stays empty rather than add a second one.
+    private var statusShowsSpinner: Bool {
+        model.isScanning && !(model.disk.map { $0.used > 0 } ?? false)
+    }
+
     /// Below the scan root, with no sheet up (the Trash confirmation or its result, the onboarding,
     /// the folder picker): what the mouse's back button also requires.
     private var canGoUp: Bool {
@@ -121,9 +127,10 @@ struct ContentView: View {
                 HStack(spacing: WindowLayout.pathRowSpacing) {
                     BreadcrumbView(model: model)
                     // Never cut: the path gives way first.
+                    // The spinner comes first, so the facts end flush with the chart's trailing edge.
                     HStack(spacing: WindowLayout.inlineSpacing) {
-                        PathRowFacts(model: model, showsTotal: chart == .treemap)
-                        WaitSlot(active: model.isWaiting)
+                        WaitSlot(active: model.isWaiting && !statusShowsSpinner)
+                        PathRowFacts(model: model, showsTotal: model.shownChart == .treemap)
                     }
                     .layoutPriority(1)
                 }
@@ -131,7 +138,9 @@ struct ContentView: View {
                 // The path's text, not its hover highlight, lines up with the chart's edge.
                 .padding(.leading, -WindowLayout.chromeBleed)
                 Group {
-                    switch chart {
+                    // What last landed, not the picked kind: a chart switch keeps the old chart up
+                    // until the new one's data arrives.
+                    switch model.shownChart {
                     case .sunburst: SunburstView(model: model, colorMode: colorMode)
                     case .treemap: TreemapView(model: model, colorMode: colorMode)
                     }
@@ -139,9 +148,10 @@ struct ContentView: View {
                 .reportsChartSize(to: model)
                 // Work the user asked for is under way: the chart on screen stays (a click on it
                 // would act on a stale layout, so it takes none) but dims.
-                .opacity(model.isWaiting ? Self.waitingOpacity : 1)
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.15)) {
+                    $0.opacity(model.isWaiting ? Self.waitingOpacity : 1)
+                }
                 .allowsHitTesting(!model.isWaiting)
-                .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: model.isWaiting)
                 ChartLegend(model: model, mode: colorMode)
             }
             .padding(WindowLayout.windowMargin)
