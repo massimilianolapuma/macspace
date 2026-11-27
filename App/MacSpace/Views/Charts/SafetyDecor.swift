@@ -82,6 +82,18 @@ enum SafetyDecor {
                        style: style(mark.lineWidth))
     }
 
+    /// How much of an element outside the spotlight still shows: the window background is laid over it
+    /// at `1 - spotlightRest`.
+    static let spotlightRest = 0.32
+
+    /// Dims the whole canvas except `holes` (the spotlit elements, and the sunburst's center disc).
+    static func spotlightMask(sparing holes: Path, size: CGSize, scheme: ColorScheme, in context: GraphicsContext) {
+        var masked = context
+        masked.clip(to: holes, options: .inverse)
+        masked.fill(Path(CGRect(origin: .zero, size: size)),
+                    with: .color(FusionPalette.background(scheme).opacity(1 - spotlightRest)))
+    }
+
     /// Whether an element `width` × `height` pt has room for a standalone lock.
     static func fitsLock(width: Double, height: Double) -> Bool {
         width >= lockMinSide && height >= lockMinSide
