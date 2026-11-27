@@ -10,24 +10,118 @@ struct ContentView: View {
     @State private var choosingFolder = false
     @State private var showOnboarding = false
     @State private var showHistory = false
+    /// The inspector's tab, kept here so hiding and showing the inspector keeps it.
+    @State private var inspectorTab = SidebarView.Tab.items
+    /// Whether the inspector shows in this window. A new window starts with the last choice made in
+    /// any window, kept across launches (`lastInspectorShown`; window restoration is off whenever
+    /// "Close windows when quitting an app" is on, the system default).
+    @State private var inspectorShown = UserDefaults.standard.object(forKey: Self.inspectorShownKey) as? Bool ?? true
+    @AppStorage(Self.inspectorShownKey) private var lastInspectorShown = true
+    private static let inspectorShownKey = "inspectorShown"
+    /// The path row's widest facts beside its narrowest path, measured (`BreadcrumbView.Narrowest`,
+    /// `PathRowFacts.Widest`); until the first measurement, the value measured with the system font.
+    @State private var pathRowNeed = WindowLayout.measuredPathRowNeed
     /// Shared by every window (`MacSpaceApp`); starts itself once, on the first window.
     @Environment(SafetyEnvironmentProvider.self) private var safety
     @AppStorage(ColorMode.storageKey) private var colorMode: ColorMode = .deletable
     @AppStorage(ChartKind.storageKey) private var chart: ChartKind = .sunburst
     @Environment(\.colorScheme) private var scheme
 
+
     var body: some View {
-        HStack(spacing: 0) {
-            VStack(spacing: 0) {
-                HStack(spacing: 12) {
-                    BreadcrumbView(model: model)
-                    if chart == .treemap {
-                        FolderTotal(size: model.breadcrumb.last?.size ?? 0, disk: model.diskAtRoot)
-                    }
+        content
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            // Wide enough for the path row's widest facts beside the narrowest path, whatever the
+            // inspector's width (the window's minimum adds the inspector's); without the inspector,
+            // also for the toolbar, which then spans the content alone.
+            .frame(minWidth: max(pathRowNeed + 2 * WindowLayout.windowMargin,
+                                 inspectorShown ? 0 : WindowLayout.minToolbarWidth),
+                   minHeight: WindowLayout.minContentHeight)
+            .background {
+                HStack(spacing: WindowLayout.pathRowSpacing) {
+                    BreadcrumbView.Narrowest()
+                    PathRowFacts.Widest()
                 }
-                .padding(.horizontal, 12)
-                .frame(height: 40)
-                .opacity(model.breadcrumb.isEmpty ? 0 : 1)
+                .fixedSize()
+                .hidden()
+                .accessibilityHidden(true)
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { pathRowNeed = ceil($0) }
+            }
+            // One surface from the window's top edge down: the toolbar floats over it, no band.
+            .containerBackground(FusionPalette.background(scheme), for: .window)
+            .toolbarBackgroundVisibility(.hidden, for: .windowToolbar)
+            .inspector(isPresented: $inspectorShown) {
+                SidebarView(model: model, colorMode: colorMode, tab: $inspectorTab)
+                    .inspectorColumnWidth(min: WindowLayout.inspectorMinWidth, ideal: WindowLayout.inspectorIdealWidth,
+                                          max: WindowLayout.inspectorMaxWidth)
+            }
+            .focusedSceneValue(\.goUp, canGoUp ? GoUpAction(model: model) : nil)
+            .background {
+                // ⌘[ also goes up a level, as in Finder (⌘↑ is "Vai › Cartella superiore").
+                Button { model.goUp() } label: { EmptyView() }
+                    .keyboardShortcut("[", modifiers: .command)
+                    .disabled(!canGoUp)
+                    .opacity(0)
+                    .accessibilityHidden(true)
+            }
+            .goesUpOnMouseBack(model: model)
+            .onChange(of: inspectorShown) { lastInspectorShown = inspectorShown }
+            .onChange(of: chart, initial: true) {
+                // Only relays out the current folder: a running scan carries on.
+                model.chart = chart
+            }
+            .onChange(of: safety.revision, initial: true) {
+                model.updateEnvironment(safety.environment)
+            }
+            .task { safety.start() }
+            .navigationTitle(Text(verbatim: model.breadcrumb.last?.name ?? "MacSpace"))
+            .toolbar(removing: .title)
+            .toolbar { toolbar }
+            .fileImporter(isPresented: $choosingFolder, allowedContentTypes: [.folder]) { result in
+                if case let .success(url) = result {
+                    // Resolved here, once: the toolbar reads the name on every progress update.
+                    chosenFolder = (url, ScanModel.root(of: .folder(url)).name)
+                    target = .folder(url)
+                }
+            }
+            .onChange(of: target) {
+                // Picking another target mid-scan replaces the running scan.
+                if model.isScanning { startScan() }
+            }
+            .sheet(isPresented: $showOnboarding) {
+                OnboardingView(dismiss: { showOnboarding = false })
+            }
+            .sheet(isPresented: trashSheetShown) {
+                TrashSheet(model: model)
+            }
+            .onAppear { showOnboarding = !FullDiskAccess.isGranted }
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+                if FullDiskAccess.isGranted { showOnboarding = false }
+            }
+    }
+
+    /// Below the scan root, with no sheet up (the Trash confirmation or its result, the onboarding,
+    /// the folder picker): what the mouse's back button also requires.
+    private var canGoUp: Bool {
+        model.breadcrumb.count > 1 && model.pendingTrash == nil && model.trashReport == nil
+            && !showOnboarding && !choosingFolder
+    }
+
+    /// Before any scan, one empty state; from the moment a scan starts, the path row, the chart and
+    /// the legend row, at fixed places.
+    @ViewBuilder
+    private var content: some View {
+        if model.hasScan {
+            VStack(spacing: WindowLayout.gap) {
+                HStack(spacing: WindowLayout.pathRowSpacing) {
+                    BreadcrumbView(model: model)
+                    // Never cut: the path gives way first.
+                    PathRowFacts(model: model, showsTotal: chart == .treemap)
+                        .layoutPriority(1)
+                }
+                .frame(height: WindowLayout.rowHeight)
+                // The path's text, not its hover highlight, lines up with the chart's edge.
+                .padding(.leading, -WindowLayout.chromeBleed)
                 Group {
                     switch chart {
                     case .sunburst: SunburstView(model: model, colorMode: colorMode)
@@ -35,59 +129,15 @@ struct ContentView: View {
                     }
                 }
                 .reportsChartSize(to: model)
-                .padding(.horizontal, 8)
-                .padding(.bottom, 4)
                 ChartLegend(model: model, mode: colorMode)
-                    .padding(.horizontal, 16)
-                    .padding(.bottom, 12)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            Divider()
-            SidebarView(model: model, colorMode: colorMode)
-                .frame(width: 300)
-                .frame(maxHeight: .infinity)
-        }
-        .frame(minWidth: 760, minHeight: 520)
-        .background(FusionPalette.background(scheme))
-        .background {
-            // ⌘↑ goes up a level, as in Finder.
-            Button { model.goUp() } label: { EmptyView() }
-                .keyboardShortcut(.upArrow, modifiers: .command)
-                .disabled(model.breadcrumb.count < 2)
-                .opacity(0)
-                .accessibilityHidden(true)
-        }
-        .onChange(of: chart, initial: true) {
-            // Only relays out the current folder: a running scan carries on.
-            model.chart = chart
-        }
-        .onChange(of: safety.revision, initial: true) {
-            model.updateEnvironment(safety.environment)
-        }
-        .task { safety.start() }
-        .navigationTitle(Text(verbatim: model.breadcrumb.last?.name ?? "MacSpace"))
-        .toolbar(removing: .title)
-        .toolbar { toolbar }
-        .fileImporter(isPresented: $choosingFolder, allowedContentTypes: [.folder]) { result in
-            if case let .success(url) = result {
-                // Resolved here, once: the toolbar reads the name on every progress update.
-                chosenFolder = (url, ScanModel.root(of: .folder(url)).name)
-                target = .folder(url)
+            .padding(WindowLayout.windowMargin)
+        } else {
+            ContentUnavailableView {
+                Label("Nessuna analisi", systemImage: "internaldrive")
+            } description: {
+                Text("Scegli cosa analizzare e premi Analizza")
             }
-        }
-        .onChange(of: target) {
-            // Picking another target mid-scan replaces the running scan.
-            if model.isScanning { startScan() }
-        }
-        .sheet(isPresented: $showOnboarding) {
-            OnboardingView(dismiss: { showOnboarding = false })
-        }
-        .sheet(isPresented: trashSheetShown) {
-            TrashSheet(model: model)
-        }
-        .onAppear { showOnboarding = !FullDiskAccess.isGranted }
-        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
-            if FullDiskAccess.isGranted { showOnboarding = false }
         }
     }
 
@@ -107,9 +157,10 @@ struct ContentView: View {
                 Divider()
                 Button("Scegli cartella…") { choosingFolder = true }
             } label: {
-                Label(targetName, systemImage: target == .startupDisk ? "internaldrive" : "folder")
+                Label(Self.shortened(targetName), systemImage: target == .startupDisk ? "internaldrive" : "folder")
                     .labelStyle(.titleAndIcon)
             }
+            .help(Text(verbatim: targetName))
         }
         ToolbarItem(placement: .status) {
             ChartKindPicker(selection: $chart)
@@ -129,9 +180,6 @@ struct ContentView: View {
             }
             .help(Text("Colori"))
         }
-        ToolbarItem(placement: .status) {
-            ScanStatus(model: model)
-        }
         ToolbarItem(placement: .primaryAction) {
             if !model.history.isEmpty {
                 Button("Cronologia", systemImage: "clock.arrow.circlepath") { showHistory.toggle() }
@@ -149,6 +197,11 @@ struct ContentView: View {
                 Button("Analizza", systemImage: "play.fill") { startScan() }
                     .labelStyle(.titleAndIcon)
             }
+        }
+        ToolbarItem(placement: .primaryAction) {
+            Button("Pannello", systemImage: "sidebar.trailing") { inspectorShown.toggle() }
+                .help(Text("Mostra o nasconde il pannello"))
+                .accessibilityValue(inspectorShown ? Text("Mostrato") : Text("Nascosto"))
         }
     }
 
@@ -169,6 +222,17 @@ struct ContentView: View {
             model.pendingTrash = nil
             model.trashReport = nil
         }
+    }
+
+    /// Longest target name the toolbar shows; longer ones lose their middle, so the toolbar fits
+    /// at the window's minimum whatever folder was chosen. The help tag has the full name.
+    static let targetNameLimit = 24
+
+    /// `name` with its middle replaced by "…" when longer than `targetNameLimit` characters.
+    static func shortened(_ name: String) -> String {
+        guard name.count > targetNameLimit else { return name }
+        let keep = targetNameLimit - 1
+        return String(name.prefix(keep - keep / 2)) + "…" + String(name.suffix(keep / 2))
     }
 
     /// The target's name after resolving links, as the chart root shows it.
@@ -209,6 +273,69 @@ private extension View {
     func reportsChartSize(to model: ScanModel) -> some View { modifier(ChartSizeReporter(model: model)) }
 }
 
+private extension View {
+    /// The mouse's back button (button 3) goes up a level, as in Finder.
+    func goesUpOnMouseBack(model: ScanModel) -> some View { modifier(MouseBackGoesUp(model: model)) }
+}
+
+/// Watches the mouse's back button while the window's content is on screen. Only clicks in this
+/// window count, and none while a sheet (the Trash confirmation, the folder picker) is up.
+private struct MouseBackGoesUp: ViewModifier {
+    let model: ScanModel
+    @State private var window = WindowReference()
+    @State private var monitor: Any?
+
+    func body(content: Content) -> some View {
+        content
+            .background(WindowReader(reference: window))
+            .onAppear {
+                guard monitor == nil else { return }
+                monitor = NSEvent.addLocalMonitorForEvents(matching: .otherMouseDown) { [window, model] event in
+                    // Local monitors run on the main thread.
+                    let handled = MainActor.assumeIsolated {
+                        guard event.buttonNumber == 3, let own = window.window, event.window === own,
+                              own.attachedSheet == nil, model.breadcrumb.count > 1
+                        else { return false }
+                        model.goUp()
+                        return true
+                    }
+                    return handled ? nil : event
+                }
+            }
+            .onDisappear {
+                if let monitor { NSEvent.removeMonitor(monitor) }
+                monitor = nil
+            }
+    }
+}
+
+/// The window a view is in, once it is in one.
+@MainActor
+private final class WindowReference {
+    weak var window: NSWindow?
+}
+
+private struct WindowReader: NSViewRepresentable {
+    let reference: WindowReference
+
+    func makeNSView(context: Context) -> ReaderView {
+        let view = ReaderView()
+        view.reference = reference
+        return view
+    }
+
+    func updateNSView(_ view: ReaderView, context: Context) {}
+
+    final class ReaderView: NSView {
+        var reference: WindowReference?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            reference?.window = window
+        }
+    }
+}
+
 private struct OnboardingView: View {
     let dismiss: () -> Void
 
@@ -247,68 +374,152 @@ private struct OnboardingView: View {
     }
 }
 
-/// The toolbar's scan state, file count and bytes counted so far (and, once done, the folders it
-/// could not read). While a startup-disk scan runs, an estimated progress bar against the
-/// disk's used space; scanning a folder (whose total is unknown), a spinner.
-/// Reads the progress itself, so the content view is not re-evaluated on every progress update.
-struct ScanStatus: View {
+/// The path row's trailing side: the scan's state and, in the treemap (which has no center to show
+/// them in), the current folder's total and, at the root of a finished startup-disk scan, the
+/// disk's used space: "<totale> · <N file…> · Disco: <usato> occupati".
+///
+/// The scan's state: while scanning, an estimated progress bar against the disk's used space (a
+/// spinner for a chosen folder, whose total is unknown) and "Analisi in corso… <file> · <byte>";
+/// once done, at the root only, "<N> file" (it describes the whole scan, not a subfolder); after a
+/// cancel, "Analisi interrotta · <N> file" at every level, since everything shown is partial. The
+/// unreadable folders follow the count. Reads the progress itself, so the content view is not
+/// re-evaluated on every progress update.
+struct PathRowFacts: View {
     let model: ScanModel
+    let showsTotal: Bool
+
+    var body: some View {
+        let atRoot = model.breadcrumb.count == 1
+        // While a scan runs at the root, its bytes are the folder's total: no second figure.
+        let total = showsTotal && !(model.isScanning && atRoot) ? model.breadcrumb.last?.size : nil
+        PathRowFactsContent(total: total, state: state(atRoot: atRoot), disk: showsTotal ? model.diskAtRoot : nil)
+    }
+
+    private func state(atRoot: Bool) -> PathRowFactsContent.State? {
+        switch model.phase {
+        case .idle: nil
+        case let .scanning(progress): .scanning(progress, estimate: model.disk)
+        case let .done(summary) where summary.wasCancelled:
+            .cancelled(files: summary.files, unreadable: summary.unreadable)
+        case let .done(summary): atRoot ? .finished(files: summary.files, unreadable: summary.unreadable) : nil
+        }
+    }
+
+    /// The widest facts the row can show, hidden, for the window's minimum: a subfolder's total with
+    /// a scan's progress, a cancel, and a startup disk's root with its disk line, each with the
+    /// widest figures.
+    struct Widest: View {
+        var body: some View {
+            let total: UInt64 = 888_880_000_000
+            let disk = DiskUsage(used: 888_880_000_000, capacity: 999_990_000_000)
+            ZStack {
+                PathRowFactsContent(total: total, state: .scanning(
+                    ScanProgress(filesSeen: 8_888_888, bytesSeen: total, directoriesPending: 1), estimate: disk),
+                    disk: nil)
+                PathRowFactsContent(total: total, state: .cancelled(files: 8_888_888, unreadable: 88_888), disk: nil)
+                PathRowFactsContent(total: total, state: .finished(files: 8_888_888, unreadable: 88_888), disk: disk)
+            }
+            .fixedSize()
+        }
+    }
+}
+
+/// `PathRowFacts`' content, from plain values.
+struct PathRowFactsContent: View {
+    enum State {
+        /// `estimate`: the disk whose used space the progress is estimated against (nil: a folder).
+        case scanning(ScanProgress, estimate: DiskUsage?)
+        case cancelled(files: Int, unreadable: Int)
+        case finished(files: Int, unreadable: Int)
+    }
+
+    let total: UInt64?
+    let state: State?
+    let disk: DiskUsage?
+    @Environment(\.colorScheme) private var scheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     static let progressWidth: CGFloat = 120
 
     var body: some View {
-        switch model.phase {
-        case let .scanning(progress):
-            HStack(spacing: 8) {
-                // The estimate needs the disk's used space; a chosen folder's total is unknown.
-                if let disk = model.disk, disk.used > 0 {
-                    let fraction = disk.progress(bytesSeen: progress.bytesSeen)
-                    ProgressView(value: fraction)
-                        .progressViewStyle(.linear)
-                        .controlSize(.small)
-                        .frame(width: Self.progressWidth)
-                        .animation(reduceMotion ? nil : .easeOut(duration: 0.24), value: fraction)
-                        .accessibilityLabel(Text("Avanzamento stimato"))
-                        .accessibilityValue(Text("circa \(Int((fraction * 100).rounded()))%"))
-                } else {
-                    ProgressView()
-                        .controlSize(.small)
-                }
-                ZStack(alignment: .leading) {
-                    // The widest line it is likely to reach, hidden: the width holds while the
-                    // numbers grow, so the toolbar never shifts.
-                    Self.line(files: 8_888_888, bytes: Formatters.bytes(888_880_000_000)).hidden()
-                    CountingText(UInt64(progress.filesSeen)) {
-                        Self.line(files: Int($0), bytes: Formatters.bytes(progress.bytesSeen))
-                    }
-                    .animation(reduceMotion ? nil : .easeOut(duration: 0.24), value: progress.filesSeen)
-                }
-                .monospacedDigit()
-                .lineLimit(1)
-                .fixedSize()
+        HStack(spacing: WindowLayout.inlineSpacing) {
+            if let total {
+                Text(verbatim: Formatters.bytes(total))
+                    .fontWeight(.semibold)
+                    .foregroundStyle(FusionPalette.primaryText(scheme))
+                    .help(disk.map { Text(verbatim: $0.explanation(scanned: total)) } ?? Text(verbatim: ""))
+                    .accessibilityLabel(Text(verbatim: disk.map {
+                        Formatters.bytes(total) + ". " + $0.explanation(scanned: total)
+                    } ?? Formatters.bytes(total)))
             }
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 12)
-        case let .done(summary) where summary.wasCancelled:
-            HStack(spacing: 6) {
-                Image(systemName: "pause.circle")
-                Text(verbatim: Self.withUnreadable(
-                    String(localized: "Analisi interrotta · \(Formatters.count(summary.files)) file"), summary))
-                    .monospacedDigit()
-                    .lineLimit(1)
+            if let state {
+                if total != nil { separator }
+                status(state)
             }
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 12)
-        case let .done(summary):
-            Text(verbatim: Self.withUnreadable(String(localized: "\(Formatters.count(summary.files)) file"), summary))
-                .monospacedDigit()
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .padding(.horizontal, 12)
-        case .idle:
-            EmptyView()
+            if let disk, let total {
+                separator
+                Text(verbatim: disk.line)
+                    .foregroundStyle(FusionPalette.secondaryText(scheme))
+                    .help(Text(verbatim: disk.explanation(scanned: total)))
+                    // Spoken with the total.
+                    .accessibilityHidden(true)
+            }
         }
+        .monospacedDigit()
+        .lineLimit(1)
+        .fixedSize()
+    }
+
+    private var separator: some View {
+        Text(verbatim: "·")
+            .foregroundStyle(FusionPalette.secondaryText(scheme))
+            .accessibilityHidden(true)
+    }
+
+    /// One VoiceOver element, with the words the toolbar status had.
+    @ViewBuilder
+    private func status(_ state: State) -> some View {
+        Group {
+            switch state {
+            case let .scanning(progress, estimate):
+                HStack(spacing: WindowLayout.gap) {
+                    // The estimate needs the disk's used space; a chosen folder's total is unknown.
+                    if let estimate, estimate.used > 0 {
+                        let fraction = estimate.progress(bytesSeen: progress.bytesSeen)
+                        ProgressView(value: fraction)
+                            .progressViewStyle(.linear)
+                            .controlSize(.small)
+                            .frame(width: Self.progressWidth)
+                            .animation(reduceMotion ? nil : .easeOut(duration: 0.24), value: fraction)
+                            .accessibilityLabel(Text("Avanzamento stimato"))
+                            .accessibilityValue(Text("circa \(Int((fraction * 100).rounded()))%"))
+                    } else {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                    ZStack(alignment: .leading) {
+                        // The widest line it is likely to reach, hidden: the width holds while the
+                        // numbers grow, so the row never shifts.
+                        Self.line(files: 8_888_888, bytes: Formatters.bytes(888_880_000_000)).hidden()
+                        CountingText(UInt64(progress.filesSeen)) {
+                            Self.line(files: Int($0), bytes: Formatters.bytes(progress.bytesSeen))
+                        }
+                        .animation(reduceMotion ? nil : .easeOut(duration: 0.24), value: progress.filesSeen)
+                    }
+                }
+            case let .cancelled(files, unreadable):
+                HStack(spacing: WindowLayout.inlineSpacing) {
+                    Image(systemName: "pause.circle")
+                        .accessibilityHidden(true)
+                    Text(verbatim: Self.withUnreadable(
+                        String(localized: "Analisi interrotta · \(Formatters.count(files)) file"), unreadable))
+                }
+            case let .finished(files, unreadable):
+                Text(verbatim: Self.withUnreadable(String(localized: "\(Formatters.count(files)) file"), unreadable))
+            }
+        }
+        .foregroundStyle(FusionPalette.secondaryText(scheme))
+        .accessibilityElement(children: .combine)
     }
 
     /// "Analisi in corso… <files> file · <bytes>".
@@ -318,41 +529,12 @@ struct ScanStatus: View {
 
     /// `line`, then " · N cartelle non leggibili" when the scan could not read some folders, so the
     /// count never reads as the whole disk.
-    private static func withUnreadable(_ line: String, _ summary: ScanSummary) -> String {
-        guard summary.unreadable > 0 else { return line }
+    private static func withUnreadable(_ line: String, _ unreadable: Int) -> String {
+        guard unreadable > 0 else { return line }
         // Two strings rather than a catalog plural: the count is formatted like the file count.
-        let folders = summary.unreadable == 1
+        let folders = unreadable == 1
             ? String(localized: "1 cartella non leggibile")
-            : String(localized: "\(Formatters.count(summary.unreadable)) cartelle non leggibili")
+            : String(localized: "\(Formatters.count(unreadable)) cartelle non leggibili")
         return line + " · " + folders
-    }
-}
-
-/// The current folder's size, for the treemap, which has no center to show it in as the sunburst
-/// does; at the root of a finished startup-disk scan, the disk's used space after it, as a fact of
-/// its own.
-struct FolderTotal: View {
-    let size: UInt64
-    /// nil: no disk line.
-    let disk: DiskUsage?
-    @Environment(\.colorScheme) private var scheme
-
-    var body: some View {
-        HStack(spacing: 4) {
-            Text(verbatim: Formatters.bytes(size))
-                .fontWeight(.semibold)
-                .foregroundStyle(FusionPalette.primaryText(scheme))
-            if let disk {
-                Text(verbatim: "· " + disk.line)
-                    .foregroundStyle(FusionPalette.secondaryText(scheme))
-                    .help(Text(verbatim: disk.explanation(scanned: size)))
-            }
-        }
-        .monospacedDigit()
-        .lineLimit(1)
-        .fixedSize()
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Text(verbatim: disk.map { Formatters.bytes(size) + ". " + $0.explanation(scanned: size) }
-                                     ?? Formatters.bytes(size)))
     }
 }

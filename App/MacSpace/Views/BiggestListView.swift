@@ -11,27 +11,51 @@ struct BiggestListView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             if !model.biggest.isEmpty, let folder = model.breadcrumb.last {
-                Text("Più pesanti in \(folder.name)")
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(FusionPalette.secondaryText(scheme))
-                    .padding(.horizontal, 18)
-                    .padding(.top, 14)
-                    .padding(.bottom, 6)
-                    .accessibilityAddTraits(.isHeader)
+                header(folder)
             }
-            if isIdle {
-                Text("Gli elementi più pesanti appariranno qui")
-                    .font(.callout)
-                    .foregroundStyle(FusionPalette.secondaryText(scheme))
-                    .multilineTextAlignment(.center)
-                    .padding(24)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
+            if model.hasScan {
                 rows
+            } else {
+                ContentUnavailableView {
+                    Label("Nessun elemento", systemImage: "list.bullet")
+                } description: {
+                    Text("Gli elementi più pesanti appariranno qui")
+                }
+                // Centered on the content area's middle, level with the chart's empty state: the
+                // segmented control's block above it is balanced below.
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .padding(.bottom, WindowLayout.windowMargin + WindowLayout.rowHeight)
             }
         }
+    }
+
+    /// Back up a level, above the checkbox column, then "Più pesanti in <cartella>" over the names.
+    private func header(_ folder: NodeRow) -> some View {
+        let parent = model.breadcrumb.dropLast().last
+        return HStack(spacing: 0) {
+            Button { model.goUp() } label: {
+                Image(systemName: "chevron.left")
+                    .font(.body.weight(.semibold))
+                    .imageScale(.small)
+                    .frame(width: WindowLayout.rowSlot - 2 * CrumbButtonStyle.horizontalPadding,
+                           height: WindowLayout.rowSlot - 2 * CrumbButtonStyle.verticalPadding)
+            }
+            .buttonStyle(CrumbButtonStyle())
+            // Disabled, not hidden, at the scan root: the title never moves.
+            .disabled(parent == nil)
+            .help(parent.map { Text("Torna a \($0.name)") } ?? Text(verbatim: ""))
+            .accessibilityLabel(parent.map { Text("Torna a \($0.name)") } ?? Text("Torna su"))
+            Text("Più pesanti in \(folder.name)")
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(FusionPalette.secondaryText(scheme))
+                .padding(.leading, BiggestRow.iconLead)
+                .accessibilityAddTraits(.isHeader)
+        }
+        .frame(height: WindowLayout.rowHeight)
+        .padding(.horizontal, WindowLayout.inspectorMargin)
+        .padding(.top, WindowLayout.gap)
     }
 
     private var rows: some View {
@@ -44,14 +68,9 @@ struct BiggestListView: View {
                                open: { model.drill(into: row.id) })
                 }
             }
-            .padding(.horizontal, 8)
-            .padding(.bottom, 8)
+            .padding(.horizontal, WindowLayout.inspectorMargin - WindowLayout.chromeBleed)
+            .padding(.bottom, WindowLayout.gap)
         }
-    }
-
-    private var isIdle: Bool {
-        if case .idle = model.phase { return true }
-        return false
     }
 
     private func hover(_ row: NodeRow, _ inside: Bool) {
@@ -64,6 +83,9 @@ struct BiggestListView: View {
 }
 
 private struct BiggestRow: View {
+    /// From the checkbox column to the kind icon (and the header's title above it).
+    static let iconLead = WindowLayout.checkboxTextGap
+
     let model: ScanModel
     let row: NodeRow
     let total: UInt64
@@ -128,8 +150,8 @@ private struct BiggestRow: View {
                                    : selected ? Text("Deseleziona") : Text("Seleziona"))
             }
         }
-        .frame(width: 24)
-        .padding(.leading, 4)
+        .frame(width: WindowLayout.rowSlot)
+        .padding(.leading, WindowLayout.chromeBleed)
         // The row's own "Seleziona"/"Deseleziona" action stands for it.
         .accessibilityHidden(true)
     }
@@ -190,8 +212,8 @@ private struct BiggestRow: View {
                 share
             }
         }
-        .padding(.leading, 2)
-        .padding(.trailing, 10)
+        .padding(.leading, Self.iconLead)
+        .padding(.trailing, WindowLayout.chromeBleed)
         .padding(.vertical, 6)
         .contentShape(Rectangle())
     }

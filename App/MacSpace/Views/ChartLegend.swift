@@ -1,87 +1,162 @@
 import MacSpaceCore
 import SwiftUI
 
-/// What the chart colors mean, under the chart: in "Eliminabili" the three marked levels (safe,
-/// caution, protected; normal is the neutral rest); otherwise one chip per category (by file type)
-/// or age bucket (by last use) present in the current folder, with how much it takes, plus "Altri
-/// (misti)" when the chart shows merged elements. Categories run largest first, buckets in age
-/// order. Empty before a scan.
+/// What the chart colors mean, in one row under the chart: in "Eliminabili" the three marked levels
+/// (safe, caution, protected; normal is the neutral rest); otherwise one chip per category (by file
+/// type) or age bucket (by last use) present in the current folder, with how much it takes, plus
+/// "Altri (misti)" when the chart shows merged elements. Categories run largest first, buckets in
+/// age order.
 ///
-/// Ruling AE: the legend always keeps the room the fullest legend could need at the current
-/// width (every category, "Altri (misti)", every bucket, each with the widest figure, in the order
-/// that wraps worst, and the safety levels), so a scan, a drill, a mode or chart switch never
-/// resizes the chart.
+/// The row is always one line, of the same height in every mode, scan state and folder, so the
+/// chart never resizes because of the legend. Chips that do not fit the width, from the end, fold
+/// into a trailing "+N" chip whose popover lists them; "+N" itself always fits. The fit is measured
+/// (`ViewThatFits`): the first candidate, from every chip down to none, whose ideal width fits.
 struct ChartLegend: View {
     let model: ScanModel
     let mode: ColorMode
     @Environment(\.colorScheme) private var scheme
+    @State private var showsOverflow = false
+    /// How many chips the row on screen folds into "+N" (0: none), reported by the chosen candidate.
+    @State private var hiddenCount = 0
 
-    /// Wider than any figure `Formatters.bytes` writes (digits are monospaced).
-    private static let widestFigure = "888,88 GB"
     /// The levels "Eliminabili" marks; normal elements are the neutral rest of the chart.
     private static let safetyLevels: [SafetyLevel] = [.safe, .caution, .protected]
+    private static let spacing: CGFloat = 2 * WindowLayout.gap
+
+    /// One chip's meaning and figure.
+    private enum Entry: Hashable {
+        case level(SafetyLevel)
+        case category(FileCategory, UInt64)
+        case age(AgeBucket, UInt64)
+        case merged
+
+        /// What the chip stands for, without its figure: stays the same while a scan grows it.
+        var key: Key {
+            switch self {
+            case let .level(level): .level(level)
+            case let .category(category, _): .category(category)
+            case let .age(bucket, _): .age(bucket)
+            case .merged: .merged
+            }
+        }
+
+        enum Key: Hashable {
+            case level(SafetyLevel)
+            case category(FileCategory)
+            case age(AgeBucket)
+            case merged
+        }
+    }
+
+    /// The popover is about one folder, one mode and one set of folded chips; their sizes may grow
+    /// under it while a scan runs.
+    private struct OverflowSubject: Equatable {
+        let mode: ColorMode
+        let center: NodeID
+        /// A set: chips swapping places in the fold while a scan grows them change nothing.
+        let hidden: Set<Entry.Key>
+    }
 
     var body: some View {
-        LegendFlow(horizontalSpacing: 16, verticalSpacing: 6,
-                   reservedGroups: [FileCategory.allCases.count + 1, AgeBucket.allCases.count,
-                                    Self.safetyLevels.count]) {
-            reserve
-            if !model.breadcrumb.isEmpty {
-                switch mode {
-                case .deletable:
-                    ForEach(Self.safetyLevels, id: \.self) { level in
-                        LegendChip(title: level.title, detail: nil) { SafetySwatch(level: level) }
+        let entries = entries
+        let hidden = Array(entries.suffix(min(hiddenCount, entries.count)))
+        ViewThatFits(in: .horizontal) {
+            ForEach((0...entries.count).reversed(), id: \.self) { shown in
+                HStack(spacing: Self.spacing) {
+                    ForEach(entries.prefix(shown), id: \.key) { chip($0) }
+                    if shown < entries.count {
+                        overflowChip(count: entries.count - shown)
                     }
-                case .category:
-                    ForEach(categories, id: \.category) { entry in
-                        LegendChip(color: FusionPalette.swatch(entry.category, scheme: scheme),
-                                   title: entry.category.title, detail: Formatters.bytes(entry.bytes))
-                    }
-                    if model.showsMerged {
-                        let swatch = FusionPalette.mergedSwatch(scheme: scheme)
-                        LegendChip(color: swatch.fill, dashedOutline: swatch.outline, title: "Altri (misti)",
-                                   detail: nil)
-                    }
-                case .lastUse:
-                    ForEach(ages, id: \.bucket) { entry in
-                        LegendChip(color: FusionPalette.swatch(entry.bucket, scheme: scheme),
-                                   title: entry.bucket.title, detail: Formatters.bytes(entry.bytes))
-                    }
+                }
+                .fixedSize()
+                .preference(key: HiddenCountKey.self, value: entries.count - shown)
+            }
+        }
+        .onPreferenceChange(HiddenCountKey.self) { count in hiddenCount = count }
+        .frame(maxWidth: .infinity)
+        .frame(height: WindowLayout.rowHeight)
+        // One popover for the row, anchored on whichever "+N" is on screen; its list is always the
+        // chips that "+N" folds.
+        .overlayPreferenceValue(OverflowAnchorKey.self) { anchor in
+            GeometryReader { proxy in
+                if let anchor {
+                    let rect = proxy[anchor]
+                    Color.clear
+                        .frame(width: rect.width, height: rect.height)
+                        .position(x: rect.midX, y: rect.midY)
+                        .allowsHitTesting(false)
+                        .popover(isPresented: $showsOverflow, arrowEdge: .top) {
+                            VStack(alignment: .leading, spacing: WindowLayout.gap) {
+                                ForEach(hidden, id: \.key) { chip($0) }
+                            }
+                            .padding(2 * WindowLayout.gap)
+                        }
                 }
             }
         }
         .accessibilityElement(children: .contain)
-    }
-
-    /// The fullest legends, invisible, for `LegendFlow` to measure: every category and "Altri
-    /// (misti)", then every age bucket, then the safety levels (`reservedGroups`).
-    @ViewBuilder
-    private var reserve: some View {
-        Group {
-            ForEach(FileCategory.allCases, id: \.self) { category in
-                LegendChip(color: .clear, title: category.title, detail: Self.widestFigure)
-            }
-            LegendChip(color: .clear, title: "Altri (misti)", detail: nil)
-            ForEach(AgeBucket.allCases, id: \.self) { bucket in
-                LegendChip(color: .clear, title: bucket.title, detail: Self.widestFigure)
-            }
-            ForEach(Self.safetyLevels, id: \.self) { level in
-                LegendChip(color: .clear, title: level.title, detail: nil)
-            }
+        .onChange(of: OverflowSubject(mode: mode, center: model.center, hidden: Set(hidden.map(\.key)))) {
+            if showsOverflow { showsOverflow = false }
         }
-        .hidden()
-        .accessibilityHidden(true)
     }
 
-    /// Categories below the current folder by size, descending (ties in a fixed order).
-    private var categories: [(category: FileCategory, bytes: UInt64)] {
-        model.categoryTotals.map { ($0.key, $0.value) }
-            .sorted { $0.1 != $1.1 ? $0.1 > $1.1 : $0.0.rawValue < $1.0.rawValue }
+    private var entries: [Entry] {
+        switch mode {
+        case .deletable:
+            return Self.safetyLevels.map(Entry.level)
+        case .category:
+            let categories = model.categoryTotals.map { ($0.key, $0.value) }
+                .sorted { $0.1 != $1.1 ? $0.1 > $1.1 : $0.0.rawValue < $1.0.rawValue }
+            return categories.map { Entry.category($0.0, $0.1) } + (model.showsMerged ? [.merged] : [])
+        case .lastUse:
+            // Most recent first, unknown last.
+            return AgeBucket.allCases.compactMap { bucket in model.ageTotals[bucket].map { Entry.age(bucket, $0) } }
+        }
     }
 
-    /// Age buckets below the current folder, most recent first, unknown last.
-    private var ages: [(bucket: AgeBucket, bytes: UInt64)] {
-        AgeBucket.allCases.compactMap { bucket in model.ageTotals[bucket].map { (bucket, $0) } }
+    @ViewBuilder
+    private func chip(_ entry: Entry) -> some View {
+        switch entry {
+        case let .level(level):
+            LegendChip(title: level.title, detail: nil) { SafetySwatch(level: level) }
+        case let .category(category, bytes):
+            LegendChip(color: FusionPalette.swatch(category, scheme: scheme), title: category.title,
+                       detail: Formatters.bytes(bytes))
+        case let .age(bucket, bytes):
+            LegendChip(color: FusionPalette.swatch(bucket, scheme: scheme), title: bucket.title,
+                       detail: Formatters.bytes(bytes))
+        case .merged:
+            let swatch = FusionPalette.mergedSwatch(scheme: scheme)
+            LegendChip(color: swatch.fill, dashedOutline: swatch.outline, title: "Altri (misti)", detail: nil)
+        }
+    }
+
+    /// "+N": the chips that do not fit; a click lists them in the row's popover.
+    private func overflowChip(count: Int) -> some View {
+        let words = count == 1 ? String(localized: "Un'altra voce") : String(localized: "Altre \(count) voci")
+        return Button { showsOverflow.toggle() } label: {
+            Text(verbatim: "+\(count)")
+                .font(LegendChip<EmptyView>.font)
+                .monospacedDigit()
+        }
+        .buttonStyle(CrumbButtonStyle())
+        .help(Text(verbatim: words))
+        .accessibilityLabel(Text(verbatim: words))
+        .anchorPreference(key: OverflowAnchorKey.self, value: .bounds) { $0 }
+    }
+}
+
+/// How many chips the chosen row folds into "+N".
+private struct HiddenCountKey: PreferenceKey {
+    static let defaultValue = 0
+    static func reduce(value: inout Int, nextValue: () -> Int) { value = max(value, nextValue()) }
+}
+
+/// Where the "+N" on screen is.
+private struct OverflowAnchorKey: PreferenceKey {
+    static let defaultValue: Anchor<CGRect>? = nil
+    static func reduce(value: inout Anchor<CGRect>?, nextValue: () -> Anchor<CGRect>?) {
+        value = nextValue() ?? value
     }
 }
 
@@ -142,98 +217,5 @@ private struct LegendDot: View {
                     Circle().strokeBorder(FusionPalette.swatchRing(scheme), lineWidth: 0.5)
                 }
             }
-    }
-}
-
-/// Lays chips out in centered rows, wrapping when the next one does not fit. The first subviews
-/// are the hidden reserve, in groups of `reservedGroups` counts: the height is the most rows any
-/// group's chips could need, in any subset and order (`FlowRows.worstCase`), so it depends only
-/// on the width. The chips after the reserve are the ones shown.
-private struct LegendFlow: Layout {
-    let horizontalSpacing: Double
-    let verticalSpacing: Double
-    let reservedGroups: [Int]
-
-    struct Cache {
-        /// Last proposed width and the height reserved for it.
-        var width: Double?
-        var height = 0.0
-    }
-
-    func makeCache(subviews: Subviews) -> Cache { Cache() }
-
-    private var reservedCount: Int { reservedGroups.reduce(0, +) }
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) -> CGSize {
-        let width = proposal.width ?? .infinity
-        let rows = rows(width: width, subviews: subviews)
-        if cache.width != width {
-            cache.width = width
-            cache.height = reservedHeight(width: width, subviews: subviews)
-        }
-        let height = max(cache.height, height(of: rows))  // max() only guards the exact bound
-        return CGSize(width: width.isFinite ? width : rows.map(\.width).max() ?? 0, height: height)
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout Cache) {
-        for index in subviews.indices.prefix(reservedCount) {
-            subviews[index].place(at: bounds.origin, proposal: .unspecified)
-        }
-        var y = bounds.minY
-        for row in rows(width: bounds.width, subviews: subviews) {
-            var x = bounds.midX - row.width / 2
-            for index in row.indices {
-                let size = subviews[index].sizeThatFits(.unspecified)
-                subviews[index].place(at: CGPoint(x: x, y: y + (row.height - size.height) / 2),
-                                      proposal: ProposedViewSize(size))
-                x += size.width + horizontalSpacing
-            }
-            y += row.height + verticalSpacing
-        }
-    }
-
-    private struct Row {
-        var indices: [Int] = []
-        var width = 0.0
-        var height = 0.0
-    }
-
-    private func height(rows: Int, rowHeight: Double) -> Double {
-        rows > 0 ? Double(rows) * rowHeight + verticalSpacing * Double(rows - 1) : 0
-    }
-
-    private func height(of rows: [Row]) -> Double {
-        rows.map(\.height).reduce(0, +) + verticalSpacing * Double(max(rows.count - 1, 0))
-    }
-
-    /// The most rows any reserve group could need at `width`, as a height.
-    private func reservedHeight(width: Double, subviews: Subviews) -> Double {
-        var start = 0
-        var height = 0.0
-        for count in reservedGroups {
-            let sizes = subviews[start..<start + count].map { $0.sizeThatFits(.unspecified) }
-            start += count
-            let rows = FlowRows.worstCase(sizes.map { Double($0.width) }, spacing: horizontalSpacing, width: width)
-            height = max(height, self.height(rows: rows, rowHeight: Double(sizes.map(\.height).max() ?? 0)))
-        }
-        return height
-    }
-
-    /// The shown chips (after the reserve) in rows, wrapping as `FlowRows.rows` does.
-    private func rows(width: Double, subviews: Subviews) -> [Row] {
-        var rows: [Row] = []
-        var row = Row()
-        for index in subviews.indices.dropFirst(reservedCount) {
-            let size = subviews[index].sizeThatFits(.unspecified)
-            if !row.indices.isEmpty, row.width + horizontalSpacing + size.width > width {
-                rows.append(row)
-                row = Row()
-            }
-            row.width = row.indices.isEmpty ? size.width : row.width + horizontalSpacing + size.width
-            row.height = max(row.height, size.height)
-            row.indices.append(index)
-        }
-        if !row.indices.isEmpty { rows.append(row) }
-        return rows
     }
 }
