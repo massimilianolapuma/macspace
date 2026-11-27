@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MacSpace — dove va lo spazio del tuo Mac</title>
+  <meta name="description" content="MacSpace è un analizzatore del disco nativo per macOS: mostra dove va lo spazio e ti aiuta a recuperarlo in sicurezza.">
+  <meta name="color-scheme" content="light dark">
+  <link rel="icon" href="img/favicon.png">
+  <meta property="og:title" content="MacSpace">
+  <meta property="og:description" content="Scopri dove va lo spazio del tuo Mac e recuperalo in sicurezza.">
+  <meta property="og:type" content="website">
+  <meta property="og:url" content="https://massimilianolapuma.github.io/macspace/">
+  <meta property="og:image" content="https://massimilianolapuma.github.io/macspace/img/app-light.png">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main>
+    <header class="hero">
+      <picture>
+        <source srcset="img/icon-dark.png" media="(prefers-color-scheme: dark)">
+        <img class="icon" src="img/icon-light.png" width="128" height="128" alt="">
+      </picture>
+      <h1>MacSpace</h1>
+      <p class="pitch">Scopri dove va lo spazio del tuo Mac e recuperalo in sicurezza.</p>
+      <a class="download" href="https://github.com/massimilianolapuma/macspace/releases/latest/download/MacSpace.zip">Scarica MacSpace</a>
+      <p class="meta">Versione 0.1.0 · macOS 27 · gratuita e open source</p>
+    </header>
+
+    <figure class="shot">
+      <picture>
+        <source srcset="img/app-dark.png" media="(prefers-color-scheme: dark)">
+        <img src="img/app-light.png" width="1600" height="1006"
+             alt="La finestra di MacSpace con il grafico di una cartella di esempio e, accanto, l'elenco degli elementi più pesanti">
+      </picture>
+    </figure>
+
+    <section class="points" aria-label="Cosa fa">
+      <div>
+        <h2>Vedi dove va lo spazio</h2>
+        <p>Una raggiera o una «Treemap» del disco intero o di una cartella. Entra nel dettaglio con un clic, risali con ⌘↑.</p>
+      </div>
+      <div>
+        <h2>Sai cosa puoi togliere</h2>
+        <p>Ogni elemento ha un livello: sicuro da eliminare, da controllare, protetto. Lo dice con un colore e con una parola, mai solo con il colore.</p>
+      </div>
+      <div>
+        <h2>Niente sparisce da solo</h2>
+        <p>MacSpace non cancella nulla: sposta nel Cestino quello che scegli, dopo una conferma. Finché non svuoti il Cestino, puoi ripristinarlo dal Finder.</p>
+      </div>
+    </section>
+
+    <section class="install">
+      <h2>Installazione</h2>
+      <ol>
+        <li>Scarica <code>MacSpace.zip</code>, aprilo e sposta <strong>MacSpace</strong> in Applicazioni.</li>
+        <li>Aprilo. macOS lo blocca, perché l'app non è autenticata da Apple: scegli «Fine», non «Sposta nel Cestino».</li>
+        <li>Apri Impostazioni di Sistema › Privacy e sicurezza, scorri fino a Sicurezza e scegli «Apri comunque» accanto a MacSpace (il pulsante resta lì per poco dopo il tentativo). Conferma con la password o Touch ID, poi scegli di nuovo «Apri comunque».</li>
+        <li>Dai a MacSpace l'accesso completo al disco (Impostazioni di Sistema › Privacy e sicurezza › Accesso completo al disco) per vedere anche le cartelle protette. Puoi analizzare anche senza: quelle cartelle saranno segnate come non leggibili.</li>
+      </ol>
+      <p class="note">Serve macOS 27. Ogni nuova versione si installa allo stesso modo: macOS la considera un'app nuova, quindi chiede di nuovo «Apri comunque» e l'accesso completo al disco.</p>
+    </section>
+  </main>
+
+  <footer>
+    <a href="https://github.com/massimilianolapuma/macspace">Codice sorgente</a>
+    <span aria-hidden="true">·</span>
+    <a href="https://github.com/massimilianolapuma/macspace/releases">Tutte le versioni</a>
+    <span aria-hidden="true">·</span>
+    <a href="https://github.com/massimilianolapuma/macspace/blob/main/LICENSE">Licenza MIT</a>
+  </footer>
+</body>
+</html>
