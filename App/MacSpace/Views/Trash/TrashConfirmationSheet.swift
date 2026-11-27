@@ -43,6 +43,10 @@ struct TrashConfirmationSheet: View {
     /// `PrivateSize.freed` of each item, as each estimate finishes.
     @State private var freed: [NodeID: PrivateSize.Estimate] = [:]
     @State private var moving = false
+    /// `ScanModel.trashUnavailableReason` has lasted `unavailableGrace`: only then the status says
+    /// it. A brief re-judging (an app launched or quit) only holds the move button, so the sheet
+    /// does not jump.
+    @State private var unavailableShown = false
     /// A move was stopped because the rows had changed: they were refreshed for another look.
     @State private var changedBeforeMove = false
     /// Resolving, the open-files check and the estimates; cancelled when the sheet closes or moves.
@@ -64,6 +68,8 @@ struct TrashConfirmationSheet: View {
         case cancel
     }
 
+    static let unavailableGrace: Duration = .seconds(1)
+
     /// Estimates run at most this many at a time (each walks a folder on disk).
     static let estimateWidth = 4
 
@@ -84,6 +90,11 @@ struct TrashConfirmationSheet: View {
             work = Task { await prepare() }
         }
         .onDisappear { work?.cancel() }
+        .task(id: model.trashUnavailableReason == nil) {
+            guard model.trashUnavailableReason != nil else { unavailableShown = false; return }
+            try? await Task.sleep(for: Self.unavailableGrace)
+            if !Task.isCancelled { unavailableShown = true }
+        }
         .onChange(of: model.verdictRevision) {
             // An environment update landed (an app launched or quit…): show what the store says now.
             guard !moving, let candidates, !candidates.isEmpty else { return }
@@ -191,7 +202,7 @@ struct TrashConfirmationSheet: View {
             statusLine("Spostamento nel Cestino…", warning: false, spinner: true)
         } else if changedBeforeMove {
             statusLine("La situazione è cambiata: controlla di nuovo l'elenco", warning: true, spinner: false)
-        } else if let reason = model.trashUnavailableReason {
+        } else if unavailableShown, let reason = model.trashUnavailableReason {
             statusLine(reason, warning: false, spinner: true)
         } else {
             switch openCheck {

@@ -103,6 +103,15 @@ public struct SafetyEnvironment: Sendable {
         syncedFolderKeys = syncedHomeFolders.map { SafetyPaths.key(SafetyTables.normalized($0)) }.sorted()
     }
 
+    /// Whether `other` judges the running apps and iCloud sync as this one does: same running bundle
+    /// IDs, bundle paths and synced home folders. The clock and the apps index are not compared (a
+    /// new index is always a change; the clock moves by itself). A background agent that launches
+    /// and quits within one debounce leaves the running state as it was.
+    public func judgesRunningAppsLike(_ other: SafetyEnvironment) -> Bool {
+        runningBundleIDs == other.runningBundleIDs && runningAppPaths == other.runningAppPaths
+            && syncedHomeFolders == other.syncedHomeFolders
+    }
+
     /// The live environment: the current time, `access(dir, W_OK)` for write checks and the home
     /// folders iCloud Drive syncs right now (`iCloudSyncedHomeFolders`).
     public static func system(home: String, apps: AppsIndex?, runningBundleIDs: Set<String> = [],
