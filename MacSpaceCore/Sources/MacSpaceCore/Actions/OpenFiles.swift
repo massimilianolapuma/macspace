@@ -72,17 +72,31 @@ public struct OpenFileSet: Sendable {
     }
 
     /// Snapshot of every vnode file descriptor of every process this user may inspect.
-    public static func current() -> OpenFileSet {
-        guard let pids = allPIDs() else { return OpenFileSet(paths: [], isComplete: false) }
+    /// `excludingOwnProcess` leaves this process out: MacSpace only reads what it scans (folder
+    /// listings, size estimates), and those descriptors must not keep an item from moving.
+    public static func current(excludingOwnProcess: Bool = false) -> OpenFileSet {
+        guard var pids = allPIDs() else { return OpenFileSet(paths: [], isComplete: false) }
+        if excludingOwnProcess {
+            let own = getpid()
+            pids.removeAll { $0 == own }
+        }
         var fds = DescriptorBuffer()
         let user = geteuid()
+        // Parents are shared (a shell, an app's helpers): each process is read once.
+        var records: [pid_t: ProcessRecord?] = [:]
+        func record(_ pid: pid_t) -> ProcessRecord? {
+            if let known = records[pid] { return known }
+            let found = processRecord(pid)
+            records[pid] = found
+            return found
+        }
         return collect(pids: pids, inspect: { inspect($0, user: user, fds: &fds) },
-                       holder: { holder(of: $0, record: processRecord) })
+                       holder: { holder(of: $0, record: record) })
     }
 
     /// The set built from `inspect` of each pid (pid 0, the kernel, is never inspected): complete
     /// unless a process is `.failed` or `.listed` truncated. A pid holding paths is named once by
-    /// `holder` (nil: it holds them, unnamed).
+    /// `holder` (nil: `.unnamed`).
     static func collect(pids: [pid_t], inspect: (pid_t) -> Inspection,
                         holder: (pid_t) -> OpenFileHolder? = { _ in nil }) -> OpenFileSet {
         var found: [String: Set<OpenFileHolder>] = [:]
@@ -94,12 +108,10 @@ public struct OpenFileSet: Sendable {
             case .failed:
                 complete = false
             case let .listed(paths, truncated):
-                let who = paths.isEmpty ? nil : holder(pid)
-                for path in paths {
-                    // Recorded even unnamed: the path is open all the same.
-                    found[path, default: []].formUnion(who.map { [$0] } ?? [])
-                }
                 if truncated { complete = false }
+                guard !paths.isEmpty else { continue }
+                let who = holder(pid) ?? .unnamed
+                for path in paths { found[path, default: []].insert(who) }
             }
         }
         return OpenFileSet(held: found, isComplete: complete)
@@ -190,32 +202,47 @@ public struct OpenFileSet: Sendable {
         var executable: String?
     }
 
-    /// Who holds a file open for `pid`: the outermost app bundle of its executable, or else of the
-    /// first parent process that has one (a shell in Terminal, a helper an app started), or else
-    /// the process itself by name. Nil when `pid` cannot be read or has no name. The walk stops at
-    /// launchd (pid 1), at a parent that cannot be read, and after 32 steps or a loop.
+    /// Who holds a file open for `pid`, looking at it and then its parents (up to launchd, pid 1,
+    /// a parent that cannot be read, 32 steps or a loop):
+    /// 1. the first that runs an app's binary (its own, a helper app's, an XPC service's): a shell
+    ///    in Terminal is Terminal's, `git` that `xcrun` runs from Xcode for Terminal too;
+    /// 2. else the first whose executable is inside an app (a tool the app ships, daemonized: its
+    ///    shells too);
+    /// 3. else the process itself, by name: its short name, or its executable's file name when
+    ///    that name was cut (15 bytes) or is empty.
+    /// Nil when `pid` cannot be read or has no name. Apps inside a framework (Python.app) are none.
     static func holder(of pid: pid_t, record: (pid_t) -> ProcessRecord?) -> OpenFileHolder? {
         guard let own = record(pid) else { return nil }
+        var chain = [own]
         var seen: Set<pid_t> = [pid]
-        var current: ProcessRecord? = own
-        while let process = current, seen.count <= 32 {
-            if let app = process.executable.flatMap(appBundle) { return .app(path: app) }
-            let parent = process.parent
-            guard parent > 1, seen.insert(parent).inserted else { break }
-            current = record(parent)
+        while chain.count < 32, let parent = chain.last?.parent, parent > 1, seen.insert(parent).inserted,
+              let next = record(parent) {
+            chain.append(next)
         }
-        let name = own.name.isEmpty ? (own.executable.map { ($0 as NSString).lastPathComponent } ?? "") : own.name
+        for binaryOnly in [true, false] {
+            for process in chain {
+                if let app = process.executable.flatMap({ appBundle($0, binaryOnly: binaryOnly) }) {
+                    return .app(path: app)
+                }
+            }
+        }
+        let file = own.executable.map { ($0 as NSString).lastPathComponent } ?? ""
+        let cut = own.name.utf8.count >= 15 && file.hasPrefix(own.name)
+        let name = own.name.isEmpty || cut ? file : own.name
         return name.isEmpty ? nil : .process(name: name)
     }
 
-    /// The outermost `.app` folder in `path` (any case), or nil when it is in none.
-    static func appBundle(_ path: String) -> String? {
-        var parts: [Substring] = []
-        for part in path.split(separator: "/", omittingEmptySubsequences: false) {
-            parts.append(part)
-            if part.count > 4, part.lowercased().hasSuffix(".app") { return parts.joined(separator: "/") }
-        }
-        return nil
+    /// The outermost `.app` folder of `path` (any case), unless it is inside a framework
+    /// (Python.app). With `binaryOnly`, only when `path` is a bundle's binary inside it (some
+    /// `Contents/MacOS/` below it: its own, a helper app's, an XPC service's), not a tool it merely
+    /// ships (`xcrun`'s targets in `Xcode.app/Contents/Developer`, resources).
+    static func appBundle(_ path: String, binaryOnly: Bool = true) -> String? {
+        let parts = path.split(separator: "/", omittingEmptySubsequences: false)
+        guard let index = parts.firstIndex(where: { $0.count > 4 && $0.lowercased().hasSuffix(".app") }),
+              !parts[..<index].contains(where: { $0.lowercased().hasSuffix(".framework") }) else { return nil }
+        let rest = parts[(index + 1)...]
+        let isBinary = zip(rest, rest.dropFirst()).contains { $0 == "Contents" && $1 == "MacOS" }
+        return isBinary || !binaryOnly ? parts[...index].joined(separator: "/") : nil
     }
 
     /// `pid`'s parent, short name and executable, read live; nil when it cannot be read.
@@ -375,11 +402,13 @@ public struct OpenFileSet: Sendable {
 public enum OpenFileHolder: Sendable, Hashable {
     case app(path: String)
     case process(name: String)
+    /// A process that could not be read (it exited, or has no name).
+    case unnamed
 }
 
 /// How an item is open right now (`OpenFileSet.use(of:isDirectory:)`).
 public struct OpenUse: Sendable, Hashable {
-    /// Who holds it, or the files inside it, open; empty when none could be named.
+    /// Who holds it, or the files inside it, open; empty when the set recorded no holders.
     public var holders: Set<OpenFileHolder>
     /// A folder whose files inside are open, not the folder itself.
     public var onlyInside: Bool

@@ -116,30 +116,40 @@ extension TrashSkip {
 extension OpenUse {
     /// Who keeps it from moving, in words (#25): "Aperto in Xcode e supacode", "Contiene file aperti
     /// dal processo «git»", "Aperto in un'altra app" when no one could be named. Apps by the name
-    /// Finder shows; up to three named, then "altre <N> app".
+    /// Finder shows, up to three, then "altre <N> app"; processes outside any app follow the apps
+    /// as a count, or are named when there is no app.
     var text: String {
         var apps: Set<String> = []
         var processes: Set<String> = []
+        var unnamed = false
         for holder in holders {
             switch holder {
             case let .app(path): apps.insert(FileManager.default.displayName(atPath: path))
             case let .process(name): processes.insert(name)
+            case .unnamed: unnamed = true
             }
         }
         let appNames = apps.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
         let processNames = processes.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
         if !appNames.isEmpty {
-            var list = Self.listed(appNames) { String(localized: "altre \($0) app") }
-            if !processNames.isEmpty {
-                let others = processNames.count == 1 ? String(localized: "da un altro processo")
-                    : String(localized: "da altri \(processNames.count) processi")
-                list = String(localized: "\(list) e \(others)")
+            var items = appNames.count <= 3 ? appNames
+                : Array(appNames.prefix(2)) + [String(localized: "altre \(appNames.count - 2) app")]
+            let others = processNames.count + (unnamed ? 1 : 0)
+            if others == 1 {
+                items.append(String(localized: "in un altro processo"))
+            } else if others > 1 {
+                items.append(String(localized: "in altri \(others) processi"))
             }
+            let list = Self.joined(items)
             return onlyInside ? String(localized: "Contiene file aperti in \(list)") : String(localized: "Aperto in \(list)")
         }
         if !processNames.isEmpty {
-            let list = Self.listed(processNames.map { "«\($0)»" }) { String(localized: "altri \($0)") }
-            if processNames.count == 1 {
+            let quoted = processNames.map { "«\($0)»" }
+            let total = quoted.count + (unnamed ? 1 : 0)
+            let items = total <= 3 ? quoted + (unnamed ? [String(localized: "un altro")] : [])
+                : Array(quoted.prefix(2)) + [String(localized: "altri \(total - 2)")]
+            let list = Self.joined(items)
+            if total == 1 {
                 return onlyInside ? String(localized: "Contiene file aperti dal processo \(list)")
                     : String(localized: "Aperto dal processo \(list)")
             }
@@ -150,10 +160,9 @@ extension OpenUse {
             : String(localized: "Aperto in un'altra app")
     }
 
-    /// "A", "A e B", "A, B e C"; past three, the first two and `rest(<how many more>)`.
-    private static func listed(_ names: [String], rest: (Int) -> String) -> String {
-        let shown = names.count <= 3 ? names : Array(names.prefix(2)) + [rest(names.count - 2)]
-        guard let last = shown.last, shown.count > 1 else { return shown.first ?? "" }
-        return String(localized: "\(shown.dropLast().joined(separator: ", ")) e \(last)")
+    /// "A", "A e B", "A, B e C".
+    private static func joined(_ items: [String]) -> String {
+        guard let last = items.last, items.count > 1 else { return items.first ?? "" }
+        return String(localized: "\(items.dropLast().joined(separator: ", ")) e \(last)")
     }
 }

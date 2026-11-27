@@ -271,13 +271,7 @@
     "Cronologia" : {
 
     },
-    "da altri %lld processi" : {
-
-    },
     "Da controllare" : {
-
-    },
-    "da un altro processo" : {
 
     },
     "Dati delle app e cache" : {
@@ -370,7 +364,13 @@
     "Impossibile verificare i file aperti" : {
 
     },
+    "in altri %lld processi" : {
+
+    },
     "In questa sessione" : {
+
+    },
+    "in un altro processo" : {
 
     },
     "Interrompi" : {
@@ -639,6 +639,9 @@
 
     },
     "Ultimo uso: %@" : {
+
+    },
+    "un altro" : {
 
     },
     "Un'altra voce" : {
