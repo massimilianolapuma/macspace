@@ -11,7 +11,7 @@ The owner wants to use MacSpace and share it with a few friends. That needs a pa
 - A public page in Italian that says what MacSpace is and shows it, in light and dark.
 - The page links to the latest download and explains installation honestly:
   - the first-open warning;
-  - Full Disk Access;
+  - Full Disk Access, which is asked again for each version;
   - macOS 27 is required.
 - A repeatable local release: one script produces `MacSpace.zip` from a tag.
 - An MIT license.
@@ -33,8 +33,8 @@ The owner wants to use MacSpace and share it with a few friends. That needs a pa
 ## Approaches
 
 - **Signing.**
-  - Apple Development certificate. **Chosen.** Its identity is stable across builds, so Full Disk Access granted once survives updates.
-  - Ad-hoc. Rejected: TCC would lose the grant on every version.
+  - Ad hoc, hardened runtime, not debuggable. **Chosen by the owner** after review: an Apple Development certificate embeds the developer's Apple ID email in every published zip. The cost: every version asks again for «Apri comunque» and for Full Disk Access.
+  - Apple Development certificate. Rejected: its stable identity would keep Full Disk Access across updates, but it publishes the email.
   - Developer ID plus notarization. Rejected: owner's call, not now.
 - **Site.**
   - Hand-written static HTML/CSS in `site/`, deployed by an Actions workflow (`actions/deploy-pages`). **Chosen.** `docs/` holds specs and plans that must not be published.
