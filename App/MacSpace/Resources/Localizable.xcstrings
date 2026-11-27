@@ -4,6 +4,9 @@
     "%@ cartelle non leggibili" : {
 
     },
+    "%@ e %@" : {
+
+    },
     "%@ file" : {
 
     },
@@ -91,10 +94,16 @@
     "Aggiornato" : {
 
     },
+    "altre %lld app" : {
+
+    },
     "Altre %lld voci" : {
 
     },
     "Altri %@ elementi" : {
+
+    },
+    "altri %lld" : {
 
     },
     "Altri (misti)" : {
@@ -133,7 +142,16 @@
     "Annulla" : {
 
     },
-    "Aperto ora in un'app" : {
+    "Aperto dai processi %@" : {
+
+    },
+    "Aperto dal processo %@" : {
+
+    },
+    "Aperto in %@" : {
+
+    },
+    "Aperto in un'altra app" : {
 
     },
     "App" : {
@@ -226,6 +244,18 @@
     "Contiene elementi protetti" : {
 
     },
+    "Contiene file aperti dai processi %@" : {
+
+    },
+    "Contiene file aperti dal processo %@" : {
+
+    },
+    "Contiene file aperti in %@" : {
+
+    },
+    "Contiene file aperti in un'altra app" : {
+
+    },
     "Contiene un'app in esecuzione" : {
 
     },
@@ -241,7 +271,13 @@
     "Cronologia" : {
 
     },
+    "da altri %lld processi" : {
+
+    },
     "Da controllare" : {
+
+    },
+    "da un altro processo" : {
 
     },
     "Dati delle app e cache" : {

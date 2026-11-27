@@ -25,21 +25,36 @@ import Foundation
 /// longer name a file at all; that is reasoned, not proven for every case. Per-descriptor reasons
 /// are an open set, and counting any of them as incomplete would block every move.
 ///
+/// Each open file also records who holds it (`OpenFileHolder`, see `holder(of:record:)`), named
+/// while the processes are inspected; `use(of:isDirectory:)` answers both whether and by whom.
+///
 /// Paths are compared in NFC, byte by byte. The root-level symbolic links `/var`, `/tmp` and
 /// `/etc` are mapped to `/private/…` (the kernel's form) on both sides, so either spelling matches.
 public struct OpenFileSet: Sendable {
     /// Unique canonical paths, sorted by their UTF-8 bytes.
     private let paths: [String]
+    /// Who holds each of `paths` open (same index); empty when no holder could be named.
+    private let holders: [Set<OpenFileHolder>]
     /// Whether every process of this user was listed in full (see the type's documentation).
     public let isComplete: Bool
 
-    /// A complete set holding exactly `paths`.
+    /// A complete set holding exactly `paths`, with no holders named.
     public init(paths: [String]) {
         self.init(paths: paths, isComplete: true)
     }
 
     init(paths: [String], isComplete: Bool) {
-        self.paths = Set(paths.map(Self.canonical)).sorted { $0.utf8.lexicographicallyPrecedes($1.utf8) }
+        self.init(held: Dictionary(paths.map { ($0, Set<OpenFileHolder>()) }, uniquingKeysWith: { $0.union($1) }),
+                  isComplete: isComplete)
+    }
+
+    /// Each open path with its holders; paths equal once canonical are merged.
+    init(held: [String: Set<OpenFileHolder>], isComplete: Bool) {
+        var merged: [String: Set<OpenFileHolder>] = [:]
+        for (path, who) in held { merged[Self.canonical(path), default: []].formUnion(who) }
+        let sorted = merged.sorted { $0.key.utf8.lexicographicallyPrecedes($1.key.utf8) }
+        paths = sorted.map(\.key)
+        holders = sorted.map(\.value)
         self.isComplete = isComplete
     }
 
@@ -61,13 +76,16 @@ public struct OpenFileSet: Sendable {
         guard let pids = allPIDs() else { return OpenFileSet(paths: [], isComplete: false) }
         var fds = DescriptorBuffer()
         let user = geteuid()
-        return collect(pids: pids) { inspect($0, user: user, fds: &fds) }
+        return collect(pids: pids, inspect: { inspect($0, user: user, fds: &fds) },
+                       holder: { holder(of: $0, record: processRecord) })
     }
 
     /// The set built from `inspect` of each pid (pid 0, the kernel, is never inspected): complete
-    /// unless a process is `.failed` or `.listed` truncated.
-    static func collect(pids: [pid_t], inspect: (pid_t) -> Inspection) -> OpenFileSet {
-        var found = Set<String>()
+    /// unless a process is `.failed` or `.listed` truncated. A pid holding paths is named once by
+    /// `holder` (nil: it holds them, unnamed).
+    static func collect(pids: [pid_t], inspect: (pid_t) -> Inspection,
+                        holder: (pid_t) -> OpenFileHolder? = { _ in nil }) -> OpenFileSet {
+        var found: [String: Set<OpenFileHolder>] = [:]
         var complete = true
         for pid in pids where pid > 0 {
             switch inspect(pid) {
@@ -76,11 +94,15 @@ public struct OpenFileSet: Sendable {
             case .failed:
                 complete = false
             case let .listed(paths, truncated):
-                found.formUnion(paths)
+                let who = paths.isEmpty ? nil : holder(pid)
+                for path in paths {
+                    // Recorded even unnamed: the path is open all the same.
+                    found[path, default: []].formUnion(who.map { [$0] } ?? [])
+                }
                 if truncated { complete = false }
             }
         }
-        return OpenFileSet(paths: Array(found), isComplete: complete)
+        return OpenFileSet(held: found, isComplete: complete)
     }
 
     /// Every process's inspection, as `current` sees them, for diagnostics; nil when the process
@@ -109,6 +131,31 @@ public struct OpenFileSet: Sendable {
         return index < paths.count && paths[index].utf8.starts(with: prefix.utf8)
     }
 
+    /// Whether `path` is open, and by whom: the item itself, or for a directory anything inside it
+    /// too (`onlyInside` when only the latter). Nil when nothing there is open.
+    public func use(of path: String, isDirectory: Bool) -> OpenUse? {
+        let key = Self.canonical(path)
+        var who = Set<OpenFileHolder>()
+        var itself = false
+        var inside = false
+        let index = lowerBound(key)
+        if index < paths.count, paths[index].utf8.elementsEqual(key.utf8) {
+            itself = true
+            who.formUnion(holders[index])
+        }
+        if isDirectory {
+            let prefix = key.utf8.last == UInt8(ascii: "/") ? key : key + "/"
+            var next = lowerBound(prefix)
+            while next < paths.count, paths[next].utf8.starts(with: prefix.utf8) {
+                inside = true
+                who.formUnion(holders[next])
+                next += 1
+            }
+        }
+        guard itself || inside else { return nil }
+        return OpenUse(holders: who, onlyInside: !itself)
+    }
+
     /// First index whose path is ≥ `key` (UTF-8 byte order).
     private func lowerBound(_ key: String) -> Int {
         var low = 0, high = paths.count
@@ -130,6 +177,59 @@ public struct OpenFileSet: Sendable {
             if rest.isEmpty || rest.first == UInt8(ascii: "/") { return "/private" + normalized }
         }
         return normalized
+    }
+
+    // MARK: - Holders
+
+    /// What naming a holder needs to know of a process.
+    struct ProcessRecord: Sendable, Equatable {
+        var parent: pid_t
+        /// The kernel's short name (`p_comm`, at most 16 bytes); may be empty.
+        var name: String
+        /// Its executable's path; nil when it cannot be read.
+        var executable: String?
+    }
+
+    /// Who holds a file open for `pid`: the outermost app bundle of its executable, or else of the
+    /// first parent process that has one (a shell in Terminal, a helper an app started), or else
+    /// the process itself by name. Nil when `pid` cannot be read or has no name. The walk stops at
+    /// launchd (pid 1), at a parent that cannot be read, and after 32 steps or a loop.
+    static func holder(of pid: pid_t, record: (pid_t) -> ProcessRecord?) -> OpenFileHolder? {
+        guard let own = record(pid) else { return nil }
+        var seen: Set<pid_t> = [pid]
+        var current: ProcessRecord? = own
+        while let process = current, seen.count <= 32 {
+            if let app = process.executable.flatMap(appBundle) { return .app(path: app) }
+            let parent = process.parent
+            guard parent > 1, seen.insert(parent).inserted else { break }
+            current = record(parent)
+        }
+        let name = own.name.isEmpty ? (own.executable.map { ($0 as NSString).lastPathComponent } ?? "") : own.name
+        return name.isEmpty ? nil : .process(name: name)
+    }
+
+    /// The outermost `.app` folder in `path` (any case), or nil when it is in none.
+    static func appBundle(_ path: String) -> String? {
+        var parts: [Substring] = []
+        for part in path.split(separator: "/", omittingEmptySubsequences: false) {
+            parts.append(part)
+            if part.count > 4, part.lowercased().hasSuffix(".app") { return parts.joined(separator: "/") }
+        }
+        return nil
+    }
+
+    /// `pid`'s parent, short name and executable, read live; nil when it cannot be read.
+    static func processRecord(_ pid: pid_t) -> ProcessRecord? {
+        var info = proc_bsdshortinfo()
+        let size = Int32(MemoryLayout<proc_bsdshortinfo>.size)
+        guard proc_pidinfo(pid, PROC_PIDT_SHORTBSDINFO, 0, &info, size) == size else { return nil }
+        let name = withUnsafeBytes(of: &info.pbsi_comm) { raw in
+            String(decoding: raw.prefix { $0 != 0 }, as: UTF8.self)
+        }
+        var buffer = [UInt8](repeating: 0, count: 4 * Int(MAXPATHLEN))  // PROC_PIDPATHINFO_MAXSIZE
+        let length = proc_pidpath(pid, &buffer, UInt32(buffer.count))
+        let executable = length > 0 ? String(decoding: buffer.prefix(Int(length)), as: UTF8.self) : nil
+        return ProcessRecord(parent: pid_t(info.pbsi_ppid), name: name, executable: executable)
     }
 
     // MARK: - libproc
@@ -267,5 +367,25 @@ public struct OpenFileSet: Sendable {
             guard !bytes.isEmpty, bytes.count < raw.count else { return nil }
             return String(decoding: bytes, as: UTF8.self)
         }
+    }
+}
+
+/// Who holds a file open: an app (by its bundle's path, for the app to name it as Finder does), or
+/// a process in no app, by its name.
+public enum OpenFileHolder: Sendable, Hashable {
+    case app(path: String)
+    case process(name: String)
+}
+
+/// How an item is open right now (`OpenFileSet.use(of:isDirectory:)`).
+public struct OpenUse: Sendable, Hashable {
+    /// Who holds it, or the files inside it, open; empty when none could be named.
+    public var holders: Set<OpenFileHolder>
+    /// A folder whose files inside are open, not the folder itself.
+    public var onlyInside: Bool
+
+    public init(holders: Set<OpenFileHolder>, onlyInside: Bool) {
+        self.holders = holders
+        self.onlyInside = onlyInside
     }
 }

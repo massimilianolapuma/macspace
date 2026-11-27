@@ -163,11 +163,7 @@ extension ScanStore {
         if Self.ancestorPaths(of: path).contains(where: packages.isPackage) { return .insidePackage }
         // 5. Open right now.
         let kind = tree.kind(id)
-        if kind == .directory {
-            if open.isOpen(path) || open.hasOpen(under: path) { return .openNow }
-        } else if open.isOpen(path) {
-            return .openNow
-        }
+        if let use = open.use(of: path, isDirectory: kind == .directory) { return .openNow(use) }
         // 6. A volume mounted at or below it now (perhaps after the scan); something inside it
         //    that must never go, or contents never seen.
         if MountTable.hasMount(atOrBelow: path, in: mounts) { return .containsUnverified }

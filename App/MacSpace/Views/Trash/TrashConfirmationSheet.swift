@@ -58,8 +58,8 @@ struct TrashConfirmationSheet: View {
 
     enum OpenCheck: Equatable {
         case running
-        /// The items open right now.
-        case done(Set<NodeID>)
+        /// The items open right now, and how.
+        case done([NodeID: OpenUse])
         /// The list of open files could not be read in full.
         case incomplete
     }
@@ -270,22 +270,22 @@ struct TrashConfirmationSheet: View {
 
     // MARK: State
 
-    private var openIDs: Set<NodeID> {
+    private var openUses: [NodeID: OpenUse] {
         if case let .done(open) = openCheck { return open }
-        return []
+        return [:]
     }
 
     /// Why a row stays where it is (open now, or no longer allowed), or nil when it will move.
     private func staysNote(_ candidate: TrashCandidate) -> String? {
         if let note = withdrawn[candidate.id] { return note }
-        if openIDs.contains(candidate.id) { return TrashSkip.openNow.text }
+        if let use = openUses[candidate.id] { return use.text }
         return nil
     }
 
     /// The items that will move: all but those open right now or withdrawn.
     private func included(of candidates: [TrashCandidate]) -> [TrashCandidate] {
-        let open = openIDs
-        return candidates.filter { !open.contains($0.id) && withdrawn[$0.id] == nil }
+        let open = openUses
+        return candidates.filter { open[$0.id] == nil && withdrawn[$0.id] == nil }
     }
 
     /// Only once the open files are known in full, with something left to move, the Trash available
@@ -322,7 +322,7 @@ struct TrashConfirmationSheet: View {
                 guard !Task.isCancelled else { break }
                 switch check {
                 case let .open(set):
-                    openCheck = set.isComplete ? .done(Set(found.filter { Self.isOpen($0, in: set) }.map(\.id))) : .incomplete
+                    openCheck = set.isComplete ? .done(Self.uses(of: found, in: set)) : .incomplete
                 case let .freed(id, estimate):
                     freed[id] = estimate
                     if let next = queue.next() {
@@ -382,8 +382,13 @@ struct TrashConfirmationSheet: View {
         case freed(NodeID, PrivateSize.Estimate)
     }
 
-    private static func isOpen(_ candidate: TrashCandidate, in set: OpenFileSet) -> Bool {
-        set.isOpen(candidate.path) || (candidate.kind == .directory && set.hasOpen(under: candidate.path))
+    /// The candidates open right now (a folder: or anything inside it), and by whom.
+    private static func uses(of candidates: [TrashCandidate], in set: OpenFileSet) -> [NodeID: OpenUse] {
+        var uses: [NodeID: OpenUse] = [:]
+        for candidate in candidates {
+            uses[candidate.id] = set.use(of: candidate.path, isDirectory: candidate.kind == .directory)
+        }
+        return uses
     }
 
     @concurrent nonisolated private static func openFiles() async -> OpenFileSet { OpenFileSet.current() }
@@ -413,7 +418,7 @@ struct TrashConfirmationSheet: View {
         guard let rows = candidates, canMove(included(of: rows)), generation == model.storeGeneration else { return }
         let shown = Shown(verdicts: Dictionary(uniqueKeysWithValues: rows.map { ($0.id, $0.verdict) }),
                           withdrawn: Set(withdrawn.keys), included: included(of: rows))
-        let open = openIDs
+        let open = openUses
         moving = true
         changedBeforeMove = false
         Task {
@@ -440,9 +445,7 @@ struct TrashConfirmationSheet: View {
             let known = freed
             let leftOut = rows.compactMap { row -> SkippedItem? in
                 if let note = withdrawn[row.id] { return SkippedItem(node: row.id, name: row.name, reason: note) }
-                if open.contains(row.id) {
-                    return SkippedItem(node: row.id, name: row.name, reason: TrashSkip.openNow.text)
-                }
+                if let use = open[row.id] { return SkippedItem(node: row.id, name: row.name, reason: use.text) }
                 return nil
             }
             let outcome = await model.trash(ids, expectedVerdicts: expected)

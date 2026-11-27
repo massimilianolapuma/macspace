@@ -16,8 +16,8 @@ public enum TrashSkip: Sendable, Hashable {
     /// The app was still applying a new environment (apps index, apps launched or quit), so verdicts
     /// were not final and nothing was moved. `ScanStore.trash` never returns it; the app does.
     case appsAnalysisInProgress
-    /// It, or a file inside it, is open in some process.
-    case openNow
+    /// It, or a file inside it, is open in some process: who, as far as they could be named.
+    case openNow(OpenUse)
     /// A folder above it is a package (per LaunchServices), so only the package as a whole may move.
     case insidePackage
     /// `TrashGuard` refused it.

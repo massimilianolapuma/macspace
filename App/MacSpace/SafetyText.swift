@@ -102,7 +102,7 @@ extension TrashSkip {
             }
         case .verdictChanged: String(localized: "La sua valutazione è cambiata: controllalo di nuovo")
         case .appsAnalysisInProgress: String(localized: "Analisi delle app in corso: riprova tra poco")
-        case .openNow: String(localized: "Aperto ora in un'app")
+        case let .openNow(use): use.text
         case .insidePackage: String(localized: "Fa parte di un pacchetto")
         case .refused: String(localized: "Rifiutato per sicurezza")
         case .cannotCheckOpenFiles: String(localized: "Impossibile verificare i file aperti")
@@ -110,5 +110,50 @@ extension TrashSkip {
         case .scanInProgress: String(localized: "Analisi in corso: riprova al termine")
         case let .failed(message): String(localized: "Errore: \(message)")
         }
+    }
+}
+
+extension OpenUse {
+    /// Who keeps it from moving, in words (#25): "Aperto in Xcode e supacode", "Contiene file aperti
+    /// dal processo «git»", "Aperto in un'altra app" when no one could be named. Apps by the name
+    /// Finder shows; up to three named, then "altre <N> app".
+    var text: String {
+        var apps: Set<String> = []
+        var processes: Set<String> = []
+        for holder in holders {
+            switch holder {
+            case let .app(path): apps.insert(FileManager.default.displayName(atPath: path))
+            case let .process(name): processes.insert(name)
+            }
+        }
+        let appNames = apps.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+        let processNames = processes.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+        if !appNames.isEmpty {
+            var list = Self.listed(appNames) { String(localized: "altre \($0) app") }
+            if !processNames.isEmpty {
+                let others = processNames.count == 1 ? String(localized: "da un altro processo")
+                    : String(localized: "da altri \(processNames.count) processi")
+                list = String(localized: "\(list) e \(others)")
+            }
+            return onlyInside ? String(localized: "Contiene file aperti in \(list)") : String(localized: "Aperto in \(list)")
+        }
+        if !processNames.isEmpty {
+            let list = Self.listed(processNames.map { "«\($0)»" }) { String(localized: "altri \($0)") }
+            if processNames.count == 1 {
+                return onlyInside ? String(localized: "Contiene file aperti dal processo \(list)")
+                    : String(localized: "Aperto dal processo \(list)")
+            }
+            return onlyInside ? String(localized: "Contiene file aperti dai processi \(list)")
+                : String(localized: "Aperto dai processi \(list)")
+        }
+        return onlyInside ? String(localized: "Contiene file aperti in un'altra app")
+            : String(localized: "Aperto in un'altra app")
+    }
+
+    /// "A", "A e B", "A, B e C"; past three, the first two and `rest(<how many more>)`.
+    private static func listed(_ names: [String], rest: (Int) -> String) -> String {
+        let shown = names.count <= 3 ? names : Array(names.prefix(2)) + [rest(names.count - 2)]
+        guard let last = shown.last, shown.count > 1 else { return shown.first ?? "" }
+        return String(localized: "\(shown.dropLast().joined(separator: ", ")) e \(last)")
     }
 }
