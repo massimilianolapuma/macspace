@@ -154,31 +154,17 @@ final class ScanModel {
     /// Selection changes run one after the other, each against the outcome of the previous one.
     @ObservationIgnored var selectionWork: Task<Void, Never>?
     @ObservationIgnored private var scanTask: Task<Void, Never>?
-    /// The latest view refresh (`requestRefresh`); each new one cancels it, so at most one
-    /// snapshot that is still wanted runs on the store, and superseded ones never reach it.
-    @ObservationIgnored private var refreshTask: Task<Void, Never>?
-    /// Bumped by every `requestRefresh`: a refresh lands only while its number is the latest.
-    @ObservationIgnored private var refreshGeneration = 0
+    /// Runs view refreshes latest-wins (at most one snapshot that is still wanted runs on the store;
+    /// superseded ones never reach it) and keeps the wait state.
+    @ObservationIgnored private let refresher = RefreshCoordinator()
     /// Whether work the user asked for (navigation, chart switch, canvas resize) has been pending
-    /// for `waitThreshold` without landing: the views then dim the chart they still show and a
-    /// spinner appears in the path row. Never set by the scan ticker's own refreshes.
-    private(set) var isWaiting = false
+    /// for `RefreshCoordinator.defaultThreshold` without landing: the views then dim the chart they
+    /// still show and a spinner appears in the path row. Never set by the scan ticker's own refreshes.
+    var isWaiting: Bool { refresher.isWaiting }
     /// The chart kind whose data is on screen (`segments` or `tiles`): set when a refresh lands, so a
-    /// chart switch keeps the previous chart up (dimmed after `waitThreshold`) until the new one's
+    /// chart switch keeps the previous chart up (dimmed once the wait state shows) until the new one's
     /// data arrives.
     private(set) var shownChart: ChartKind = .sunburst
-    /// User intents noted so far (`noteUserIntent`), and how many a refresh has been issued for: a
-    /// refresh that lands while `coveredIntents == intentCount` covers the latest intent.
-    @ObservationIgnored private var intentCount = 0
-    @ObservationIgnored private var coveredIntents = 0
-    /// When the wait state shows if the pending intent has not been resolved by then; nil while none
-    /// is pending. A burst keeps the earliest deadline.
-    @ObservationIgnored private var waitDeadline: ContinuousClock.Instant?
-    @ObservationIgnored private var waitTimer: Task<Void, Never>?
-    /// Whether the latest refresh has not yet returned.
-    @ObservationIgnored private var refreshInFlight = false
-    /// How long a user's request may stay pending before the wait state shows.
-    static let waitThreshold: Duration = .milliseconds(150)
     /// What verdicts are judged against (`updateEnvironment`, or the live one `trash` reads); nil
     /// until the provider's first one.
     @ObservationIgnored var environment: SafetyEnvironment?
@@ -321,18 +307,12 @@ final class ScanModel {
     /// Starts a refresh of the views for the current state, cancelling the previous one: latest
     /// wins. Navigation, chart and canvas changes call this without waiting.
     /// `userInitiated`: a navigation or chart change the user is waiting for; it counts as a user
-    /// intent (`noteUserIntent`), so the wait state shows if it has not landed within
-    /// `waitThreshold`. The scan ticker's refreshes never set it.
+    /// intent (`noteUserIntent`), so the wait state shows if it has not landed in time. The scan
+    /// ticker's refreshes never set it.
     func requestRefresh(userInitiated: Bool = false) {
-        if userInitiated {
-            noteUserIntent()
-            coveredIntents = intentCount
+        refresher.request(userInitiated: userInitiated) { [weak self] isLatest in
+            await self?.performRefresh(isLatest: isLatest)
         }
-        refreshTask?.cancel()
-        refreshGeneration += 1
-        let generation = refreshGeneration
-        refreshInFlight = true
-        refreshTask = Task { await performRefresh(generation: generation) }
     }
 
     /// The user has asked for something that will change the views; the wait state arms now, not when
@@ -340,35 +320,16 @@ final class ScanModel {
     /// synchronously; every call must end in a `requestRefresh(userInitiated: true)` or an
     /// `abandonUserIntent`. Returns the intent's number.
     @discardableResult
-    func noteUserIntent() -> Int {
-        intentCount += 1
-        guard waitDeadline == nil else { return intentCount }
-        let deadline = ContinuousClock.now.advanced(by: Self.waitThreshold)
-        waitDeadline = deadline
-        waitTimer = Task { [weak self] in
-            try? await Task.sleep(until: deadline, clock: .continuous)
-            guard let self, !Task.isCancelled, waitDeadline == deadline else { return }
-            isWaiting = true
-        }
-        return intentCount
-    }
+    func noteUserIntent() -> Int { refresher.noteUserIntent() }
 
-    /// The action that noted intent `intent` ended without refreshing anything. Unless a newer intent
-    /// is pending, or a refresh issued for an earlier one is still under way (its landing clears the
-    /// wait), the wait ends now.
-    func abandonUserIntent(_ intent: Int) {
-        guard intent == intentCount else { return }
-        coveredIntents = intentCount
-        if !refreshInFlight { endWaiting() }
-    }
+    /// The action that noted intent `intent` ended without refreshing anything (see
+    /// `RefreshCoordinator.abandonUserIntent`).
+    func abandonUserIntent(_ intent: Int) { refresher.abandonUserIntent(intent) }
 
     /// Waits until the latest refresh has landed (or was dropped), following any newer one that
     /// supersedes it meanwhile.
     private func refreshesSettled() async {
-        while let task = refreshTask {
-            await task.value
-            if refreshTask == task { return }
-        }
+        await refresher.settled()
     }
 
     /// The scan ticker's refresh: never cancels one in flight (a navigation's, say), it waits for
@@ -379,30 +340,10 @@ final class ScanModel {
         await refreshViews()
     }
 
-    /// Whether the refresh numbered `generation` is still the one wanted.
-    private func isLatestRefresh(_ generation: Int) -> Bool {
-        !Task.isCancelled && generation == refreshGeneration
-    }
-
-    private func endWaiting() {
-        waitTimer?.cancel()
-        waitTimer = nil
-        waitDeadline = nil
-        if isWaiting { isWaiting = false }
-    }
-
-    private func performRefresh(generation: Int) async {
-        // Whatever way the latest refresh ends (landed or dropped), the wait is over, unless a user
-        // intent is still pending that no refresh has been issued for yet (a goUp or reveal that is
-        // resolving its target): a refresh issued by anyone else must not hide that wait.
-        defer {
-            if generation == refreshGeneration {
-                refreshInFlight = false
-                if coveredIntents == intentCount { endWaiting() }
-            }
-        }
-        // Superseded before it started (several clicks in one turn): never reaches the store.
-        guard isLatestRefresh(generation), let store else { return }
+    /// One refresh's work: `isLatest` turns false once a newer refresh is requested (the coordinator
+    /// never even starts one superseded in the same turn).
+    private func performRefresh(isLatest: () -> Bool) async {
+        guard isLatest(), let store else { return }
         let center = self.center
         let chart = self.chart
         let size = chartSize
@@ -417,7 +358,7 @@ final class ScanModel {
         let snapshot = await store.snapshot(center: center, chart: request, biggestLimit: Self.biggestLimit)
         Perf.signposter.endInterval("snapshot", signpost)
         // A newer scan, navigation, chart or canvas size happened meanwhile: its own refresh wins.
-        guard isLatestRefresh(generation), store === self.store, center == self.center, chart == self.chart,
+        guard isLatest(), store === self.store, center == self.center, chart == self.chart,
               chart == .sunburst || size == chartSize else { return }
         Perf.interval("refresh apply") {
             // Segments and tiles share ids ("\(node)"), so the hover survives a chart switch.
