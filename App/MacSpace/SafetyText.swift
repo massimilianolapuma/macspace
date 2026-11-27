@@ -102,7 +102,7 @@ extension TrashSkip {
             }
         case .verdictChanged: String(localized: "La sua valutazione è cambiata: controllalo di nuovo")
         case .appsAnalysisInProgress: String(localized: "Analisi delle app in corso: riprova tra poco")
-        case .openNow: String(localized: "Aperto ora in un'app")
+        case let .openNow(use): use.text
         case .insidePackage: String(localized: "Fa parte di un pacchetto")
         case .refused: String(localized: "Rifiutato per sicurezza")
         case .cannotCheckOpenFiles: String(localized: "Impossibile verificare i file aperti")
@@ -110,5 +110,59 @@ extension TrashSkip {
         case .scanInProgress: String(localized: "Analisi in corso: riprova al termine")
         case let .failed(message): String(localized: "Errore: \(message)")
         }
+    }
+}
+
+extension OpenUse {
+    /// Who keeps it from moving, in words (#25): "Aperto in Xcode e supacode", "Contiene file aperti
+    /// dal processo «git»", "Aperto in un'altra app" when no one could be named. Apps by the name
+    /// Finder shows, up to three, then "altre <N> app"; processes outside any app follow the apps
+    /// as a count, or are named when there is no app.
+    var text: String {
+        var apps: Set<String> = []
+        var processes: Set<String> = []
+        var unnamed = false
+        for holder in holders {
+            switch holder {
+            case let .app(path): apps.insert(FileManager.default.displayName(atPath: path))
+            case let .process(name): processes.insert(name)
+            case .unnamed: unnamed = true
+            }
+        }
+        let appNames = apps.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+        let processNames = processes.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+        if !appNames.isEmpty {
+            var items = appNames.count <= 3 ? appNames
+                : Array(appNames.prefix(2)) + [String(localized: "altre \(appNames.count - 2) app")]
+            let others = processNames.count + (unnamed ? 1 : 0)
+            if others == 1 {
+                items.append(String(localized: "in un altro processo"))
+            } else if others > 1 {
+                items.append(String(localized: "in altri \(others) processi"))
+            }
+            let list = Self.joined(items)
+            return onlyInside ? String(localized: "Contiene file aperti in \(list)") : String(localized: "Aperto in \(list)")
+        }
+        if !processNames.isEmpty {
+            let quoted = processNames.map { "«\($0)»" }
+            let total = quoted.count + (unnamed ? 1 : 0)
+            let items = total <= 3 ? quoted + (unnamed ? [String(localized: "un altro")] : [])
+                : Array(quoted.prefix(2)) + [String(localized: "altri \(total - 2)")]
+            let list = Self.joined(items)
+            if total == 1 {
+                return onlyInside ? String(localized: "Contiene file aperti dal processo \(list)")
+                    : String(localized: "Aperto dal processo \(list)")
+            }
+            return onlyInside ? String(localized: "Contiene file aperti dai processi \(list)")
+                : String(localized: "Aperto dai processi \(list)")
+        }
+        return onlyInside ? String(localized: "Contiene file aperti in un'altra app")
+            : String(localized: "Aperto in un'altra app")
+    }
+
+    /// "A", "A e B", "A, B e C".
+    private static func joined(_ items: [String]) -> String {
+        guard let last = items.last, items.count > 1 else { return items.first ?? "" }
+        return String(localized: "\(items.dropLast().joined(separator: ", ")) e \(last)")
     }
 }

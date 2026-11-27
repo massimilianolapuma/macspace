@@ -218,10 +218,14 @@ private func exists(_ path: String) -> Bool {
     let actions = RecordingDiskActions(trash: bin.root.path)
     let outcome = await store.trash([work, log], actions: actions, packages: noPackages, openFiles: {
         calls.tick()
-        return OpenFileSet(paths: [doc.path, other.path])
+        return OpenFileSet(held: [doc.path: [.app(path: "/Applications/Xcode.app")], other.path: [.process(name: "git")]],
+                           isComplete: true)
     }, expectedVerdicts: nil)
     #expect(Set(outcome.skipped.map(\.node)) == [work, log])
-    #expect(outcome.skipped.allSatisfy { $0.reason == .openNow })
+    // Who holds them, and for the folder that only a file inside it is open.
+    let reasons = Dictionary(uniqueKeysWithValues: outcome.skipped.map { ($0.node, $0.reason) })
+    #expect(reasons[work] == .openNow(OpenUse(holders: [.app(path: "/Applications/Xcode.app")], onlyInside: true)))
+    #expect(reasons[log] == .openNow(OpenUse(holders: [.process(name: "git")], onlyInside: false)))
     #expect(outcome.moved.isEmpty && actions.moved.isEmpty)
     #expect(calls.value == 1)
 }
@@ -495,7 +499,7 @@ private func exists(_ path: String) -> Bool {
     // Gone from disk and open: the open check comes first, the disk check right before the move.
     let outcome = await store.trash([id], actions: actions, packages: noPackages,
                                     openFiles: { OpenFileSet(paths: [file.path]) }, expectedVerdicts: nil)
-    #expect(outcome.skipped.map(\.reason) == [.openNow])
+    #expect(outcome.skipped.map(\.reason) == [.openNow(OpenUse(holders: [], onlyInside: false))])
 }
 
 @Test func folderHoldingTrashesIsProtected() async throws {

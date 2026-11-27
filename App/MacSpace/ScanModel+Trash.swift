@@ -135,7 +135,9 @@ extension ScanModel {
         // On the store's actor: blocking file system calls, off the main actor. The store takes the
         // live environment and moves in one actor call, so no queued update can slip in between.
         let outcome = await store.trash(Set(ids), environment: live, actions: SystemDiskActions(),
-                                        packages: SystemPackageProbe(), openFiles: { OpenFileSet.current() },
+                                        packages: SystemPackageProbe(),
+                                        // MacSpace's own descriptors (scan, estimates) never hold an item back.
+                                        openFiles: { OpenFileSet.current(excludingOwnProcess: true) },
                                         expectedVerdicts: expectedVerdicts)
         // Whatever happened to the scan meanwhile, these really are in the Trash now.
         let now = Date.now

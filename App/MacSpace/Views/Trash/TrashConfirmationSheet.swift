@@ -58,8 +58,8 @@ struct TrashConfirmationSheet: View {
 
     enum OpenCheck: Equatable {
         case running
-        /// The items open right now.
-        case done(Set<NodeID>)
+        /// The items open right now, with who holds them, in words (`OpenUse.text`, read once).
+        case done([NodeID: String])
         /// The list of open files could not be read in full.
         case incomplete
     }
@@ -270,22 +270,22 @@ struct TrashConfirmationSheet: View {
 
     // MARK: State
 
-    private var openIDs: Set<NodeID> {
+    private var openNotes: [NodeID: String] {
         if case let .done(open) = openCheck { return open }
-        return []
+        return [:]
     }
 
     /// Why a row stays where it is (open now, or no longer allowed), or nil when it will move.
     private func staysNote(_ candidate: TrashCandidate) -> String? {
         if let note = withdrawn[candidate.id] { return note }
-        if openIDs.contains(candidate.id) { return TrashSkip.openNow.text }
+        if let note = openNotes[candidate.id] { return note }
         return nil
     }
 
     /// The items that will move: all but those open right now or withdrawn.
     private func included(of candidates: [TrashCandidate]) -> [TrashCandidate] {
-        let open = openIDs
-        return candidates.filter { !open.contains($0.id) && withdrawn[$0.id] == nil }
+        let open = openNotes
+        return candidates.filter { open[$0.id] == nil && withdrawn[$0.id] == nil }
     }
 
     /// Only once the open files are known in full, with something left to move, the Trash available
@@ -322,7 +322,7 @@ struct TrashConfirmationSheet: View {
                 guard !Task.isCancelled else { break }
                 switch check {
                 case let .open(set):
-                    openCheck = set.isComplete ? .done(Set(found.filter { Self.isOpen($0, in: set) }.map(\.id))) : .incomplete
+                    openCheck = set.isComplete ? .done(Self.openNotes(of: found, in: set)) : .incomplete
                 case let .freed(id, estimate):
                     freed[id] = estimate
                     if let next = queue.next() {
@@ -382,11 +382,19 @@ struct TrashConfirmationSheet: View {
         case freed(NodeID, PrivateSize.Estimate)
     }
 
-    private static func isOpen(_ candidate: TrashCandidate, in set: OpenFileSet) -> Bool {
-        set.isOpen(candidate.path) || (candidate.kind == .directory && set.hasOpen(under: candidate.path))
+    /// The candidates open right now (a folder: or anything inside it), with who holds them.
+    private static func openNotes(of candidates: [TrashCandidate], in set: OpenFileSet) -> [NodeID: String] {
+        var notes: [NodeID: String] = [:]
+        for candidate in candidates {
+            notes[candidate.id] = set.use(of: candidate.path, isDirectory: candidate.kind == .directory)?.text
+        }
+        return notes
     }
 
-    @concurrent nonisolated private static func openFiles() async -> OpenFileSet { OpenFileSet.current() }
+    /// MacSpace's own descriptors (the estimates running beside it) are left out.
+    @concurrent nonisolated private static func openFiles() async -> OpenFileSet {
+        OpenFileSet.current(excludingOwnProcess: true)
+    }
 
     @concurrent nonisolated static func estimate(_ path: String) async -> PrivateSize.Estimate {
         PrivateSize.freed(path: path)
@@ -413,7 +421,7 @@ struct TrashConfirmationSheet: View {
         guard let rows = candidates, canMove(included(of: rows)), generation == model.storeGeneration else { return }
         let shown = Shown(verdicts: Dictionary(uniqueKeysWithValues: rows.map { ($0.id, $0.verdict) }),
                           withdrawn: Set(withdrawn.keys), included: included(of: rows))
-        let open = openIDs
+        let open = openNotes
         moving = true
         changedBeforeMove = false
         Task {
@@ -440,9 +448,7 @@ struct TrashConfirmationSheet: View {
             let known = freed
             let leftOut = rows.compactMap { row -> SkippedItem? in
                 if let note = withdrawn[row.id] { return SkippedItem(node: row.id, name: row.name, reason: note) }
-                if open.contains(row.id) {
-                    return SkippedItem(node: row.id, name: row.name, reason: TrashSkip.openNow.text)
-                }
+                if let note = open[row.id] { return SkippedItem(node: row.id, name: row.name, reason: note) }
                 return nil
             }
             let outcome = await model.trash(ids, expectedVerdicts: expected)
