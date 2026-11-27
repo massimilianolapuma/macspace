@@ -38,7 +38,7 @@
 @MainActor @Observable public final class RefreshCoordinator {
     public static let defaultThreshold: Duration                       // 150 ms
     public init(threshold: Duration = defaultThreshold,
-                wait: @escaping @MainActor (Duration) async -> Void = { try? await Task.sleep(for: $0) })
+                wait: @escaping @MainActor (Duration) async -> Void = { try? await Task.sleep(for: $0) })  // gets what is left of a deadline fixed in noteUserIntent
     public private(set) var isWaiting: Bool
     public func request(userInitiated: Bool, _ work: @escaping @MainActor (_ isLatest: @escaping @MainActor () -> Bool) async -> Void)
     public func settled() async
@@ -47,7 +47,7 @@
 }
 ```
 
-- [ ] **Step 1:** Write the nine tests from the spec. Use two test helpers: a `ManualTimer`, which counts arms, resumes on `fire()` and resumes when cancelled, and a `Gate`. Run `swift test --filter RefreshCoordinatorTests`. Expected: a compile failure (RED).
+- [ ] **Step 1:** Write the tests from the spec (15 after review: superseded ends, re-arming, `settled()` through supersession, cancel of running work). Use two test helpers: a `ManualTimer`, which counts arms and resumes every armed sleep on `fire()` (cancelled ones too, which the coordinator must ignore), and a `Gate`. Run `swift test --filter RefreshCoordinatorTests`. Expected: a compile failure (RED).
 - [ ] **Step 2:** Port the logic from `ScanModel.swift:157-181,316-403` at `658a372`.
 - [ ] **Step 3:** Run `swift test --package-path MacSpaceCore`. Expected: all green, 307 plus the new tests.
 - [ ] **Step 4:** Commit: `feat(core): RefreshCoordinator — latest-wins refresh and the wait state, tested`.

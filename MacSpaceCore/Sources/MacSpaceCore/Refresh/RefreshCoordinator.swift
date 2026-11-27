@@ -6,10 +6,11 @@ import Observation
 ///   superseded before it starts never runs its work, and the work's `isLatest` turns false the moment
 ///   a newer one is requested, so a stale result is never applied.
 /// - **Wait state.** A user intent (`noteUserIntent`, or a `request(userInitiated: true)`) arms a
-///   timer; if it fires before the intent is resolved, `isWaiting` turns true. A burst keeps the first
-///   deadline. The wait ends when a refresh issued for the latest intent ends (landed or dropped), or
-///   when the latest intent is abandoned with no refresh in flight. Refreshes nobody waits for (a scan's
-///   periodic one) never arm it, and never end a wait an unresolved intent still holds.
+///   timer for a deadline fixed at that moment; if it passes before the intent is resolved,
+///   `isWaiting` turns true. A burst keeps the first deadline. The wait ends when the latest refresh,
+///   of any kind, ends (landed or dropped) with every intent covered by a refresh, or when the latest
+///   intent is abandoned with no refresh in flight. Refreshes nobody waits for (a scan's periodic one)
+///   never arm it, and never end a wait an unresolved intent still holds.
 @MainActor @Observable
 public final class RefreshCoordinator {
     /// How long a user's request may stay pending before the wait state shows.
@@ -30,13 +31,13 @@ public final class RefreshCoordinator {
     /// while `coveredIntents == intentCount` resolves the latest intent.
     @ObservationIgnored private var intentCount = 0
     @ObservationIgnored private var coveredIntents = 0
-    /// The armed wait timer, and its number (a timer that fires after being replaced does nothing).
+    /// The armed wait timer; `endWaiting` cancels it, so a timer that wakes after that does nothing.
     @ObservationIgnored private var waitTimer: Task<Void, Never>?
-    @ObservationIgnored private var timerNumber = 0
 
     /// - Parameters:
     ///   - threshold: how long an intent may stay pending before `isWaiting` turns true.
-    ///   - wait: sleeps for the threshold; returns early when its task is cancelled. Injected by tests.
+    ///   - wait: sleeps for the given duration (what is left of the threshold when the timer task
+    ///     starts); may return early when its task is cancelled. Injected by tests.
     public init(threshold: Duration = defaultThreshold,
                 wait: @escaping @MainActor (Duration) async -> Void = { try? await Task.sleep(for: $0) }) {
         self.threshold = threshold
@@ -45,8 +46,9 @@ public final class RefreshCoordinator {
 
     /// Starts a refresh, cancelling the previous one. `work` runs on the main actor unless a newer
     /// request supersedes this one first; it should check `isLatest()` after each suspension and apply
-    /// nothing once it is false. `userInitiated`: something the user is waiting for (navigation, chart
-    /// change); it counts as a user intent, resolved by this refresh.
+    /// nothing once it is false. Call `isLatest` from within `work`, not from a task it spawns: it also
+    /// reads the calling task's cancellation. `userInitiated`: something the user is waiting for
+    /// (navigation, chart change); it counts as a user intent, resolved by this refresh.
     public func request(userInitiated: Bool,
                         _ work: @escaping @MainActor (_ isLatest: @escaping @MainActor () -> Bool) async -> Void) {
         if userInitiated {
@@ -59,7 +61,8 @@ public final class RefreshCoordinator {
         refreshInFlight = true
         refreshTask = Task {
             // However the latest refresh ends (landed or dropped), the wait is over, unless a user
-            // intent is still pending that no refresh has been issued for yet.
+            // intent is still pending that no refresh has been issued for yet (a goUp or reveal that is
+            // resolving its target): a refresh issued by anyone else must not hide that wait.
             defer {
                 if number == generation {
                     refreshInFlight = false
@@ -88,11 +91,12 @@ public final class RefreshCoordinator {
     public func noteUserIntent() -> Int {
         intentCount += 1
         guard waitTimer == nil else { return intentCount }
-        timerNumber += 1
-        let number = timerNumber
-        waitTimer = Task { [weak self, threshold, wait] in
-            await wait(threshold)
-            guard let self, !Task.isCancelled, number == timerNumber, waitTimer != nil else { return }
+        // The deadline is fixed now: a busy main actor must not push the wait later.
+        let deadline = ContinuousClock.now.advanced(by: threshold)
+        waitTimer = Task { [weak self, wait] in
+            await wait(ContinuousClock.now.duration(to: deadline))
+            // Cancelled by `endWaiting` (the intent resolved, or a new timer replaced this one).
+            guard let self, !Task.isCancelled else { return }
             setWaiting(true)
         }
         return intentCount

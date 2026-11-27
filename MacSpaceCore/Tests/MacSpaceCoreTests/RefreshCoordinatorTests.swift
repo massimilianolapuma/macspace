@@ -170,4 +170,69 @@ func settle() async {
         await first.open()
         #expect(await waiter.value == [2])
     }
+
+    @Test func settledWaitsThroughASupersessionThatHappensWhileItWaits() async {
+        let first = Gate(), second = Gate()
+        coordinator.request(userInitiated: false) { _ in await first.pass() }
+        await settle()
+        var done = false
+        let waiter = Task { await coordinator.settled(); done = true }
+        await settle()
+        coordinator.request(userInitiated: false) { _ in await second.pass() }
+        await first.open()
+        #expect(!done)
+        await second.open()
+        await waiter.value
+        #expect(done)
+    }
+
+    @Test func aSupersededRefreshEndingLeavesTheWaitToTheLatest() async {
+        let first = Gate(), second = Gate()
+        coordinator.request(userInitiated: true) { _ in await first.pass() }
+        await settle()
+        coordinator.request(userInitiated: true) { _ in await second.pass() }
+        await timer.fire()
+        #expect(coordinator.isWaiting)
+        await first.open()
+        #expect(coordinator.isWaiting)
+        await second.open()
+        await coordinator.settled()
+        #expect(!coordinator.isWaiting)
+    }
+
+    @Test func aLaterIntentArmsTheWaitAgain() async {
+        coordinator.request(userInitiated: true) { _ in }
+        await coordinator.settled()
+        let gate = Gate()
+        coordinator.request(userInitiated: true) { _ in await gate.pass() }
+        await timer.fire()
+        #expect(timer.armed == 2)
+        #expect(coordinator.isWaiting)
+        await gate.open()
+        await coordinator.settled()
+    }
+
+    @Test func abandoningAfterARefreshEndedEndsTheWait() async {
+        coordinator.request(userInitiated: true) { _ in }
+        await coordinator.settled()
+        let intent = coordinator.noteUserIntent()  // a goUp at the root, say
+        await timer.fire()
+        #expect(coordinator.isWaiting)
+        coordinator.abandonUserIntent(intent)
+        #expect(!coordinator.isWaiting)
+    }
+
+    @Test func supersedingCancelsTheRunningWork() async {
+        let gate = Gate()
+        var cancelled = false
+        coordinator.request(userInitiated: false) { _ in
+            await gate.pass()
+            cancelled = Task.isCancelled
+        }
+        await settle()
+        coordinator.request(userInitiated: false) { _ in }
+        await gate.open()
+        await coordinator.settled()
+        #expect(cancelled)
+    }
 }
