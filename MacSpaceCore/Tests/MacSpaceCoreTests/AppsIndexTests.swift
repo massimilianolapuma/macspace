@@ -100,13 +100,15 @@ import Testing
     #expect(calc.teamID == nil || !calc.teamID!.isEmpty)
 }
 
-/// Opt-in: `MACSPACE_BENCH=1 swift test -c release --filter appsIndexTiming`.
-@Test(.enabled(if: ProcessInfo.processInfo.environment["MACSPACE_BENCH"] == "1"))
-func appsIndexTiming() {
-    let clock = ContinuousClock()
-    var idx = AppsIndex.empty
-    let elapsed = clock.measure { idx = AppsIndex.build(extraAppPaths: AppsIndex.spotlightAppPaths()) }
-    print("APPSINDEX records=\(idx.count) seconds=\(elapsed)")
+extension Benchmarks {
+    /// Opt-in: `MACSPACE_BENCH=1 swift test -c release --filter appsIndexTiming`.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["MACSPACE_BENCH"] == "1"))
+    func appsIndexTiming() {
+        let clock = ContinuousClock()
+        var idx = AppsIndex.empty
+        let elapsed = clock.measure { idx = AppsIndex.build(extraAppPaths: AppsIndex.spotlightAppPaths()) }
+        print("APPSINDEX records=\(idx.count) seconds=\(elapsed)")
+    }
 }
 
 @Test func appForTeamIsCaseInsensitiveAndDeterministic() {

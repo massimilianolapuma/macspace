@@ -35,7 +35,7 @@ enum WindowLayout {
     static let pathRowSpacing: CGFloat = 2 * gap
     /// The path row's need (`ContentView.pathRowNeed`) as measured with the system font, so the
     /// first frame's minimum is already right; the live measurement replaces it.
-    static let measuredPathRowNeed: CGFloat = 640
+    static let measuredPathRowNeed: CGFloat = 660
     /// The window's smallest width for the toolbar's controls (target, chart, colors, history,
     /// "Interrompi", inspector button) to stay out of the overflow menu. With the inspector shown the
     /// path row's need plus the inspector's width already exceeds it.

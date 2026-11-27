@@ -10,6 +10,22 @@ enum ChartAccessibility {
     /// of a finished startup-disk scan).
     @MainActor
     static func label(for model: ScanModel) -> String {
+        let label = baseLabel(for: model)
+        return model.isWaiting ? label + ", " + String(localized: "aggiornamento in corso") : label
+    }
+
+    /// The chart's spoken label. A modifier of its own, so only it (not the chart's body, and with it
+    /// the canvas) depends on the wait state.
+    struct Label: ViewModifier {
+        let model: ScanModel
+
+        func body(content: Content) -> some View {
+            content.accessibilityLabel(Text(verbatim: ChartAccessibility.label(for: model)))
+        }
+    }
+
+    @MainActor
+    private static func baseLabel(for model: ScanModel) -> String {
         guard let folder = model.breadcrumb.last else {
             if model.isScanning { return String(localized: "Analisi in corso…") }
             return String(localized: "Nessuna analisi") + ". "

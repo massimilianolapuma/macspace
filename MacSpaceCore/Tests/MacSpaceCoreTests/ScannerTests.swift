@@ -162,6 +162,21 @@ func scanFixture(_ fx: Fixture) async throws -> (ScanStore, ScanSummary) {
     #expect(treemap.tiles == (await store.treemap(center: a, width: 400, height: 300, depth: 3)))
     #expect(treemap.biggest == snapshot.biggest && treemap.breadcrumb == snapshot.breadcrumb)
 }
+@Test func aSnapshotTakenInACancelledTaskIsEmptyAndDoesNoWork() async throws {
+    let fx = try Fixture(); defer { fx.cleanup() }
+    try fx.file("a/b/c", bytes: 30_000); try fx.file("e", bytes: 5_000)
+    let (store, _) = try await scanFixture(fx)
+    let a = await store.rows(childrenOf: FileTree.root, limit: 1)[0].id
+    let cancelled = await Task {
+        withUnsafeCurrentTask { $0?.cancel() }
+        return await store.snapshot(center: a, chart: .sunburst(depth: 3), biggestLimit: 5)
+    }.value
+    #expect(cancelled.segments.isEmpty && cancelled.tiles.isEmpty && cancelled.biggest.isEmpty
+            && cancelled.breadcrumb.isEmpty && cancelled.verdicts.isEmpty)
+    // Not cancelled: the same request is answered.
+    let live = await store.snapshot(center: a, chart: .sunburst(depth: 3), biggestLimit: 5)
+    #expect(!live.segments.isEmpty && !live.breadcrumb.isEmpty)
+}
 @Test func scanClassifiesWithContext() async throws {
     let fx = try Fixture(); defer { fx.cleanup() }
     try fx.file("node_modules/x/big.js", bytes: 200_000); try fx.file("film.mov", bytes: 100_000)

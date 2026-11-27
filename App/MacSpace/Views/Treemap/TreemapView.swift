@@ -49,7 +49,7 @@ struct TreemapView: View {
             }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(Text(verbatim: ChartAccessibility.label(for: model)))
+        .modifier(ChartAccessibility.Label(model: model))
         .chartUpAction(enabled: model.breadcrumb.count > 1) { model.goUp() }
         .accessibilityChildren { accessibleTiles }
         .onAppear {

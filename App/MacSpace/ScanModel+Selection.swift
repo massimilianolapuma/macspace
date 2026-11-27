@@ -36,7 +36,7 @@ extension ScanModel {
     func isInsideSelection(_ node: NodeID) -> Bool {
         guard !selection.isEmpty, !selection.contains(node) else { return false }
         if breadcrumb.contains(where: { selection.contains($0.id) }) { return true }
-        let parents = switch chart {
+        let parents = switch shownChart {
         case .sunburst: segmentParents
         case .treemap: tileParents
         }
@@ -158,15 +158,19 @@ extension ScanModel {
             return
         }
         highlighted = ids
-        let onScreen = switch chart {
+        let onScreen = switch shownChart {
         case .sunburst: segments.contains { $0.node.map(ids.contains) ?? false }
         case .treemap: tiles.contains { $0.node.map(ids.contains) ?? false }
         }
         guard !onScreen, let store else { return }
+        let intent = noteUserIntent()
         Task {
             guard let folder = await store.commonFolder(of: ids), store === self.store, highlighted == ids else {
+                abandonUserIntent(intent)
                 return
             }
+            // `drill` refreshes (and so covers the intent) unless the folder is already the center.
+            if folder == center { abandonUserIntent(intent) }
             drill(into: folder)
         }
     }
@@ -174,14 +178,20 @@ extension ScanModel {
     /// Shows `node`: drills to its folder so it is a first-level element, then hovers it.
     func reveal(_ node: NodeID) {
         guard let store else { return }
+        let intent = noteUserIntent()
         Task {
-            guard let folder = await store.commonFolder(of: [node]), store === self.store else { return }
+            guard let folder = await store.commonFolder(of: [node]), store === self.store else {
+                abandonUserIntent(intent)
+                return
+            }
             if folder != center {
                 center = folder
                 hovered = nil
                 hoveredTile = nil
-                await refreshViews()
+                await refreshViews(userInitiated: true)
                 guard store === self.store, center == folder else { return }
+            } else {
+                abandonUserIntent(intent)
             }
             hoverFirstLevel(node)
         }

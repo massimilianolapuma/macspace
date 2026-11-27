@@ -2,6 +2,7 @@ import CoreGraphics
 import Foundation
 import MacSpaceCore
 import Observation
+import os
 import Synchronization
 
 /// What the user asked to analyse.
@@ -71,12 +72,12 @@ final class ScanModel {
     /// Which chart is on screen; only that one is laid out. Mirrors `@AppStorage(ChartKind.storageKey)`.
     /// Changing it relays out the current folder: the scan, `center` and the hovered node stay.
     var chart: ChartKind = .sunburst {
-        didSet { if chart != oldValue { Task { await refreshViews() } } }
+        didSet { if chart != oldValue { requestRefresh(userInitiated: true) } }
     }
     /// The chart area's size, reported by the content view whichever chart shows (debounced while
     /// the window resizes); the treemap is laid out for it.
     var chartSize: CGSize = .zero {
-        didSet { if chartSize != oldValue, chart == .treemap { Task { await refreshViews() } } }
+        didSet { if chartSize != oldValue, chart == .treemap { requestRefresh(userInitiated: true) } }
     }
     /// Treemap tiles below `center`, laid out for `tilesSize`; empty unless `chart` is `.treemap`.
     var tiles: [TreemapTile] = [] {
@@ -153,6 +154,31 @@ final class ScanModel {
     /// Selection changes run one after the other, each against the outcome of the previous one.
     @ObservationIgnored var selectionWork: Task<Void, Never>?
     @ObservationIgnored private var scanTask: Task<Void, Never>?
+    /// The latest view refresh (`requestRefresh`); each new one cancels it, so at most one
+    /// snapshot that is still wanted runs on the store, and superseded ones never reach it.
+    @ObservationIgnored private var refreshTask: Task<Void, Never>?
+    /// Bumped by every `requestRefresh`: a refresh lands only while its number is the latest.
+    @ObservationIgnored private var refreshGeneration = 0
+    /// Whether work the user asked for (navigation, chart switch, canvas resize) has been pending
+    /// for `waitThreshold` without landing: the views then dim the chart they still show and a
+    /// spinner appears in the path row. Never set by the scan ticker's own refreshes.
+    private(set) var isWaiting = false
+    /// The chart kind whose data is on screen (`segments` or `tiles`): set when a refresh lands, so a
+    /// chart switch keeps the previous chart up (dimmed after `waitThreshold`) until the new one's
+    /// data arrives.
+    private(set) var shownChart: ChartKind = .sunburst
+    /// User intents noted so far (`noteUserIntent`), and how many a refresh has been issued for: a
+    /// refresh that lands while `coveredIntents == intentCount` covers the latest intent.
+    @ObservationIgnored private var intentCount = 0
+    @ObservationIgnored private var coveredIntents = 0
+    /// When the wait state shows if the pending intent has not been resolved by then; nil while none
+    /// is pending. A burst keeps the earliest deadline.
+    @ObservationIgnored private var waitDeadline: ContinuousClock.Instant?
+    @ObservationIgnored private var waitTimer: Task<Void, Never>?
+    /// Whether the latest refresh has not yet returned.
+    @ObservationIgnored private var refreshInFlight = false
+    /// How long a user's request may stay pending before the wait state shows.
+    static let waitThreshold: Duration = .milliseconds(150)
     /// What verdicts are judged against (`updateEnvironment`, or the live one `trash` reads); nil
     /// until the provider's first one.
     @ObservationIgnored var environment: SafetyEnvironment?
@@ -241,25 +267,29 @@ final class ScanModel {
         center = node
         hovered = nil
         hoveredTile = nil
-        Task { await refreshViews() }
+        requestRefresh(userInitiated: true)
     }
 
     func goUp() {
         guard let store else { return }
         let from = center
+        let intent = noteUserIntent()
         Task {
             let crumb = await store.breadcrumb(to: from)
-            guard crumb.count >= 2, store === self.store, from == center else { return }
+            guard crumb.count >= 2, store === self.store, from == center else {
+                abandonUserIntent(intent)
+                return
+            }
             center = crumb[crumb.count - 2].id
             hovered = nil
             hoveredTile = nil
-            await refreshViews()
+            requestRefresh(userInitiated: true)
         }
     }
 
     /// The node under the pointer in whichever chart is on screen (or a hovered list row).
     var hoveredNode: NodeID? {
-        switch chart {
+        switch shownChart {
         case .sunburst: hovered?.node
         case .treemap: hoveredTile?.node
         }
@@ -268,7 +298,7 @@ final class ScanModel {
     /// Hovers the first-level element of `node` in whichever chart is on screen (nil: none), as
     /// a hovered list row does.
     func hoverFirstLevel(_ node: NodeID?) {
-        switch chart {
+        switch shownChart {
         case .sunburst:
             let segment = node.flatMap { node in segments.first { $0.depth == 1 && $0.node == node } }
             if hovered != segment { hovered = segment }
@@ -279,11 +309,100 @@ final class ScanModel {
     }
 
     /// Reloads the active chart (`segments` or `tiles`), `biggest`, `breadcrumb`, `categoryTotals`
-    /// and `ageTotals` for the current `center`, from one consistent store snapshot. The other
-    /// chart's data is emptied; the hovered node carries over to the active chart when it is
-    /// still laid out there.
-    func refreshViews() async {
-        guard let store else { return }
+    /// and `ageTotals` for the current `center`, from one consistent store snapshot, superseding
+    /// any refresh in flight; returns once the latest refresh (this one or a newer one) has landed.
+    /// The other chart's data is emptied; the hovered node carries over to the active chart when
+    /// it is still laid out there.
+    func refreshViews(userInitiated: Bool = false) async {
+        requestRefresh(userInitiated: userInitiated)
+        await refreshesSettled()
+    }
+
+    /// Starts a refresh of the views for the current state, cancelling the previous one: latest
+    /// wins. Navigation, chart and canvas changes call this without waiting.
+    /// `userInitiated`: a navigation or chart change the user is waiting for; it counts as a user
+    /// intent (`noteUserIntent`), so the wait state shows if it has not landed within
+    /// `waitThreshold`. The scan ticker's refreshes never set it.
+    func requestRefresh(userInitiated: Bool = false) {
+        if userInitiated {
+            noteUserIntent()
+            coveredIntents = intentCount
+        }
+        refreshTask?.cancel()
+        refreshGeneration += 1
+        let generation = refreshGeneration
+        refreshInFlight = true
+        refreshTask = Task { await performRefresh(generation: generation) }
+    }
+
+    /// The user has asked for something that will change the views; the wait state arms now, not when
+    /// the refresh is issued (which may follow an actor round trip). Call at the top of the action,
+    /// synchronously; every call must end in a `requestRefresh(userInitiated: true)` or an
+    /// `abandonUserIntent`. Returns the intent's number.
+    @discardableResult
+    func noteUserIntent() -> Int {
+        intentCount += 1
+        guard waitDeadline == nil else { return intentCount }
+        let deadline = ContinuousClock.now.advanced(by: Self.waitThreshold)
+        waitDeadline = deadline
+        waitTimer = Task { [weak self] in
+            try? await Task.sleep(until: deadline, clock: .continuous)
+            guard let self, !Task.isCancelled, waitDeadline == deadline else { return }
+            isWaiting = true
+        }
+        return intentCount
+    }
+
+    /// The action that noted intent `intent` ended without refreshing anything. Unless a newer intent
+    /// is pending, or a refresh issued for an earlier one is still under way (its landing clears the
+    /// wait), the wait ends now.
+    func abandonUserIntent(_ intent: Int) {
+        guard intent == intentCount else { return }
+        coveredIntents = intentCount
+        if !refreshInFlight { endWaiting() }
+    }
+
+    /// Waits until the latest refresh has landed (or was dropped), following any newer one that
+    /// supersedes it meanwhile.
+    private func refreshesSettled() async {
+        while let task = refreshTask {
+            await task.value
+            if refreshTask == task { return }
+        }
+    }
+
+    /// The scan ticker's refresh: never cancels one in flight (a navigation's, say), it waits for
+    /// it and then refreshes the then-current state.
+    private func refreshAfterInFlight() async {
+        await refreshesSettled()
+        guard !Task.isCancelled else { return }
+        await refreshViews()
+    }
+
+    /// Whether the refresh numbered `generation` is still the one wanted.
+    private func isLatestRefresh(_ generation: Int) -> Bool {
+        !Task.isCancelled && generation == refreshGeneration
+    }
+
+    private func endWaiting() {
+        waitTimer?.cancel()
+        waitTimer = nil
+        waitDeadline = nil
+        if isWaiting { isWaiting = false }
+    }
+
+    private func performRefresh(generation: Int) async {
+        // Whatever way the latest refresh ends (landed or dropped), the wait is over, unless a user
+        // intent is still pending that no refresh has been issued for yet (a goUp or reveal that is
+        // resolving its target): a refresh issued by anyone else must not hide that wait.
+        defer {
+            if generation == refreshGeneration {
+                refreshInFlight = false
+                if coveredIntents == intentCount { endWaiting() }
+            }
+        }
+        // Superseded before it started (several clicks in one turn): never reaches the store.
+        guard isLatestRefresh(generation), let store else { return }
         let center = self.center
         let chart = self.chart
         let size = chartSize
@@ -291,14 +410,20 @@ final class ScanModel {
         case .sunburst: .sunburst(depth: Self.ringDepth)
         case .treemap: .treemap(width: size.width, height: size.height, depth: Self.ringDepth)
         }
+        // One signpost ID per interval: overlapping refreshes (one suspended on the store while the
+        // next starts) must pair their own begin and end.
+        let signpostID = Perf.signposter.makeSignpostID()
+        let signpost = Perf.signposter.beginInterval("snapshot", id: signpostID)
         let snapshot = await store.snapshot(center: center, chart: request, biggestLimit: Self.biggestLimit)
+        Perf.signposter.endInterval("snapshot", signpost)
         // A newer scan, navigation, chart or canvas size happened meanwhile: its own refresh wins.
-        guard store === self.store, center == self.center, chart == self.chart,
+        guard isLatestRefresh(generation), store === self.store, center == self.center, chart == self.chart,
               chart == .sunburst || size == chartSize else { return }
         Perf.interval("refresh apply") {
             // Segments and tiles share ids ("\(node)"), so the hover survives a chart switch.
             let hoveredID = hovered?.id ?? hoveredTile?.id
             segments = snapshot.segments
+            if shownChart != chart { shownChart = chart }
             tilesSize = size
             tiles = snapshot.tiles
             biggest = snapshot.biggest
@@ -350,6 +475,7 @@ final class ScanModel {
         disk = scansStartupDisk ? DiskUsage.startupDisk() : nil
         segments = []
         tiles = []
+        shownChart = chart
         biggest = []
         // The root's crumb from the first frame: the path row names what is being scanned before
         // the first refresh lands.
@@ -385,7 +511,7 @@ final class ScanModel {
                 try? await Task.sleep(for: Self.refreshInterval)
                 guard !Task.isCancelled else { return }
                 if let progress = latest.value { phase = .scanning(progress) }
-                await refreshViews()
+                await refreshAfterInFlight()
             }
         }
         let scanner = Scanner(rootPath: rootPath, boundary: boundary)
