@@ -26,7 +26,7 @@ mkdir -p "$out"
 
 xcodegen generate --quiet
 xcodebuild -project MacSpace.xcodeproj -scheme MacSpace -configuration Release \
-    -derivedDataPath "$derived" build -quiet
+    -destination "platform=macOS" -derivedDataPath "$derived" build -quiet
 
 app="$derived/Build/Products/Release/MacSpace.app"
 codesign --verify --deep --strict "$app"
