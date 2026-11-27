@@ -289,7 +289,7 @@ final class ScanModel {
 
     /// The node under the pointer in whichever chart is on screen (or a hovered list row).
     var hoveredNode: NodeID? {
-        switch chart {
+        switch shownChart {
         case .sunburst: hovered?.node
         case .treemap: hoveredTile?.node
         }
@@ -298,7 +298,7 @@ final class ScanModel {
     /// Hovers the first-level element of `node` in whichever chart is on screen (nil: none), as
     /// a hovered list row does.
     func hoverFirstLevel(_ node: NodeID?) {
-        switch chart {
+        switch shownChart {
         case .sunburst:
             let segment = node.flatMap { node in segments.first { $0.depth == 1 && $0.node == node } }
             if hovered != segment { hovered = segment }

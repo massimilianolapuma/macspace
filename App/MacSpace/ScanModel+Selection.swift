@@ -36,7 +36,7 @@ extension ScanModel {
     func isInsideSelection(_ node: NodeID) -> Bool {
         guard !selection.isEmpty, !selection.contains(node) else { return false }
         if breadcrumb.contains(where: { selection.contains($0.id) }) { return true }
-        let parents = switch chart {
+        let parents = switch shownChart {
         case .sunburst: segmentParents
         case .treemap: tileParents
         }
@@ -158,15 +158,19 @@ extension ScanModel {
             return
         }
         highlighted = ids
-        let onScreen = switch chart {
+        let onScreen = switch shownChart {
         case .sunburst: segments.contains { $0.node.map(ids.contains) ?? false }
         case .treemap: tiles.contains { $0.node.map(ids.contains) ?? false }
         }
         guard !onScreen, let store else { return }
+        let intent = noteUserIntent()
         Task {
             guard let folder = await store.commonFolder(of: ids), store === self.store, highlighted == ids else {
+                abandonUserIntent(intent)
                 return
             }
+            // `drill` refreshes (and so covers the intent) unless the folder is already the center.
+            if folder == center { abandonUserIntent(intent) }
             drill(into: folder)
         }
     }
