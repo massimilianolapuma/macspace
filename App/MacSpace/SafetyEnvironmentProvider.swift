@@ -90,18 +90,23 @@ final class SafetyEnvironmentProvider {
         runningObservation?.invalidate()
     }
 
-    /// Publishes a fresh environment `runningAppsDebounce` after the last launch or quit.
+    /// Publishes a fresh environment `runningAppsDebounce` after the last launch or quit, if the
+    /// running apps differ from the published ones.
     private func scheduleRefresh() {
         pendingRefresh?.cancel()
         pendingRefresh = Task { [weak self] in
             try? await Task.sleep(for: Self.runningAppsDebounce)
-            guard !Task.isCancelled else { return }
-            self?.publish()
+            guard !Task.isCancelled, let self else { return }
+            // An agent that launched and quit within the debounce (some relaunch every few seconds)
+            // changes nothing the verdicts look at: publishing would re-judge everything for nothing.
+            let next = Self.environment(apps: apps)
+            guard !next.judgesRunningAppsLike(environment) else { return }
+            publish(next)
         }
     }
 
-    private func publish() {
-        environment = Self.environment(apps: apps)
+    private func publish(_ next: SafetyEnvironment? = nil) {
+        environment = next ?? Self.environment(apps: apps)
         revision += 1
     }
 

@@ -130,9 +130,7 @@ extension ScanModel {
         // The running apps (and iCloud sync) read now. Kept as the model's environment too, so an
         // update queued meanwhile hands the store this one, not an older one, after the move.
         let live = SafetyEnvironmentProvider.environment(apps: environment.apps)
-        let changed = live.runningBundleIDs != environment.runningBundleIDs
-            || live.runningAppPaths != environment.runningAppPaths
-            || live.syncedHomeFolders != environment.syncedHomeFolders
+        let changed = !live.judgesRunningAppsLike(environment)
         self.environment = live
         // On the store's actor: blocking file system calls, off the main actor. The store takes the
         // live environment and moves in one actor call, so no queued update can slip in between.
