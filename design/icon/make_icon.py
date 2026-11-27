@@ -24,7 +24,7 @@ LIFT = 62.0                   # outward along the wedge's bisector
 
 LIGHT = {"arcs": ["#5F574E", "#918578"], "wedge": "#F26431",
          "bg": ["#FAF8F4", "#E8E1D6"]}
-DARK = {"arcs": ["#C7C7CC", "#8E8E93"], "wedge": "#F06535",
+DARK = {"arcs": ["#C7C7CC", "#8E8E93"], "wedge": "#EE622F",
         "bg": ["#3A3A3E", "#1C1C1E"]}
 
 
