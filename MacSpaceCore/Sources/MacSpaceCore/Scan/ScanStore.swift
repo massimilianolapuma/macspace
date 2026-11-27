@@ -241,7 +241,9 @@ public actor ScanStore {
     }
 
     /// Lays out only the chart `chart` asks for, so the other one costs nothing. Each node's
-    /// verdict comes from the cache when it has one, so none is evaluated twice.
+    /// verdict comes from the cache when it has one, so none is evaluated twice. Called from a task
+    /// that is already cancelled (a request superseded while it queued on this actor), it does none
+    /// of that and returns an empty snapshot, which its caller discards.
     public func snapshot(center: NodeID, chart: ChartRequest, biggestLimit: Int) -> Snapshot {
         // A request superseded while it queued on this actor (cancelled) skips the work: its caller
         // discards the result. A center from another store (a stale request racing a new scan)

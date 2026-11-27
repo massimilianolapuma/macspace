@@ -69,8 +69,8 @@ extension ScanStore {
     }
 }
 
-/// In `FullDiskBenchmarks` (`ScannerBenchmark.swift`): these scan the whole startup disk, as `startupDiskScan` does.
-extension FullDiskBenchmarks {
+/// In `Benchmarks` (`ScannerBenchmark.swift`): these scan the whole startup disk, as `startupDiskScan` does.
+extension Benchmarks {
     /// Opt-in: `MACSPACE_BENCH=1 swift test -c release --filter drillHomeExpanded`. The five folders
     /// home's sunburst expands whose full child sort (`children(of:)`) costs most.
     @Test(.enabled(if: ProcessInfo.processInfo.environment["MACSPACE_BENCH"] == "1"))

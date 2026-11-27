@@ -203,8 +203,9 @@ private func randomTree(seed: UInt64, count: Int, crowd: Int) -> (tree: FileTree
                         ReferenceSunburstLayout.compute(tree: t, center: logs), "logs")
     }
 
-    /// A child whose span is exactly `minAngle` is kept (`!(span < minAngle)`), the one right below
-    /// it is not: the threshold is set to each child's own span, computed as the layout computes it.
+    /// A child whose span is exactly `minAngle` is kept (`!(span < minAngle)`): the threshold is set
+    /// to each child's own span, computed as the layout computes it, and one ulp either side of it,
+    /// where the layout must still agree with the reference bit for bit.
     @Test func onePassSunburstMatchesTheReferenceOnTheMinAngleBoundary() {
         let t = FileTree(rootName: "r", rootPath: "/r")
         let sizes: [UInt64] = [900_000, 50_000, 50_000, 7_001, 7_000, 6_999, 3, 2, 1]
