@@ -202,4 +202,47 @@ private func randomTree(seed: UInt64, count: Int, crowd: Int) -> (tree: FileTree
         expectIdentical(SunburstLayout.compute(tree: t, center: logs),
                         ReferenceSunburstLayout.compute(tree: t, center: logs), "logs")
     }
+
+    /// A child whose span is exactly `minAngle` is kept (`!(span < minAngle)`), the one right below
+    /// it is not: the threshold is set to each child's own span, computed as the layout computes it.
+    @Test func onePassSunburstMatchesTheReferenceOnTheMinAngleBoundary() {
+        let t = FileTree(rootName: "r", rootPath: "/r")
+        let sizes: [UInt64] = [900_000, 50_000, 50_000, 7_001, 7_000, 6_999, 3, 2, 1]
+        for (i, size) in sizes.enumerated() {
+            t.addChild(of: 0, name: names[i % names.count], kind: .file, allocatedSize: size)
+        }
+        let total = Double(sizes.reduce(0, +))
+        for size in sizes {
+            let exact = 2 * Double.pi * Double(size) / total
+            for minAngle in [exact, exact.nextUp, exact.nextDown] {
+                let segments = SunburstLayout.compute(tree: t, center: 0, minAngle: minAngle)
+                expectIdentical(segments, ReferenceSunburstLayout.compute(tree: t, center: 0, minAngle: minAngle),
+                                "size \(size) minAngle \(minAngle)")
+                // The boundary is really hit: at exactly its span the child is still drawn as itself.
+                if minAngle == exact { #expect(segments.contains { $0.size == size && $0.node != nil }) }
+            }
+        }
+    }
+
+    /// Sizes above 2^53, where neighbouring integers round to the same `Double`: ties in the
+    /// proportion decide kept or merged for all of them alike, and the sums must not trap.
+    @Test func onePassSunburstMatchesTheReferenceOnSizesAbove2Pow53() {
+        let t = FileTree(rootName: "r", rootPath: "/r")
+        let base: UInt64 = 1 << 60
+        let sizes: [UInt64] = [base, base + 1, base + 2, base - 1, 1 << 54, (1 << 54) + 1, (1 << 53) + 1, 1 << 40, 4096, 1]
+        for (i, size) in sizes.enumerated() {
+            t.addChild(of: 0, name: names[i % names.count], kind: .file, allocatedSize: size)
+        }
+        let folder = t.addChild(of: 0, name: "big", kind: .directory, allocatedSize: 0)
+        for (i, size) in sizes.enumerated() {
+            t.addChild(of: folder, name: names[i % names.count], kind: .file, allocatedSize: size)
+        }
+        for minAngle in [0.006, 0.0001, 0.05, 0.3, 0] {
+            for depth in [1, 3] {
+                expectIdentical(SunburstLayout.compute(tree: t, center: 0, depth: depth, minAngle: minAngle),
+                                ReferenceSunburstLayout.compute(tree: t, center: 0, depth: depth, minAngle: minAngle),
+                                "minAngle \(minAngle) depth \(depth)")
+            }
+        }
+    }
 }
