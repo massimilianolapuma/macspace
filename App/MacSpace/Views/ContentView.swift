@@ -26,7 +26,9 @@ struct ContentView: View {
     @AppStorage(ColorMode.storageKey) private var colorMode: ColorMode = .deletable
     @AppStorage(ChartKind.storageKey) private var chart: ChartKind = .sunburst
     @Environment(\.colorScheme) private var scheme
-
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// The chart's opacity while a navigation has not landed.
+    static let waitingOpacity = 0.6
 
     var body: some View {
         content
@@ -41,6 +43,7 @@ struct ContentView: View {
                 HStack(spacing: WindowLayout.pathRowSpacing) {
                     BreadcrumbView.Narrowest()
                     PathRowFacts.Widest()
+                    WaitSlot(active: false)
                 }
                 .fixedSize()
                 .hidden()
@@ -118,6 +121,8 @@ struct ContentView: View {
                     // Never cut: the path gives way first.
                     PathRowFacts(model: model, showsTotal: chart == .treemap)
                         .layoutPriority(1)
+                    WaitSlot(active: model.isWaiting)
+                        .layoutPriority(1)
                 }
                 .frame(height: WindowLayout.rowHeight)
                 // The path's text, not its hover highlight, lines up with the chart's edge.
@@ -129,6 +134,11 @@ struct ContentView: View {
                     }
                 }
                 .reportsChartSize(to: model)
+                // Work the user asked for is under way: the chart on screen stays (a click on it
+                // would act on a stale layout, so it takes none) but dims.
+                .opacity(model.isWaiting ? Self.waitingOpacity : 1)
+                .allowsHitTesting(!model.isWaiting)
+                .animation(reduceMotion ? nil : .easeOut(duration: 0.15), value: model.isWaiting)
                 ChartLegend(model: model, mode: colorMode)
             }
             .padding(WindowLayout.windowMargin)
@@ -536,5 +546,25 @@ struct PathRowFactsContent: View {
             ? String(localized: "1 cartella non leggibile")
             : String(localized: "\(Formatters.count(unreadable)) cartelle non leggibili")
         return line + " · " + folders
+    }
+}
+
+/// The path row's last place: a small spinner while a navigation is under way, in a slot of its own
+/// size whether or not it shows, so nothing in the row shifts when it comes and goes.
+struct WaitSlot: View {
+    let active: Bool
+
+    static let size: CGFloat = 16
+
+    var body: some View {
+        ZStack {
+            if active {
+                ProgressView()
+                    .controlSize(.small)
+                    // The chart's label says it.
+                    .accessibilityHidden(true)
+            }
+        }
+        .frame(width: Self.size, height: Self.size)
     }
 }

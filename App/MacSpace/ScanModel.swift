@@ -72,12 +72,12 @@ final class ScanModel {
     /// Which chart is on screen; only that one is laid out. Mirrors `@AppStorage(ChartKind.storageKey)`.
     /// Changing it relays out the current folder: the scan, `center` and the hovered node stay.
     var chart: ChartKind = .sunburst {
-        didSet { if chart != oldValue { requestRefresh() } }
+        didSet { if chart != oldValue { requestRefresh(userInitiated: true) } }
     }
     /// The chart area's size, reported by the content view whichever chart shows (debounced while
     /// the window resizes); the treemap is laid out for it.
     var chartSize: CGSize = .zero {
-        didSet { if chartSize != oldValue, chart == .treemap { requestRefresh() } }
+        didSet { if chartSize != oldValue, chart == .treemap { requestRefresh(userInitiated: true) } }
     }
     /// Treemap tiles below `center`, laid out for `tilesSize`; empty unless `chart` is `.treemap`.
     var tiles: [TreemapTile] = [] {
@@ -159,6 +159,14 @@ final class ScanModel {
     @ObservationIgnored private var refreshTask: Task<Void, Never>?
     /// Bumped by every `requestRefresh`: a refresh lands only while its number is the latest.
     @ObservationIgnored private var refreshGeneration = 0
+    /// Whether a refresh the user asked for (navigation, chart switch, canvas resize) has not
+    /// landed within `waitThreshold`: the views then dim the chart they still show and a spinner
+    /// appears in the path row. Never set by the scan ticker's refreshes.
+    private(set) var isWaiting = false
+    /// Delays `isWaiting` by `waitThreshold`; replaced by each user-initiated request.
+    @ObservationIgnored private var waitTimer: Task<Void, Never>?
+    /// How long a user-initiated refresh may take before the wait state shows.
+    static let waitThreshold: Duration = .milliseconds(150)
     /// What verdicts are judged against (`updateEnvironment`, or the live one `trash` reads); nil
     /// until the provider's first one.
     @ObservationIgnored var environment: SafetyEnvironment?
@@ -247,7 +255,7 @@ final class ScanModel {
         center = node
         hovered = nil
         hoveredTile = nil
-        requestRefresh()
+        requestRefresh(userInitiated: true)
     }
 
     func goUp() {
@@ -259,7 +267,7 @@ final class ScanModel {
             center = crumb[crumb.count - 2].id
             hovered = nil
             hoveredTile = nil
-            requestRefresh()
+            requestRefresh(userInitiated: true)
         }
     }
 
@@ -296,10 +304,21 @@ final class ScanModel {
 
     /// Starts a refresh of the views for the current state, cancelling the previous one: latest
     /// wins. Navigation, chart and canvas changes call this without waiting.
-    func requestRefresh() {
+    /// `userInitiated`: a navigation or chart change the user is waiting for; if it has not landed
+    /// within `waitThreshold`, `isWaiting` turns on until the latest refresh lands. The scan ticker's
+    /// refreshes never set it.
+    func requestRefresh(userInitiated: Bool = false) {
         refreshTask?.cancel()
         refreshGeneration += 1
         let generation = refreshGeneration
+        if userInitiated {
+            waitTimer?.cancel()
+            waitTimer = Task { [weak self] in
+                try? await Task.sleep(for: Self.waitThreshold)
+                guard let self, !Task.isCancelled, generation == refreshGeneration else { return }
+                isWaiting = true
+            }
+        }
         refreshTask = Task { await performRefresh(generation: generation) }
     }
 
@@ -325,7 +344,15 @@ final class ScanModel {
         !Task.isCancelled && generation == refreshGeneration
     }
 
+    private func endWaiting() {
+        waitTimer?.cancel()
+        waitTimer = nil
+        if isWaiting { isWaiting = false }
+    }
+
     private func performRefresh(generation: Int) async {
+        // Whatever way the latest refresh ends (landed or dropped), the wait is over.
+        defer { if generation == refreshGeneration { endWaiting() } }
         // Superseded before it started (several clicks in one turn): never reaches the store.
         guard isLatestRefresh(generation), let store else { return }
         let center = self.center
@@ -335,7 +362,10 @@ final class ScanModel {
         case .sunburst: .sunburst(depth: Self.ringDepth)
         case .treemap: .treemap(width: size.width, height: size.height, depth: Self.ringDepth)
         }
-        let signpost = Perf.signposter.beginInterval("snapshot")
+        // One signpost ID per interval: overlapping refreshes (one suspended on the store while the
+        // next starts) must pair their own begin and end.
+        let signpostID = Perf.signposter.makeSignpostID()
+        let signpost = Perf.signposter.beginInterval("snapshot", id: signpostID)
         let snapshot = await store.snapshot(center: center, chart: request, biggestLimit: Self.biggestLimit)
         Perf.signposter.endInterval("snapshot", signpost)
         // A newer scan, navigation, chart or canvas size happened meanwhile: its own refresh wins.

@@ -10,6 +10,12 @@ enum ChartAccessibility {
     /// of a finished startup-disk scan).
     @MainActor
     static func label(for model: ScanModel) -> String {
+        let label = baseLabel(for: model)
+        return model.isWaiting ? label + ", " + String(localized: "aggiornamento in corso") : label
+    }
+
+    @MainActor
+    private static func baseLabel(for model: ScanModel) -> String {
         guard let folder = model.breadcrumb.last else {
             if model.isScanning { return String(localized: "Analisi in corso…") }
             return String(localized: "Nessuna analisi") + ". "
