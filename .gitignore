@@ -5,3 +5,4 @@ Local.xcconfig
 DerivedData/
 .swiftpm/
 .DS_Store
+build/
