@@ -1,7 +1,8 @@
 import MacSpaceCore
 import SwiftUI
 
-/// Outlines the selected and highlighted segments, above the hover layer so a hovered selected
+/// Spotlights `ScanModel.spotlight` (everything else dims, the center disc stays clear) and outlines
+/// the selected and spotlit segments, above the hover layer so a hovered selected
 /// segment keeps its outline. A folder's outline takes in its rings outward, everything it holds;
 /// when the current folder or one above it is selected, the whole chart is outlined. Exists only
 /// while something is selected or highlighted, so the rings and the hover layer never redraw for it.
@@ -15,7 +16,7 @@ struct SunburstSelectionLayer: View {
 
     var body: some View {
         let selection = model.selection
-        let highlighted = model.highlighted
+        let highlighted = model.spotlight
         if !selection.isEmpty || !highlighted.isEmpty {
             let whole = model.breadcrumb.contains { selection.contains($0.id) }
             TimelineView(.animation(minimumInterval: 1.0 / 60, paused: !moving)) { timeline in
@@ -50,6 +51,21 @@ struct SunburstSelectionLayer: View {
                 outerByNode[node] = max(outerByNode[node] ?? 0, outer)
                 up = parentByNode[node]
             }
+        }
+        if !highlighted.isEmpty {
+            var holes = Path(ellipseIn: geometry.rect(radius: geometry.centerRadius))
+            var found = false
+            for (arc, pose) in poses {
+                guard let node = arc.segment.node, highlighted.contains(node),
+                      let inner = geometry.drawableInner(pose) else { continue }
+                let outer = outerByNode[node] ?? min(inner + geometry.ringWidth, geometry.radius)
+                // A union, not added subpaths: a full ring and a sector wind differently, and nested
+                // targets would then cancel out under the clip's non-zero rule.
+                holes = holes.union(SunburstView.sector(center: geometry.center, inner: max(inner, geometry.centerRadius),
+                                                        outer: outer, start: pose.start, end: pose.end))
+                found = true
+            }
+            if found { SafetyDecor.spotlightMask(sparing: holes, size: geometry.size, scheme: scheme, in: context) }
         }
         if whole {
             let ring = SunburstView.sector(center: geometry.center, inner: geometry.centerRadius, outer: deepest,

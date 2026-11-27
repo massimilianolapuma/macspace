@@ -118,6 +118,13 @@ final class ScanModel {
     var selectionTotal: UInt64 = 0
     /// The items of the suggestion whose header was clicked, outlined wherever they are on screen.
     var highlighted: Set<NodeID> = []
+    /// The node of the Elementi row under the pointer: the chart spotlights it (`spotlight`).
+    var listFocus: NodeID?
+    /// What the chart spotlights (dims everything else, outlines these): the hovered list row's node,
+    /// or else the highlighted suggestion items.
+    var spotlight: Set<NodeID> {
+        if let listFocus { [listFocus] } else { highlighted }
+    }
     /// The store's suggestions, recomputed when a scan ends, when the environment changes and after
     /// each trash (`refreshSuggestions`); empty while scanning.
     var suggestions: [Suggestion] = []
@@ -285,6 +292,7 @@ final class ScanModel {
     @discardableResult
     func beginNavigation() -> Int {
         navigationNumber += 1
+        listFocus = nil
         return navigationNumber
     }
 
@@ -383,6 +391,8 @@ final class ScanModel {
             tilesSize = size
             tiles = snapshot.tiles
             biggest = snapshot.biggest
+            // A row that left the list (a scan tick, a move, a navigation) sends no hover exit.
+            if let listFocus, !snapshot.biggest.contains(where: { $0.id == listFocus }) { self.listFocus = nil }
             breadcrumb = snapshot.breadcrumb
             if verdicts != snapshot.verdicts { verdicts = snapshot.verdicts }
             if categoryTotals != snapshot.categoryTotals { categoryTotals = snapshot.categoryTotals }

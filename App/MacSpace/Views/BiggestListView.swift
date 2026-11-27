@@ -76,8 +76,10 @@ struct BiggestListView: View {
     private func hover(_ row: NodeRow, _ inside: Bool) {
         if inside {
             model.hoverFirstLevel(row.id)
-        } else if model.hoveredNode == row.id {
-            model.hoverFirstLevel(nil)
+            model.listFocus = row.id
+        } else {
+            if model.hoveredNode == row.id { model.hoverFirstLevel(nil) }
+            if model.listFocus == row.id { model.listFocus = nil }
         }
     }
 }
