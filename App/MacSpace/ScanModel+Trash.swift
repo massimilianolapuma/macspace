@@ -156,6 +156,7 @@ extension ScanModel {
         // The folder on screen may have gone too (a suggestion moved a folder above it).
         let crumb = await store.breadcrumb(to: center)
         if let gone = crumb.firstIndex(where: { $0.flags.contains(.removed) }) {
+            beginNavigation()  // a goUp still resolving from the removed folder must not apply
             center = gone > 0 ? crumb[gone - 1].id : FileTree.root
         }
         // The store drops removed items itself; subtracting `moved` keeps the intent explicit.

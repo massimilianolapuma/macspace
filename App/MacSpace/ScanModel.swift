@@ -40,6 +40,11 @@ final class ScanModel {
     }
     /// The folder the chart and the list are centred on.
     var center: NodeID = FileTree.root
+    /// Bumped by every navigation the user starts (`beginNavigation`) and by a new scan: an action
+    /// that resolves its target asynchronously (going up, reveal, a highlight's drill) applies only if
+    /// no other navigation started meanwhile, so the latest click wins even when an earlier one
+    /// resolves later.
+    @ObservationIgnored private(set) var navigationNumber = 0
     var segments: [ArcSegment] = [] {
         didSet { segmentParents = Self.parentMap(segments.lazy.compactMap { s in s.node.map { ($0, s.parent) } }) }
     }
@@ -249,6 +254,8 @@ final class ScanModel {
     }
 
     func drill(into node: NodeID) {
+        // Even a drill into the current folder is the latest navigation: a pending goUp must not undo it.
+        beginNavigation()
         guard store != nil, node != center else { return }
         center = node
         hovered = nil
@@ -259,10 +266,11 @@ final class ScanModel {
     func goUp() {
         guard let store else { return }
         let from = center
+        let navigation = beginNavigation()
         let intent = noteUserIntent()
         Task {
             let crumb = await store.breadcrumb(to: from)
-            guard crumb.count >= 2, store === self.store, from == center else {
+            guard crumb.count >= 2, store === self.store, navigation == navigationNumber else {
                 abandonUserIntent(intent)
                 return
             }
@@ -271,6 +279,13 @@ final class ScanModel {
             hoveredTile = nil
             requestRefresh(userInitiated: true)
         }
+    }
+
+    /// Starts a user navigation; returns its number (see `navigationNumber`).
+    @discardableResult
+    func beginNavigation() -> Int {
+        navigationNumber += 1
+        return navigationNumber
     }
 
     /// The node under the pointer in whichever chart is on screen (or a hovered list row).
@@ -405,6 +420,7 @@ final class ScanModel {
         // Everything that names a node of the old store goes in the same main-actor turn as the
         // store itself, before any await: node IDs are per store.
         self.store = store
+        beginNavigation()
         center = FileTree.root
         hovered = nil
         hoveredTile = nil

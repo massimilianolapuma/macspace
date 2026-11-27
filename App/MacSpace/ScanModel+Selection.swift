@@ -163,9 +163,11 @@ extension ScanModel {
         case .treemap: tiles.contains { $0.node.map(ids.contains) ?? false }
         }
         guard !onScreen, let store else { return }
+        let navigation = beginNavigation()
         let intent = noteUserIntent()
         Task {
-            guard let folder = await store.commonFolder(of: ids), store === self.store, highlighted == ids else {
+            guard let folder = await store.commonFolder(of: ids), store === self.store, highlighted == ids,
+                  navigation == navigationNumber else {
                 abandonUserIntent(intent)
                 return
             }
@@ -178,9 +180,11 @@ extension ScanModel {
     /// Shows `node`: drills to its folder so it is a first-level element, then hovers it.
     func reveal(_ node: NodeID) {
         guard let store else { return }
+        let navigation = beginNavigation()
         let intent = noteUserIntent()
         Task {
-            guard let folder = await store.commonFolder(of: [node]), store === self.store else {
+            guard let folder = await store.commonFolder(of: [node]), store === self.store,
+                  navigation == navigationNumber else {
                 abandonUserIntent(intent)
                 return
             }
