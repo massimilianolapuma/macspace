@@ -42,8 +42,10 @@ struct ContentView: View {
             .background {
                 HStack(spacing: WindowLayout.pathRowSpacing) {
                     BreadcrumbView.Narrowest()
-                    PathRowFacts.Widest()
-                    WaitSlot(active: false)
+                    HStack(spacing: WindowLayout.inlineSpacing) {
+                        PathRowFacts.Widest()
+                        WaitSlot(active: false)
+                    }
                 }
                 .fixedSize()
                 .hidden()
@@ -119,10 +121,11 @@ struct ContentView: View {
                 HStack(spacing: WindowLayout.pathRowSpacing) {
                     BreadcrumbView(model: model)
                     // Never cut: the path gives way first.
-                    PathRowFacts(model: model, showsTotal: chart == .treemap)
-                        .layoutPriority(1)
-                    WaitSlot(active: model.isWaiting)
-                        .layoutPriority(1)
+                    HStack(spacing: WindowLayout.inlineSpacing) {
+                        PathRowFacts(model: model, showsTotal: chart == .treemap)
+                        WaitSlot(active: model.isWaiting)
+                    }
+                    .layoutPriority(1)
                 }
                 .frame(height: WindowLayout.rowHeight)
                 // The path's text, not its hover highlight, lines up with the chart's edge.
