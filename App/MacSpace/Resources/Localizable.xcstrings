@@ -88,6 +88,9 @@
     "Aggiornato" : {
 
     },
+    "Altre %lld voci" : {
+
+    },
     "Altri %@ elementi" : {
 
     },
@@ -196,7 +199,16 @@
     "Cartella interna della Libreria: controlla prima" : {
 
     },
+    "Cartella superiore" : {
+
+    },
+    "Cartelle intermedie" : {
+
+    },
     "Colori" : {
+
+    },
+    "Contenuto del pannello" : {
 
     },
     "Contiene dati di sistema di Apple" : {
@@ -346,13 +358,28 @@
     "Mostra nel Cestino" : {
 
     },
+    "Mostra o nasconde il pannello" : {
+
+    },
     "Mostra tutti (%lld)" : {
+
+    },
+    "Mostrato" : {
 
     },
     "Musica e audio" : {
 
     },
+    "Nascosto" : {
+
+    },
+    "Nessun elemento" : {
+
+    },
     "Nessun elemento spostato nel Cestino" : {
+
+    },
+    "Nessun suggerimento" : {
 
     },
     "Nessun suggerimento nelle cartelle lette (%@ non leggibili)" : {
@@ -362,6 +389,9 @@
 
     },
     "Nessun suggerimento: qui è tutto in ordine" : {
+
+    },
+    "Nessuna analisi" : {
 
     },
     "Niente da spostare" : {
@@ -548,6 +578,9 @@
     "Togli la spunta" : {
 
     },
+    "Torna a %@" : {
+
+    },
     "Torna su" : {
 
     },
@@ -569,7 +602,13 @@
     "Ultimo uso: %@" : {
 
     },
+    "Un'altra voce" : {
+
+    },
     "Uso più recente (stimato): %@" : {
+
+    },
+    "Vai" : {
 
     },
     "Versioni non salvate dei documenti: controlla prima" : {
