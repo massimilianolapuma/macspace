@@ -391,6 +391,8 @@ final class ScanModel {
             tilesSize = size
             tiles = snapshot.tiles
             biggest = snapshot.biggest
+            // A row that left the list (a scan tick, a move, a navigation) sends no hover exit.
+            if let listFocus, !snapshot.biggest.contains(where: { $0.id == listFocus }) { self.listFocus = nil }
             breadcrumb = snapshot.breadcrumb
             if verdicts != snapshot.verdicts { verdicts = snapshot.verdicts }
             if categoryTotals != snapshot.categoryTotals { categoryTotals = snapshot.categoryTotals }

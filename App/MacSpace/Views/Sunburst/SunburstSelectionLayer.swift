@@ -59,8 +59,10 @@ struct SunburstSelectionLayer: View {
                 guard let node = arc.segment.node, highlighted.contains(node),
                       let inner = geometry.drawableInner(pose) else { continue }
                 let outer = outerByNode[node] ?? min(inner + geometry.ringWidth, geometry.radius)
-                holes.addPath(SunburstView.sector(center: geometry.center, inner: max(inner, geometry.centerRadius),
-                                                  outer: outer, start: pose.start, end: pose.end))
+                // A union, not added subpaths: a full ring and a sector wind differently, and nested
+                // targets would then cancel out under the clip's non-zero rule.
+                holes = holes.union(SunburstView.sector(center: geometry.center, inner: max(inner, geometry.centerRadius),
+                                                        outer: outer, start: pose.start, end: pose.end))
                 found = true
             }
             if found { SafetyDecor.spotlightMask(sparing: holes, size: geometry.size, scheme: scheme, in: context) }

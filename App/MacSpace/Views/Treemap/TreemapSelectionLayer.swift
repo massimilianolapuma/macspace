@@ -33,9 +33,11 @@ struct TreemapSelectionLayer: View {
 
     private func draw(in context: GraphicsContext, selection: Set<NodeID>, highlighted: Set<NodeID>, whole: Bool,
                       date: Date) {
+        // One pass over the poses for the mask and the outlines.
+        let poses = motion.poses(at: date).filter { $0.0.isCurrent && $0.0.isVisible }
         if !highlighted.isEmpty {
             var holes = Path()
-            for (item, pose) in motion.poses(at: date) where item.isCurrent && item.isVisible {
+            for (item, pose) in poses {
                 guard let node = item.tile.node, highlighted.contains(node), pose.alpha > 0.01,
                       let rect = canvas.drawn(pose.rect) else { continue }
                 holes.addPath(Path(roundedRect: rect, cornerRadius: TreemapView.cornerRadius(rect, depth: item.tile.depth),
@@ -49,7 +51,7 @@ struct TreemapSelectionLayer: View {
             Self.outline(bounds, depth: 1, mark: .selected, alpha: 1, scheme: scheme, in: context)
             return
         }
-        for (item, pose) in motion.poses(at: date) where item.isCurrent && item.isVisible {
+        for (item, pose) in poses {
             guard let node = item.tile.node, pose.alpha > 0.01, let rect = canvas.drawn(pose.rect) else { continue }
             let mark: SafetyDecor.Mark
             if selection.contains(node) {

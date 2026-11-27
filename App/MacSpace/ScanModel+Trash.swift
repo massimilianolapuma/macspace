@@ -151,6 +151,7 @@ extension ScanModel {
         let moved = Set(outcome.moved.map(\.node))
         for id in moved { suggestionTicks[id] = nil }
         highlighted.subtract(moved)
+        if let listFocus, moved.contains(listFocus) { self.listFocus = nil }
         hovered = nil
         hoveredTile = nil
         // The folder on screen may have gone too (a suggestion moved a folder above it).

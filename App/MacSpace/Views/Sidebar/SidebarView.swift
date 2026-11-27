@@ -51,6 +51,8 @@ struct SidebarView: View {
         .onChange(of: tab) {
             // The outlines belong to the suggestions: leaving them clears them.
             if tab == .items, !model.highlighted.isEmpty { model.highlighted = [] }
+            // The list goes away without a hover exit when the tab changes from the keyboard.
+            if tab != .items { model.listFocus = nil }
         }
     }
 }
