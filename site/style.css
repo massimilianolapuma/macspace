@@ -1,0 +1,165 @@
+/* MacSpace — Fusion: sand paper in light, graphite in dark; orange only means "can be removed". */
+:root {
+  --surface: #F6F3EE;
+  --raised: #FFFFFF;
+  --ink: #1F1B16;
+  --ink-secondary: #5E574E;
+  --line: rgba(31, 27, 22, 0.12);
+  --button: #1F1B16;
+  --button-ink: #F6F3EE;
+  color-scheme: light dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --surface: #1C1C1E;
+    --raised: #2C2C2E;
+    --ink: #FFFFFF;
+    --ink-secondary: #B0B0B4;
+    --line: rgba(255, 255, 255, 0.14);
+    --button: #F6F3EE;
+    --button-ink: #1F1B16;
+  }
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: var(--surface);
+  color: var(--ink);
+  font: 17px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+main {
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: 72px 24px 32px;
+}
+
+.hero {
+  text-align: center;
+}
+
+.icon {
+  display: block;
+  width: 128px;
+  height: 128px;
+  margin: 0 auto 20px;
+}
+
+h1 {
+  margin: 0;
+  font: 700 44px/1.1 -apple-system, BlinkMacSystemFont, "SF Pro Display", system-ui, sans-serif;
+  letter-spacing: -0.02em;
+}
+
+.pitch {
+  margin: 12px auto 28px;
+  max-width: 30em;
+  font-size: 21px;
+  color: var(--ink-secondary);
+}
+
+.download {
+  display: inline-block;
+  padding: 12px 26px;
+  border-radius: 980px;
+  background: var(--button);
+  color: var(--button-ink);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.download:hover { opacity: 0.88; }
+
+.download:focus-visible,
+footer a:focus-visible {
+  outline: 3px solid var(--ink-secondary);
+  outline-offset: 3px;
+}
+
+.meta {
+  margin: 14px 0 0;
+  font-size: 14px;
+  color: var(--ink-secondary);
+  font-variant-numeric: tabular-nums;
+}
+
+.shot {
+  margin: 56px 0 64px;
+}
+
+.shot img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border-radius: 12px;
+  box-shadow: 0 24px 60px rgba(0, 0, 0, 0.18), 0 0 0 1px var(--line);
+}
+
+.points {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 32px;
+  margin-bottom: 64px;
+}
+
+h2 {
+  margin: 0 0 8px;
+  font-size: 19px;
+  font-weight: 600;
+}
+
+.points p {
+  margin: 0;
+  color: var(--ink-secondary);
+}
+
+.install {
+  max-width: 680px;
+  margin: 0 auto;
+  padding: 28px 32px;
+  border-radius: 14px;
+  background: var(--raised);
+  box-shadow: 0 0 0 1px var(--line);
+}
+
+.install h2 { font-size: 22px; }
+
+.install ol {
+  margin: 12px 0 0;
+  padding-left: 1.3em;
+}
+
+.install li { margin-bottom: 10px; }
+
+.install code {
+  font: 15px ui-monospace, "SF Mono", Menlo, monospace;
+}
+
+.note {
+  margin: 16px 0 0;
+  font-size: 15px;
+  color: var(--ink-secondary);
+}
+
+footer {
+  padding: 40px 24px 56px;
+  text-align: center;
+  font-size: 15px;
+  color: var(--ink-secondary);
+}
+
+footer a {
+  color: inherit;
+}
+
+footer span { margin: 0 8px; }
+
+@media (max-width: 720px) {
+  main { padding-top: 48px; }
+  .points { grid-template-columns: 1fr; gap: 24px; }
+  .install { padding: 22px 20px; }
+}
