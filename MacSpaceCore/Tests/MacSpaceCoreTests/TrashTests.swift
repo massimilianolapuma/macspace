@@ -815,3 +815,66 @@ private func exists(_ path: String) -> Bool {
     #expect(same.moved.map(\.node) == [id] && same.skipped.isEmpty)
     #expect(actions.moved == [fx.root.path + "/Library/Caches/com.example.app"])
 }
+
+@Test func replacedSameNameFolderIsChanged() async throws {   // audit SEC-01
+    let fx = try Fixture(); defer { fx.cleanup() }
+    let bin = try Fixture(); defer { bin.cleanup() }
+    try fx.file("Projects/a/x.bin", bytes: 10_000)
+    let store = try await scanned(fx)
+    let a = try await node(store, fx, "Projects/a")
+    // Same name, same kind, another folder: not what the user saw.
+    try FileManager.default.removeItem(atPath: fx.root.path + "/Projects/a")
+    try fx.file("Projects/a/x.bin", bytes: 10_000)
+
+    let actions = RecordingDiskActions(trash: bin.root.path)
+    let outcome = await store.trash([a], actions: actions, packages: noPackages, openFiles: nothingOpen,
+                                    expectedVerdicts: nil)
+    #expect(outcome.skipped.map(\.reason) == [.changed])
+    #expect(outcome.moved.isEmpty && actions.moved.isEmpty)
+    #expect(exists(fx.root.path + "/Projects/a/x.bin"))
+}
+
+@Test func replacedAncestorIsChanged() async throws {   // audit SEC-01
+    let fx = try Fixture(); defer { fx.cleanup() }
+    let bin = try Fixture(); defer { bin.cleanup() }
+    try fx.file("Projects/p/a/x.bin", bytes: 10_000)
+    let store = try await scanned(fx)
+    let a = try await node(store, fx, "Projects/p/a")
+    // `Projects/p` is now another folder holding another `a`.
+    #expect(rename(fx.root.path + "/Projects/p", fx.root.path + "/Projects/p-old") == 0)
+    try fx.file("Projects/p/a/x.bin", bytes: 10_000)
+
+    let actions = RecordingDiskActions(trash: bin.root.path)
+    let outcome = await store.trash([a], actions: actions, packages: noPackages, openFiles: nothingOpen,
+                                    expectedVerdicts: nil)
+    #expect(outcome.skipped.map(\.reason) == [.changed])
+    #expect(actions.moved.isEmpty)
+    #expect(exists(fx.root.path + "/Projects/p/a/x.bin") && exists(fx.root.path + "/Projects/p-old/a/x.bin"))
+}
+
+@Test func unknownInodeIsNotCompared() async throws {
+    let fx = try Fixture(); defer { fx.cleanup() }
+    let bin = try Fixture(); defer { bin.cleanup() }
+    try fx.file("Projects/a/x.bin", bytes: 10_000)
+    // Filled by hand, without inodes (0 = unknown): step 7 compares kinds and devices only.
+    let store = ScanStore(rootName: "home", rootPath: fx.root.path, home: fx.root.path, now: fixedNow)
+    let device = try DirectoryReader.stat(path: fx.root.path).device
+    func entry(_ name: String) -> DirectoryEntry {
+        DirectoryEntry(name: name, kind: .directory, allocatedSize: 0, device: device, inode: 0, linkCount: 1,
+                       isMountPoint: false, isDataless: false)
+    }
+    let boundary = ScanBoundary(allowedDevices: [device], excludedPaths: [])
+    let projects = try #require(await store.insert([entry("Projects")], under: FileTree.root,
+                                                   parentPath: fx.root.path, boundary: boundary).descend.first)
+    let a = try #require(await store.insert([entry("a")], under: projects.id, parentPath: projects.path,
+                                            boundary: boundary).descend.first)
+    _ = await store.insert([], under: a.id, parentPath: a.path, boundary: boundary)
+    await store.markScanFinished(allowedDevices: [device])
+    await store.setEnvironment(.system(home: fx.root.path, apps: .empty))
+
+    let actions = RecordingDiskActions(trash: bin.root.path)
+    let outcome = await store.trash([a.id], actions: actions, packages: noPackages, openFiles: nothingOpen,
+                                    expectedVerdicts: nil)
+    #expect(outcome.skipped.isEmpty)
+    #expect(actions.moved == [fx.root.path + "/Projects/a"])
+}

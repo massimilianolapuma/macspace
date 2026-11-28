@@ -51,14 +51,16 @@ extension ScanStore {
     ///    (it or a folder inside it is a mount point, unreadable, dataless, not fully listed or not
     ///    descended by the scan, or a volume is mounted at or below it right now) → `.containsUnverified`;
     /// 7. on disk, checked last, right before the move: gone → `.missing`; cannot be examined →
-    ///    `.failed`; another kind of object than scanned, now a mount point, on a device the scan
-    ///    was not confined to, or a folder above it (up to the scan root) no longer a folder → `.changed`;
+    ///    `.failed`; another kind of object than scanned, another object (inode) than scanned, now a
+    ///    mount point, on a device the scan was not confined to, or a folder above it (up to the scan
+    ///    root) no longer a folder or another folder (inode) than scanned → `.changed`. Inodes are
+    ///    compared only where the scan recorded one (not for nodes filled by hand);
     /// 8. `moveToTrash` throws → `.failed(error.localizedDescription)`.
     ///
     /// Residuals (security review, documented):
-    /// - S3: between the step-7 `stat` and the rename inside `moveToTrash` the item can still be
-    ///   swapped; its identity is checked by kind, mount status and device only (not inode), and the
-    ///   mount table is read without waiting (`MNT_NOWAIT`).
+    /// - S3: the item and the folders above it are checked by kind, inode, mount status and device
+    ///   at step 7; only the window between that `stat` and the rename inside `moveToTrash` remains,
+    ///   and the mount table is read without waiting (`MNT_NOWAIT`).
     /// - S4: step 6 walks the scan-time tree. Contents added after the scan are not re-walked on
     ///   disk: a Photos library or a `.Trashes` folder moved inside a folder since, or a running app
     ///   placed there (running apps are matched by their live bundle paths, but only those). Open
@@ -178,9 +180,11 @@ extension ScanStore {
             return .failed(Self.message(for: error))
         }
         if let change = Self.onDiskChange(entry, kind: kind, devices: devices) { return change }
+        if !Self.sameObject(entry, inode: tree.inode(id)) { return .changed }
         var ancestor = tree.parent(id)
         while let a = ancestor {
-            guard (try? DirectoryReader.stat(path: tree.path(of: a)))?.kind == .directory else { return .changed }
+            guard let folder = try? DirectoryReader.stat(path: tree.path(of: a)), folder.kind == .directory,
+                  Self.sameObject(folder, inode: tree.inode(a)) else { return .changed }
             ancestor = tree.parent(a)
         }
         return nil
@@ -192,6 +196,10 @@ extension ScanStore {
         if entry.kind != kind || entry.isMountPoint || !devices.contains(entry.device) { return .changed }
         return nil
     }
+
+    /// Whether a fresh `stat` names the object the scan read: the same inode, when one was recorded
+    /// (0 = unknown, not compared).
+    static func sameObject(_ entry: DirectoryEntry, inode: UInt64) -> Bool { inode == 0 || entry.inode == inode }
 
     /// Protected reasons that make a whole folder untrashable when a folder inside it has them.
     /// `.insidePackage` and `.notWritable` are absent: the package or folder goes along as a whole.

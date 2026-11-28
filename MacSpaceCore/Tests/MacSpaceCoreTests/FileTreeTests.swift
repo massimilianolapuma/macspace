@@ -264,3 +264,14 @@ import Testing
     #expect(t.children(of: 0).isEmpty && t.size(0) == 0 && !t.row(0).hasChildren)
     #expect(t.categoryTotals(0).isEmpty && t.ageTotals(0).isEmpty)
 }
+
+@Test func inodeRoundTrips() {
+    let t = FileTree(rootName: "r", rootPath: "/r")
+    let a = t.addChild(of: FileTree.root, name: "a", kind: .directory, allocatedSize: 0, inode: 42)
+    let b = t.addChild(of: a, name: "b", kind: .file, allocatedSize: 10)
+    #expect(t.inode(a) == 42)
+    #expect(t.inode(b) == 0)
+    #expect(t.inode(FileTree.root) == 0)
+    t.setInode(7, for: FileTree.root)
+    #expect(t.inode(FileTree.root) == 7)
+}

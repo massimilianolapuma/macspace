@@ -46,6 +46,12 @@ public actor ScanStore {
         self.unverifiedDirectories.formUnion(unverifiedDirectories)
     }
 
+    /// Called by `Scanner.scan(into:)` before it reads anything: records the scan root's inode
+    /// (0 when it could not be read), so `trash` can tell the root folder from one put in its place.
+    public func markScanStarted(rootInode: UInt64) {
+        tree.setInode(rootInode, for: FileTree.root)
+    }
+
     /// How many installer files the scan has found.
     func installerCount() -> Int { installerIDs.count }
 
@@ -117,7 +123,8 @@ public actor ScanStore {
                 let id = tree.addChild(of: parent, name: entry.name, kind: entry.kind, allocatedSize: size, flags: flags,
                               category: classifier.category(forFile: entry.name, context: parentContext),
                               lastUsed: Self.lastUse(modification: entry.modificationTime,
-                                                     access: entry.accessTime, now: tree.now))
+                                                     access: entry.accessTime, now: tree.now),
+                              inode: entry.inode)
                 if classifier.isInstaller(fileName: entry.name) { installerIDs.append(id) }
                 continue
             }
@@ -129,7 +136,7 @@ public actor ScanStore {
                                              siblingHasCargoToml: hasCargoToml ?? false)
             if classifier.isPackage(directoryName: entry.name) { flags.insert(.package) }
             let id = tree.addChild(of: parent, name: entry.name, kind: entry.kind, allocatedSize: size,
-                                   flags: flags, category: context ?? .other)
+                                   flags: flags, category: context ?? .other, inode: entry.inode)
             // Only in the cloud: its contents are never listed, so they are unknown (fail closed).
             guard !entry.isDataless else {
                 unverifiedDirectories.insert(id)

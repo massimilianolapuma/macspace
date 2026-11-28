@@ -84,6 +84,8 @@ public struct Scanner: Sendable {
         var unverified: [NodeID] = []
         let boundary = self.boundary
         let reader = self.reader
+        // The root's identity, before the first read: `trash` checks the root is still this folder.
+        await store.markScanStarted(rootInode: (try? DirectoryReader.stat(path: rootPath))?.inode ?? 0)
 
         await withTaskGroup(of: DirectoryResult.self) { group in
             while true {
