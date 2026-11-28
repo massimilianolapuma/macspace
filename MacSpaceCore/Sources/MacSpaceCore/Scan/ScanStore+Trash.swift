@@ -66,6 +66,9 @@ extension ScanStore {
     ///    judged by then → `.containsUnverified`;
     /// 9. `moveToTrash` throws → `.failed(error.localizedDescription)`.
     ///
+    /// `trashPreview` runs the same checks, through the same code, without step 9: what the Trash
+    /// sheet shows before the user confirms. A clean preview proves nothing here: all of it runs again.
+    ///
     /// A hard-linked file whose counted link moved gives its bytes to a link still in the tree
     /// (`hardLinks`); `Moved.size` is what the root total dropped by, so it is 0 for such a link.
     ///
@@ -118,29 +121,20 @@ extension ScanStore {
         defer { verdictCache.removeAll() }
         let items = topMost(ids, keepingRemoved: true)
         var outcome = TrashOutcome()
-        func skipAll(_ reason: TrashSkip) -> TrashOutcome {
+        let check: TrashCheck
+        switch trashGate(items, packages: packages, openFiles: openFiles, expectedVerdicts: expectedVerdicts,
+                         mountPoints: mountPoints, contentBudget: contentBudget) {
+        case .nothing:
+            return outcome
+        case let .all(reason):
             outcome.skipped = items.map { TrashOutcome.Skipped(node: $0, name: tree.name($0), reason: reason) }
             return outcome
+        case let .ready(ready):
+            check = ready
         }
-        guard !items.isEmpty else { return outcome }
-        guard scanFinished else { return skipAll(.scanInProgress) }
-        let open = openFiles()
-        guard open.isComplete else { return skipAll(.cannotCheckOpenFiles) }
-        guard let rawMounts = mountPoints() else { return skipAll(.containsUnverified) }
-        let mounts = MountTable.canonical(rawMounts)
-        let devices = allowedDevices()
-        let deadline = ContinuousClock.now + contentBudget
-        let changes = contentChanges(for: items)
         for id in items {
             let name = tree.name(id)
-            if let reason = trashBlocker(id, open: open, packages: packages, mounts: mounts, devices: devices,
-                                         comparesVerdict: expectedVerdicts != nil,
-                                         expectedVerdict: expectedVerdicts?[id])
-                // 8. Contents added since the scan, last (after step 7 proved it is the scanned object).
-                ?? (tree.kind(id) == .directory
-                    ? contentBlocker(id, path: tree.path(of: id), changes: changes[id], devices: devices,
-                                     deadline: deadline)
-                    : nil) {
+            if let reason = blocker(id, check) {
                 outcome.skipped.append(TrashOutcome.Skipped(node: id, name: name, reason: reason))
                 continue
             }
@@ -159,6 +153,88 @@ extension ScanStore {
             }
         }
         return outcome
+    }
+
+    /// What `trash` would do with each `topMost` item of `ids`, without moving anything: the reason
+    /// it would skip each one that may not go (absent: it would move). The same checks, in the same
+    /// order (the call-level ones, then steps 1–8), through the same code; step 9 (the move) is all
+    /// it leaves out. It never changes the tree and judges against the environment the store has
+    /// now (it sets none): what the rows on screen show. What it says holds for the moment it ran;
+    /// `trash` checks everything again before each move.
+    public func trashPreview(_ ids: Set<NodeID>, packages: any PackageProbe, openFiles: @Sendable () -> OpenFileSet,
+                             expectedVerdicts: [NodeID: SafetyVerdict]?) -> [NodeID: TrashSkip] {
+        trashPreview(ids, packages: packages, openFiles: openFiles, expectedVerdicts: expectedVerdicts,
+                     mountPoints: MountTable.current)
+    }
+
+    /// `trashPreview` with the mount table and content budget injectable for tests, as `trash`'s.
+    func trashPreview(_ ids: Set<NodeID>, packages: any PackageProbe, openFiles: @Sendable () -> OpenFileSet,
+                      expectedVerdicts: [NodeID: SafetyVerdict]?, mountPoints: () -> [String]?,
+                      contentBudget: Duration = .seconds(10)) -> [NodeID: TrashSkip] {
+        defer { verdictCache.removeAll() }
+        let items = topMost(ids, keepingRemoved: true)
+        switch trashGate(items, packages: packages, openFiles: openFiles, expectedVerdicts: expectedVerdicts,
+                         mountPoints: mountPoints, contentBudget: contentBudget) {
+        case .nothing:
+            return [:]
+        case let .all(reason):
+            return Dictionary(uniqueKeysWithValues: items.map { ($0, reason) })
+        case let .ready(check):
+            var blocked: [NodeID: TrashSkip] = [:]
+            for id in items {
+                if let reason = blocker(id, check) { blocked[id] = reason }
+            }
+            return blocked
+        }
+    }
+
+    /// What every item of one `trash` or `trashPreview` call is checked against, read once per call.
+    struct TrashCheck {
+        let open: OpenFileSet
+        let packages: any PackageProbe
+        let mounts: [String]
+        let devices: Set<Int32>
+        /// Step 8's history answer per folder item (one query per call).
+        let changes: [NodeID: PathChanges]
+        /// Step 8's budget for the whole call.
+        let deadline: ContinuousClock.Instant
+        let expectedVerdicts: [NodeID: SafetyVerdict]?
+    }
+
+    enum TrashGate {
+        /// No item left (`topMost` dropped them all).
+        case nothing
+        /// Every item gets this reason: the scan has not finished, the open files or the mount
+        /// table cannot be read.
+        case all(TrashSkip)
+        case ready(TrashCheck)
+    }
+
+    /// The checks that come before any item, and what the per-item ones need, read once (see
+    /// `trash`): `openFiles` is called only when the scan has finished and there are items.
+    private func trashGate(_ items: [NodeID], packages: any PackageProbe, openFiles: @Sendable () -> OpenFileSet,
+                           expectedVerdicts: [NodeID: SafetyVerdict]?, mountPoints: () -> [String]?,
+                           contentBudget: Duration) -> TrashGate {
+        guard !items.isEmpty else { return .nothing }
+        guard scanFinished else { return .all(.scanInProgress) }
+        let open = openFiles()
+        guard open.isComplete else { return .all(.cannotCheckOpenFiles) }
+        guard let rawMounts = mountPoints() else { return .all(.containsUnverified) }
+        let deadline = ContinuousClock.now + contentBudget
+        return .ready(TrashCheck(open: open, packages: packages, mounts: MountTable.canonical(rawMounts),
+                                 devices: allowedDevices(), changes: contentChanges(for: items), deadline: deadline,
+                                 expectedVerdicts: expectedVerdicts))
+    }
+
+    /// Steps 1–8 of `trash` for one item: the first failing one, or nil when it may move.
+    private func blocker(_ id: NodeID, _ check: TrashCheck) -> TrashSkip? {
+        trashBlocker(id, open: check.open, packages: check.packages, mounts: check.mounts, devices: check.devices,
+                     comparesVerdict: check.expectedVerdicts != nil, expectedVerdict: check.expectedVerdicts?[id])
+            // 8. Contents added since the scan, last (after step 7 proved it is the scanned object).
+            ?? (tree.kind(id) == .directory
+                ? contentBlocker(id, path: tree.path(of: id), changes: check.changes[id], devices: check.devices,
+                                 deadline: check.deadline)
+                : nil)
     }
 
     /// The links carrying a hard-linked file's bytes (`countedLink`) at or below `id`, with their sizes.

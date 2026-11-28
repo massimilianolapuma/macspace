@@ -39,7 +39,11 @@ struct TrashConfirmationSheet: View {
     @State private var refreshing = 0
     /// Rows whose verdict changed while the sheet was open.
     @State private var updated: Set<NodeID> = []
-    @State private var openCheck = OpenCheck.running
+    /// What `ScanStore.trash` would skip now (`ScanModel.trashPreview`), read when the sheet opens
+    /// and again on every refresh of the rows.
+    @State private var preview = Preview.running
+    /// Previews started so far: only the latest one's result is shown.
+    @State private var previewRun = 0
     /// `PrivateSize.freed` of each item, as each estimate finishes.
     @State private var freed: [NodeID: PrivateSize.Estimate] = [:]
     @State private var moving = false
@@ -59,11 +63,11 @@ struct TrashConfirmationSheet: View {
     /// Keyboard focus starts on "Annulla", so Space (Full Keyboard Access) cannot move anything.
     @FocusState private var focus: FocusTarget?
 
-    enum OpenCheck: Equatable {
+    enum Preview: Equatable {
         case running
-        /// The items open right now, with who holds them, in words (`OpenUse.text`, read once).
+        /// The items that would not move, with why, in words (`TrashSkip.text`).
         case done([NodeID: String])
-        /// The list of open files could not be read in full.
+        /// The list of open files could not be read in full: nothing can be judged.
         case incomplete
     }
 
@@ -117,7 +121,7 @@ struct TrashConfirmationSheet: View {
     private func confirmation(_ candidates: [TrashCandidate]) -> some View {
         let included = included(of: candidates)
         return VStack(alignment: .leading, spacing: 0) {
-            header(count: included.count, restorable: openCheck == .running ? candidates.count : included.count)
+            header(count: included.count, restorable: preview == .running ? candidates.count : included.count)
                 .padding(.horizontal, 24)
                 .padding(.top, 22)
                 .padding(.bottom, 14)
@@ -148,11 +152,11 @@ struct TrashConfirmationSheet: View {
     /// The question, with the count once the open files are known (it would otherwise drop as they
     /// are left out), and how to undo; "Niente da spostare" when every row stays.
     private func header(count: Int, restorable: Int) -> some View {
-        let nothingMoves = openCheck != .running && count == 0
+        let nothingMoves = preview != .running && count == 0
         return SheetHeader(systemImage: nothingMoves ? "trash.slash" : "trash") {
-            if openCheck == .running {
+            if preview == .running {
                 HStack(spacing: 8) {
-                    Text("Controllo dei file aperti…")
+                    Text("Controllo degli elementi…")
                     ProgressView().controlSize(.small)
                 }
             } else if nothingMoves {
@@ -217,7 +221,7 @@ struct TrashConfirmationSheet: View {
         } else if unavailableShown, let reason = model.trashUnavailableReason {
             statusLine(reason, warning: false, spinner: true)
         } else {
-            switch openCheck {
+            switch preview {
             case .running: EmptyView()  // said in the title
             case .incomplete: statusLine("Impossibile verificare i file aperti", warning: true, spinner: false)
             case let .done(open):
@@ -282,31 +286,32 @@ struct TrashConfirmationSheet: View {
 
     // MARK: State
 
-    private var openNotes: [NodeID: String] {
-        if case let .done(open) = openCheck { return open }
+    private var previewNotes: [NodeID: String] {
+        if case let .done(blocked) = preview { return blocked }
         return [:]
     }
 
-    /// Why a row stays where it is (open now, or no longer allowed), or nil when it will move.
+    /// Why a row stays where it is (no longer allowed, or held back by the preview), or nil when it will move.
     private func staysNote(_ candidate: TrashCandidate) -> String? {
         if let note = withdrawn[candidate.id] { return note }
-        if let note = openNotes[candidate.id] { return note }
+        if let note = previewNotes[candidate.id] { return note }
         return nil
     }
 
-    /// The items that will move: all but those open right now or withdrawn.
+    /// The items that will move: all but those the preview holds back (open now, protected
+    /// contents, changed on disk…) or withdrawn.
     private func included(of candidates: [TrashCandidate]) -> [TrashCandidate] {
-        let open = openNotes
-        return candidates.filter { open[$0.id] == nil && withdrawn[$0.id] == nil }
+        let blocked = previewNotes
+        return candidates.filter { blocked[$0.id] == nil && withdrawn[$0.id] == nil }
     }
 
-    /// Only once the open files are known in full, with something left to move, the Trash available
+    /// Only once the preview is in (the open files read in full), with something left to move, the Trash available
     /// and no move running.
     private func canMove(_ included: [TrashCandidate]) -> Bool {
         guard !moving, refreshing == 0, !included.isEmpty, model.trashUnavailableReason == nil, !model.isTrashing else {
             return false
         }
-        if case .done = openCheck { return true }
+        if case .done = preview { return true }
         return false
     }
 
@@ -315,15 +320,20 @@ struct TrashConfirmationSheet: View {
         freed < size && Formatters.bytes(freed) != Formatters.bytes(size)
     }
 
-    /// Resolves the items again, then reads the open files and estimates each item, side by side.
+    /// Resolves the items again, then runs the preview (the move's checks) and estimates each item,
+    /// side by side.
     private func prepare() async {
         generation = model.storeGeneration
         let found = await model.trashCandidates(requested)
         guard !Task.isCancelled else { return }
         candidates = found
         guard !found.isEmpty else { return }
+        previewRun += 1
+        let run = previewRun
+        let model = self.model
+        let ids = found.map(\.id)
         await withTaskGroup(of: Check.self) { group in
-            group.addTask { .open(await Self.openFiles()) }
+            group.addTask { .preview(await model.trashPreview(ids)) }
             var queue = found.makeIterator()
             for _ in 0..<Self.estimateWidth {
                 guard let next = queue.next() else { break }
@@ -333,8 +343,8 @@ struct TrashConfirmationSheet: View {
                 // A cancelled estimate returns a partial sum: never shown.
                 guard !Task.isCancelled else { break }
                 switch check {
-                case let .open(set):
-                    openCheck = set.isComplete ? .done(Self.openNotes(of: found, in: set)) : .incomplete
+                case let .preview(blocked):
+                    show(blocked, run: run)
                 case let .freed(id, estimate):
                     freed[id] = estimate
                     if let next = queue.next() {
@@ -346,15 +356,40 @@ struct TrashConfirmationSheet: View {
         }
     }
 
-    /// Reads the rows' verdicts again, afresh, and shows what changed, in place (`apply`). The move
-    /// button stays disabled while a refresh runs. Returns whether anything changed.
+    /// Reads the rows' verdicts again, afresh, and shows what changed, in place (`apply`); then runs
+    /// the preview again. The move button stays disabled while a refresh runs. Returns whether any
+    /// verdict or availability changed.
     private func refreshRows() async -> Bool {
         guard let shown = candidates else { return false }
         refreshing += 1
         defer { refreshing -= 1 }
         let current = await model.trashVerdicts(shown.map(\.id))
         guard generation == model.storeGeneration else { return false }
-        return apply(current)
+        let changed = apply(current)
+        await runPreview(shown.map(\.id))
+        return changed
+    }
+
+    /// Runs the preview for `ids` again. The last result stays on screen meanwhile (no title or row
+    /// flashing at each environment update, #22) and the move button waits for the new one.
+    private func runPreview(_ ids: [NodeID]) async {
+        refreshing += 1
+        defer { refreshing -= 1 }
+        previewRun += 1
+        let run = previewRun
+        show(await model.trashPreview(ids), run: run)
+    }
+
+    /// Puts preview `run`'s result on screen, unless a later preview started, the store changed or
+    /// the sheet closed meanwhile (the result is then dropped; the later one, if any, decides).
+    /// Without a result (the store went away) the rows stay unjudged and nothing can move.
+    private func show(_ blocked: [NodeID: TrashSkip]?, run: Int) {
+        guard run == previewRun, generation == model.storeGeneration, !Task.isCancelled, let blocked else { return }
+        if !blocked.isEmpty, blocked.values.allSatisfy({ $0 == .cannotCheckOpenFiles }) {
+            preview = .incomplete
+        } else {
+            preview = .done(blocked.mapValues(\.text))
+        }
     }
 
     /// Puts `current` on screen: a new verdict marks its row "Aggiornato"; a row the store no longer
@@ -390,22 +425,8 @@ struct TrashConfirmationSheet: View {
     }
 
     private enum Check: Sendable {
-        case open(OpenFileSet)
+        case preview([NodeID: TrashSkip]?)
         case freed(NodeID, PrivateSize.Estimate)
-    }
-
-    /// The candidates open right now (a folder: or anything inside it), with who holds them.
-    private static func openNotes(of candidates: [TrashCandidate], in set: OpenFileSet) -> [NodeID: String] {
-        var notes: [NodeID: String] = [:]
-        for candidate in candidates {
-            notes[candidate.id] = set.use(of: candidate.path, isDirectory: candidate.kind == .directory)?.text
-        }
-        return notes
-    }
-
-    /// MacSpace's own descriptors (the estimates running beside it) are left out.
-    @concurrent nonisolated private static func openFiles() async -> OpenFileSet {
-        OpenFileSet.current(excludingOwnProcess: true)
     }
 
     @concurrent nonisolated static func estimate(_ path: String) async -> PrivateSize.Estimate {
@@ -433,7 +454,7 @@ struct TrashConfirmationSheet: View {
         guard let rows = candidates, canMove(included(of: rows)), generation == model.storeGeneration else { return }
         let shown = Shown(verdicts: Dictionary(uniqueKeysWithValues: rows.map { ($0.id, $0.verdict) }),
                           withdrawn: Set(withdrawn.keys), included: included(of: rows))
-        let open = openNotes
+        let open = previewNotes
         moving = true
         changedBeforeMove = false
         Task {
@@ -452,6 +473,8 @@ struct TrashConfirmationSheet: View {
                 apply(current)
                 moving = false
                 changedBeforeMove = true
+                // Judge the rows again too, for the second look.
+                await runPreview(rows.map(\.id))
                 return
             }
             work?.cancel()
