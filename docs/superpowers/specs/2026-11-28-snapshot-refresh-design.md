@@ -149,6 +149,7 @@ A snapshot is written when a scan or refresh ends without cancellation. It is wr
   - A file hard-linked since the snapshot can therefore count its bytes twice, or carry a stale size, until the next full scan.
   - This affects sizes only. Trash safety does not depend on it: steps 7 and 8 read the disk and the history.
   - The 7-day limit bounds it, and so does "Analisi completa". (My call. Exact equality would need a `(device, inode)` index of the whole snapshot on every refresh, and hard links are rare on a user's disk.)
+- **A folder moved away, changed and moved back while the app was closed** (for example the Trash, then "Put Back"). The folder-level history names only its parent and the temporary path, so the folder keeps its inode, is reused from the snapshot, and stays stale. This can affect the Trash's content check. Owner's ruling (final review I1): fix it in the very next change, #34, using the file-level history, which carries inodes, so moved folders are re-read; until then it is a known limit.
 - **Device numbers renumbered after a reboot.** For example, an external disk attached at boot. The FSEvents UUID check then fails, and the app does a full scan instead of remapping devices. (My call. The internal volumes mount in a fixed order.)
 
 ## Tests (Core, TDD)
