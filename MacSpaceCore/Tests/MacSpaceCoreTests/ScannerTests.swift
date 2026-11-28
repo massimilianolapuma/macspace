@@ -522,3 +522,24 @@ private func scanLeftoverHome(_ fx: Fixture) async throws -> ScanStore {
     #expect(await store.categoryTotals(of: folder).keys.sorted { $0.rawValue < $1.rawValue } == [.appData])
     #expect(await store.row(data)?.flags.contains(.insidePackage) == true)
 }
+
+/// The scanner tells its reader which folder it expects at each path (#33): the device and inode
+/// its parent's listing gave, the root's from `stat`.
+@Test func readerIsToldTheExpectedFolder() async throws {
+    let fx = try Fixture(); defer { fx.cleanup() }
+    try fx.file("a/b/f", bytes: 10)
+    let seen = Mutex<[DirectoryRequest]>([])
+    let scanner = Scanner(rootPath: fx.root.path, boundary: try .forFolder(fx.root.path),
+                          listing: { request throws(DirectoryReadError) in
+        seen.withLock { $0.append(request) }
+        return try DirectoryReader.read(path: request.path)
+    })
+    let store = ScanStore(rootName: "r", rootPath: fx.root.path, history: FakeChangeHistory())
+    _ = await scanner.scan(into: store)
+    let requests = seen.withLock { $0 }
+    for path in [fx.root.path, fx.root.path + "/a", fx.root.path + "/a/b"] {
+        let stat = try DirectoryReader.stat(path: path)
+        #expect(requests.contains(DirectoryRequest(path: path, device: stat.device, inode: stat.inode)), "\(path)")
+    }
+    #expect(requests.count == 3)
+}

@@ -1,6 +1,7 @@
 import AppKit
 import Darwin
 import Foundation
+import Synchronization
 import Testing
 @testable import MacSpaceCore
 
@@ -107,5 +108,109 @@ extension Benchmarks {
         tiles \(levels.joined(separator: " "))
         """)
         #expect(median < 20)
+    }
+}
+
+/// The highest footprint seen while `body` runs, sampled every 10 ms (the lifetime peak cannot be
+/// reset between phases).
+private func sampledPeak<T>(_ body: () async throws -> T) async rethrows -> (T, UInt64) {
+    let highest = Mutex<UInt64>(footprint().current)
+    let running = Atomic<Bool>(true)
+    let sampler = Thread {
+        while running.load(ordering: .relaxed) {
+            let now = footprint().current
+            highest.withLock { $0 = max($0, now) }
+            usleep(10_000)
+        }
+    }
+    sampler.start()
+    let value = try await body()
+    running.store(false, ordering: .relaxed)
+    let now = footprint().current
+    return (value, highest.withLock { max($0, now) })
+}
+
+/// Where the snapshot benchmarks keep the startup disk's snapshot between their two processes.
+private var benchSnapshots: SnapshotFolder? {
+    ProcessInfo.processInfo.environment["MACSPACE_SNAPSHOTS"].map { SnapshotFolder(url: URL(filePath: $0)) }
+}
+
+private func seconds(_ d: Duration) -> String {
+    String(format: "%.2fs", Double(d.components.seconds) + Double(d.components.attoseconds) / 1e18)
+}
+
+extension Benchmarks {
+    /// Opt-in, the first of two processes (#33):
+    /// `MACSPACE_BENCH=1 MACSPACE_SNAPSHOTS=<dir> swift test -c release --filter snapshotSaveOfStartupDisk`.
+    /// Scans the startup disk and saves it, as a scan's end does (the scanned store still alive).
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["MACSPACE_BENCH"] == "1" && benchSnapshots != nil))
+    func snapshotSaveOfStartupDisk() async throws {
+        let folder = try #require(benchSnapshots)
+        let store = ScanStore(rootName: "Macintosh HD", rootPath: "/")
+        let startedAt = UInt32(time(nil))
+        let (files, scanPeak) = await sampledPeak {
+            await Scanner(rootPath: "/", boundary: try! .forStartupDisk()).scan(into: store).files
+        }
+        let clock = ContinuousClock(), t = clock.now
+        let ((), savePeak) = try await sampledPeak {
+            let saved = await store.savedScan(target: .startupDisk, startedAt: startedAt, hadFullDiskAccess: true)
+            try folder.save(saved)
+        }
+        let saveTime = clock.now - t
+        let size = try FileManager.default.attributesOfItem(
+            atPath: folder.url.appendingPathComponent("startup-disk.snapshot").path)[.size] as? UInt64 ?? 0
+        print("""
+        BENCH save files=\(files) fileSize=\(size / 1_000_000)MB save=\(seconds(saveTime)) \
+        scanPeak=\(scanPeak / 1_000_000)MB savePeak=\(savePeak / 1_000_000)MB \
+        savePeakBytesPerFile=\(savePeak / UInt64(max(files, 1)))
+        """)
+    }
+
+    /// Opt-in, the second process, after `snapshotSaveOfStartupDisk`:
+    /// `MACSPACE_BENCH=1 MACSPACE_SNAPSHOTS=<dir> swift test -c release --filter snapshotLaunchOfStartupDisk`.
+    /// What a launch does: read and decode the file, restore the store, lay out the first chart;
+    /// then refresh through the real history while the restored store stays shown.
+    @Test(.enabled(if: ProcessInfo.processInfo.environment["MACSPACE_BENCH"] == "1" && benchSnapshots != nil))
+    func snapshotLaunchOfStartupDisk() async throws {
+        let folder = try #require(benchSnapshots)
+        let clock = ContinuousClock()
+        let before = footprint().current
+        var t = clock.now
+        let (shown, launchPeak) = try await sampledPeak { () async throws -> (SavedScan, ScanStore) in
+            let loaded = try #require(folder.load(.startupDisk))
+            let restored = ScanStore(saved: loaded)
+            _ = await restored.snapshot(center: FileTree.root, chart: .sunburst(depth: 3), biggestLimit: 20)
+            return (loaded, restored)
+        }
+        let launchTime = clock.now - t
+        let (loaded, restored) = shown
+        t = clock.now
+        let plan = loaded.refreshPlan(now: UInt32(time(nil)), rootInode: loaded.rootInode, hasFullDiskAccess: true,
+                                      history: SystemChangeHistory(timeout: .seconds(30)))
+        let planTime = clock.now - t
+        guard case let .incremental(changed) = plan else {
+            Issue.record("no incremental refresh: \(plan)")
+            return
+        }
+        let read = Mutex(0)
+        let reader = loaded.listingReader(changed: changed, disk: { request throws(DirectoryReadError) in
+            read.withLock { $0 += 1 }
+            return try DirectoryReader.read(path: request.path)
+        })
+        let refreshed = ScanStore(rootName: "Macintosh HD", rootPath: "/")
+        t = clock.now
+        let (files, refreshPeak) = await sampledPeak {
+            await Scanner(rootPath: "/", boundary: try! .forStartupDisk(), listing: reader).scan(into: refreshed).files
+        }
+        let refreshTime = clock.now - t
+        _ = await restored.rootSize()   // the restored store stays alive (shown) through the refresh
+        print("""
+        BENCH launch files=\(files) start=\(before / 1_000_000)MB launch=\(seconds(launchTime)) \
+        launchPeak=\(launchPeak / 1_000_000)MB
+        BENCH refresh plan=\(seconds(planTime)) changedFolders=\(changed.count) readFromDisk=\(read.withLock { $0 }) \
+        refresh=\(seconds(refreshTime)) refreshPeak=\(refreshPeak / 1_000_000)MB \
+        refreshPeakBytesPerFile=\(refreshPeak / UInt64(max(files, 1)))
+        """)
+        #expect(launchTime < .seconds(1))
     }
 }

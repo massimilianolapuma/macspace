@@ -141,6 +141,25 @@ final class ScanModel {
     /// Environment updates still being applied (verdicts, selection, suggestions); the Trash waits.
     private(set) var environmentUpdates = 0
 
+    // Snapshots (#33).
+
+    /// When the shown store is a restored snapshot: when its scan started; nil once a scanned store
+    /// shows. The Trash is unavailable meanwhile.
+    private(set) var shownSnapshotDate: Date?
+    /// The scan running out of sight behind the shown tree (a snapshot, or a scan "Analizza" brings
+    /// up to date), if any. The Trash is unavailable meanwhile.
+    private(set) var update: Update?
+    /// When the shown tree was read: its scan's start (a snapshot's, or this launch's scan's).
+    private(set) var shownScanDate: Date?
+    /// What the shown tree is of; nil before any scan.
+    @ObservationIgnored private var shownTarget: ScanTarget?
+    /// Whether MacSpace had Full Disk Access when the shown tree was read.
+    @ObservationIgnored private var shownFullDiskAccess = false
+    /// That scan's progress, for the startup disk's bar; nil before its first report.
+    private(set) var updateProgress: ScanProgress?
+    /// The snapshot on screen, kept to refresh it again (it shares its arrays with the shown tree).
+    @ObservationIgnored private var shownSaved: (target: ScanTarget, saved: SavedScan)?
+
     // Moving to the Trash (`ScanModel+Trash.swift`).
 
     /// The finished move the sheet shows in place of the confirmation (nil: none). The sheet is up
@@ -245,19 +264,30 @@ final class ScanModel {
 
     /// Starts scanning `target`, cancelling any running scan first.
     func start(_ target: ScanTarget) {
+        startTask { [self] in await run(target) }
+    }
+
+    /// Runs `body` as the window's scan work, once the work it replaces (cancelled) has drained.
+    private func startTask(_ body: @escaping @MainActor () async -> Void) {
         let previous = scanTask
         previous?.cancel()
         scanTask = Task {
             // Let the cancelled scan drain and publish its state before replacing it.
             await previous?.value
             guard !Task.isCancelled else { return }
-            await run(target)
+            await body()
+            // Only now: until `body` returns, its locals (a decoded snapshot, a refresh's reader)
+            // still hold the replaced tree's arrays.
+            Self.releaseFreedMemory()
         }
     }
 
-    /// Stops the running scan; what was scanned so far stays visible (`.done`, `wasCancelled`).
+    /// Stops the running scan; what was scanned so far stays visible (`.done`, `wasCancelled`). A
+    /// hidden scan behind a snapshot stops too: the snapshot stays, with its date.
     func cancel() {
         scanTask?.cancel()
+        update = nil
+        updateProgress = nil
     }
 
     func drill(into node: NodeID) {
@@ -383,53 +413,64 @@ final class ScanModel {
         // A newer scan, navigation, chart or canvas size happened meanwhile: its own refresh wins.
         guard isLatest(), store === self.store, center == self.center, chart == self.chart,
               chart == .sunburst || size == chartSize else { return }
-        Perf.interval("refresh apply") {
-            // Segments and tiles share ids ("\(node)"), so the hover survives a chart switch.
-            let hoveredID = hovered?.id ?? hoveredTile?.id
-            segments = snapshot.segments
-            if shownChart != chart { shownChart = chart }
-            tilesSize = size
-            tiles = snapshot.tiles
-            biggest = snapshot.biggest
-            // A row that left the list (a scan tick, a move, a navigation) sends no hover exit.
-            if let listFocus, !snapshot.biggest.contains(where: { $0.id == listFocus }) { self.listFocus = nil }
-            breadcrumb = snapshot.breadcrumb
-            if verdicts != snapshot.verdicts { verdicts = snapshot.verdicts }
-            if categoryTotals != snapshot.categoryTotals { categoryTotals = snapshot.categoryTotals }
-            if ageTotals != snapshot.ageTotals { ageTotals = snapshot.ageTotals }
-            let merged = switch chart {
-            case .sunburst: snapshot.segments.contains { $0.node == nil }
-            case .treemap: snapshot.tiles.contains { $0.node == nil }
-            }
-            if showsMerged != merged { showsMerged = merged }
-            if let hoveredID {
-                let segment = snapshot.segments.first { $0.id == hoveredID }
-                if segment != hovered { hovered = segment }
-                let tile = snapshot.tiles.first { $0.id == hoveredID }
-                if tile != hoveredTile { hoveredTile = tile }
-            }
-        }
+        Perf.interval("refresh apply") { apply(snapshot, chart: chart, size: size) }
         // Sizes grow while scanning and verdicts move with the environment: re-judge the selection.
         if !selection.isEmpty { changeSelection { $0 } }
     }
 
-    private func run(_ target: ScanTarget) async {
-        let (rootPath, rootName) = Self.root(of: target)
-        let boundary: ScanBoundary
+
+    /// Puts `snapshot` (laid out for `chart` at `size`) on screen.
+    private func apply(_ snapshot: ScanStore.Snapshot, chart: ChartKind, size: CGSize) {
+        // Segments and tiles share ids ("\(node)"), so the hover survives a chart switch.
+        let hoveredID = hovered?.id ?? hoveredTile?.id
+        segments = snapshot.segments
+        if shownChart != chart { shownChart = chart }
+        tilesSize = size
+        tiles = snapshot.tiles
+        biggest = snapshot.biggest
+        // A row that left the list (a scan tick, a move, a navigation) sends no hover exit.
+        if let listFocus, !snapshot.biggest.contains(where: { $0.id == listFocus }) { self.listFocus = nil }
+        breadcrumb = snapshot.breadcrumb
+        if verdicts != snapshot.verdicts { verdicts = snapshot.verdicts }
+        if categoryTotals != snapshot.categoryTotals { categoryTotals = snapshot.categoryTotals }
+        if ageTotals != snapshot.ageTotals { ageTotals = snapshot.ageTotals }
+        let merged = switch chart {
+        case .sunburst: snapshot.segments.contains { $0.node == nil }
+        case .treemap: snapshot.tiles.contains { $0.node == nil }
+        }
+        if showsMerged != merged { showsMerged = merged }
+        if let hoveredID {
+            let segment = snapshot.segments.first { $0.id == hoveredID }
+            if segment != hovered { hovered = segment }
+            let tile = snapshot.tiles.first { $0.id == hoveredID }
+            if tile != hoveredTile { hoveredTile = tile }
+        }
+    }
+
+    /// The scan boundary of `target` at `rootPath`; one that cannot even be stat'ed allows
+    /// nothing (the scan then marks the root unreadable).
+    private static func boundary(of target: ScanTarget, rootPath: String) -> ScanBoundary {
         do {
-            boundary = switch target {
+            return switch target {
             case .startupDisk: try ScanBoundary.forStartupDisk()
             case .folder: try ScanBoundary.forFolder(rootPath)
             }
         } catch {
-            // The root cannot even be stat'ed: the scan will mark it unreadable.
-            boundary = ScanBoundary(allowedDevices: [], excludedPaths: [])
+            return ScanBoundary(allowedDevices: [], excludedPaths: [])
         }
+    }
 
-        let store = ScanStore(rootName: rootName, rootPath: rootPath)
-        // Everything that names a node of the old store goes in the same main-actor turn as the
-        // store itself, before any await: node IDs are per store.
+    /// Makes `store` the one on screen. Everything that names a node of the old store goes in the
+    /// same main-actor turn as the store itself, before any await: node IDs are per store.
+    /// `keepViews` leaves the charts, list, crumbs and legends up, for a caller that puts the new
+    /// store's own in this same turn (`swap`); otherwise they start empty, with the root's crumb.
+    private func install(_ store: ScanStore, rootName: String, target: ScanTarget, scannedAt: Date,
+                         fullDiskAccess: Bool, keepViews: Bool = false) {
+        let startupDisk = target == .startupDisk
         self.store = store
+        shownTarget = target
+        shownScanDate = scannedAt
+        shownFullDiskAccess = fullDiskAccess
         beginNavigation()
         center = FileTree.root
         hovered = nil
@@ -438,19 +479,21 @@ final class ScanModel {
         spotlightLastUsed = [:]
         lastUsedRequested = []
         lastUsedRest?.cancel()
-        scansStartupDisk = target == .startupDisk
-        disk = scansStartupDisk ? DiskUsage.startupDisk() : nil
-        segments = []
-        tiles = []
-        shownChart = chart
-        biggest = []
-        // The root's crumb from the first frame: the path row names what is being scanned before
-        // the first refresh lands.
-        breadcrumb = [NodeRow(id: FileTree.root, name: rootName, size: 0, kind: .directory, flags: [],
-                              hasChildren: false)]
-        categoryTotals = [:]
-        ageTotals = [:]
-        showsMerged = false
+        scansStartupDisk = startupDisk
+        disk = startupDisk ? DiskUsage.startupDisk() : nil
+        if !keepViews {
+            segments = []
+            tiles = []
+            shownChart = chart
+            biggest = []
+            // The root's crumb from the first frame: the path row names what is being scanned
+            // before the first refresh lands.
+            breadcrumb = [NodeRow(id: FileTree.root, name: rootName, size: 0, kind: .directory, flags: [],
+                                  hasChildren: false)]
+            categoryTotals = [:]
+            ageTotals = [:]
+            showsMerged = false
+        }
         // Changes still queued for the old store drop themselves (they check the store).
         selectionWork = nil
         scanSettled = false
@@ -462,15 +505,56 @@ final class ScanModel {
         pendingTrash = nil
         trashReport = nil
         storeGeneration += 1
-        phase = .scanning(ScanProgress(filesSeen: 0, bytesSeen: 0, directoriesPending: 1))
         hasScan = true
-        if let environment {
-            // The same apps, judged at the current time (rules measure ages from `now`) with the
-            // apps running now.
-            let fresh = SafetyEnvironmentProvider.environment(apps: environment.apps)
-            self.environment = fresh
-            await store.setEnvironment(fresh)
+        shownSnapshotDate = nil
+        shownSaved = nil
+    }
+
+    /// Hands `store` the apps of the current environment, judged now (rules measure ages from
+    /// `now`) with the apps running now.
+    private func applyEnvironment(to store: ScanStore) async {
+        guard let environment else { return }
+        let fresh = SafetyEnvironmentProvider.environment(apps: environment.apps)
+        self.environment = fresh
+        await store.setEnvironment(fresh)
+    }
+
+    /// The scan's end, as every scan has it: verdicts judged mid-scan saw partial sizes and last
+    /// uses, and the last timer refresh predates the final inserts, so the finished tree is judged
+    /// and shown; then, unless it was cancelled, it is saved (before the Trash becomes available,
+    /// so nothing moved is in the snapshot).
+    private func finish(_ store: ScanStore, _ summary: ScanSummary, target: ScanTarget, startedAt: Date,
+                        fullDiskAccess: Bool) async {
+        // Read again: the disk kept changing while it was scanned.
+        if case .startupDisk = target { disk = DiskUsage.startupDisk() }
+        phase = .done(summary)
+        await store.invalidateVerdicts()
+        await refreshViews()
+        await selectionWork?.value  // the re-resolve `refreshViews` queued, on the final verdicts
+        await refreshSuggestions()
+        if !summary.wasCancelled, store === self.store {
+            await save(store, target: target, startedAt: startedAt, fullDiskAccess: fullDiskAccess)
         }
+        if store === self.store { scanSettled = true }
+    }
+
+    /// Hands the memory a replaced store freed back to the system, once a scan's work has ended.
+    /// The allocator keeps freed large blocks for reuse, and a whole disk's tree is about a
+    /// gigabyte: measured on the owner's disk, the footprint stayed ~1.1 GB above the live tree
+    /// after a refresh (#33).
+    private static func releaseFreedMemory() {
+        Task.detached(priority: .utility) { _ = malloc_zone_pressure_relief(nil, 0) }
+    }
+
+    private func run(_ target: ScanTarget) async {
+        let (rootPath, rootName) = Self.root(of: target)
+        let boundary = Self.boundary(of: target, rootPath: rootPath)
+        let startedAt = Date.now
+        let fullDiskAccess = FullDiskAccess.isGranted
+        let store = ScanStore(rootName: rootName, rootPath: rootPath)
+        install(store, rootName: rootName, target: target, scannedAt: startedAt, fullDiskAccess: fullDiskAccess)
+        phase = .scanning(ScanProgress(filesSeen: 0, bytesSeen: 0, directoriesPending: 1))
+        await applyEnvironment(to: store)
 
         let latest = LatestProgress()
         let ticker = Task {
@@ -485,18 +569,224 @@ final class ScanModel {
         let summary = await scanner.scan(into: store) { latest.value = $0 }
         ticker.cancel()
         await ticker.value
+        await finish(store, summary, target: target, startedAt: startedAt, fullDiskAccess: fullDiskAccess)
+    }
 
-        // Read again: the disk kept changing while it was scanned.
-        if case .startupDisk = target { disk = DiskUsage.startupDisk() }
-        phase = .done(summary)
-        // Verdicts judged mid-scan saw partial sizes and last uses; the last timer refresh also
-        // predates the final inserts: judge and show the finished tree.
-        await store.invalidateVerdicts()
+    // MARK: - Snapshots (#33)
+
+    /// A scan running out of sight behind a shown snapshot.
+    enum Update: Equatable {
+        /// Re-reading only what the history says changed.
+        case refresh
+        /// Everything (asked for, or the history cannot vouch for the snapshot).
+        case fullScan
+    }
+
+    /// Shows `target`'s snapshot when it has a valid one, then refreshes it out of sight; without
+    /// one, scans it as `start` does when `scanIfMissing`, else leaves the window as it is (at
+    /// launch, and when another target is picked while nothing runs).
+    func open(_ target: ScanTarget, scanIfMissing: Bool) {
+        startTask { [self] in
+            if let shown = shownSaved, shown.target == target {
+                await update(target, from: shown.saved, full: false)
+                return
+            }
+            if shownTarget == target, let store, let scannedAt = shownScanDate {
+                // This target's scanned tree is on screen ("Analizza" after a scan): it stays,
+                // browsable where the user is, while it is brought up to date behind it. Its own
+                // saved form shares its arrays (no snapshot read back from disk, no third tree).
+                let saved = await store.savedScan(target: Self.savedTarget(target),
+                                                  startedAt: UInt32(clamping: Int64(scannedAt.timeIntervalSince1970)),
+                                                  hadFullDiskAccess: shownFullDiskAccess)
+                guard !Task.isCancelled else { return }
+                await update(target, from: saved, full: false)
+                return
+            }
+            let key = Self.savedTarget(target)
+            let saved = await Task.detached(priority: .userInitiated) { SnapshotFolder.standard.load(key) }.value
+            guard !Task.isCancelled else { return }
+            if let saved {
+                guard await show(saved, target: target) else { return }
+                await update(target, from: saved, full: false)
+            } else if scanIfMissing {
+                await run(target)
+            }
+        }
+    }
+
+    /// Scans `target` in full ("Analisi completa"); a tree of it on screen (a snapshot, or an
+    /// earlier scan) stays there, browsable, until the scan ends, and stays if it is cancelled.
+    func fullScan(_ target: ScanTarget) {
+        startTask { [self] in
+            if shownTarget == target, store != nil {
+                await update(target, from: nil, full: true)
+            } else {
+                await run(target)
+            }
+        }
+    }
+
+    /// The snapshot slot of `target`.
+    static func savedTarget(_ target: ScanTarget) -> SavedScan.Target {
+        switch target {
+        case .startupDisk: .startupDisk
+        case .folder: .folder(path: root(of: target).path)
+        }
+    }
+
+    /// Puts `saved` on screen as a store of its own (ages measured from now), judged and with its
+    /// suggestions; the Trash stays unavailable while it shows (`trashUnavailableReason`). False
+    /// when cancelled first.
+    private func show(_ saved: SavedScan, target: ScanTarget) async -> Bool {
+        let rootName = Self.root(of: target).name
+        let now = UInt32(clamping: Int64(Date().timeIntervalSince1970))
+        let store = await Task.detached(priority: .userInitiated) { ScanStore(saved: saved, now: now) }.value
+        guard !Task.isCancelled else { return false }
+        let date = Date(timeIntervalSince1970: TimeInterval(saved.startedAt))
+        install(store, rootName: rootName, target: target, scannedAt: date, fullDiskAccess: saved.hadFullDiskAccess)
+        shownSaved = (target, saved)
+        shownSnapshotDate = date
+        phase = .idle
+        await applyEnvironment(to: store)
         await refreshViews()
-        await selectionWork?.value  // the re-resolve `refreshViews` queued, on the final verdicts
+        await selectionWork?.value
         await refreshSuggestions()
         if store === self.store { scanSettled = true }
+        return true
     }
+
+    /// Scans `target` out of sight behind the tree of it on screen: only what changed since
+    /// `saved` (`SavedScan.refreshPlan`), or everything when `full`, when there is no `saved`, or
+    /// when the history cannot vouch for it. When it ends, its store replaces the shown one
+    /// (`swap`); when it is cancelled, the shown tree stays.
+    private func update(_ target: ScanTarget, from saved: SavedScan?, full: Bool) async {
+        let (rootPath, rootName) = Self.root(of: target)
+        let boundary = Self.boundary(of: target, rootPath: rootPath)
+        let startedAt = Date.now
+        let fullDiskAccess = FullDiskAccess.isGranted
+        update = full || saved == nil ? .fullScan : .refresh
+        updateProgress = nil
+        // The tree on screen says how big the new one will be: no array doubles while it fills.
+        let size = await store?.treeSize()
+        var reader: ListingReader?
+        // Where the history stood before it was asked what changed: the new tree records it, so
+        // nothing changed in between escapes both the refresh and later checks.
+        var baseline: ChangeBaseline?
+        if !full, let saved {
+            let rootInode = (try? DirectoryReader.stat(path: rootPath))?.inode ?? 0
+            let now = UInt32(clamping: Int64(startedAt.timeIntervalSince1970))
+            let devices = boundary.allowedDevices
+            // A whole day's history can take seconds to replay (measured: 8–9 s for 70 k events).
+            let start = await Task.detached(priority: .userInitiated) {
+                saved.refreshStart(now: now, rootInode: rootInode, hasFullDiskAccess: fullDiskAccess,
+                                   history: SystemChangeHistory(timeout: .seconds(30)), devices: devices)
+            }.value
+            guard !Task.isCancelled else { return }
+            baseline = start.baseline
+            switch start.plan {
+            case let .incremental(changed):
+                Self.snapshotLog.info("refresh: \(changed.count, privacy: .public) changed folders")
+                reader = saved.listingReader(changed: changed)
+            case let .fullScan(reason):
+                Self.snapshotLog.info("full scan instead of a refresh: \(String(describing: reason), privacy: .public)")
+                update = .fullScan
+            }
+        }
+        let store = ScanStore(rootName: rootName, rootPath: rootPath)
+        if let size { await store.reserveCapacity(for: size) }
+        let scanner = reader.map { Scanner(rootPath: rootPath, boundary: boundary, listing: $0) }
+            ?? Scanner(rootPath: rootPath, boundary: boundary)
+        let latest = LatestProgress()
+        let ticker = Task {
+            while !Task.isCancelled {
+                try? await Task.sleep(for: Self.refreshInterval)
+                guard !Task.isCancelled else { return }
+                if let progress = latest.value, update != nil { updateProgress = progress }
+            }
+        }
+        let began = ContinuousClock.now
+        let summary = if let baseline {
+            await scanner.scan(into: store, baseline: baseline) { latest.value = $0 }
+        } else {
+            await scanner.scan(into: store) { latest.value = $0 }
+        }
+        ticker.cancel()
+        await ticker.value
+        guard !summary.wasCancelled, !Task.isCancelled else { return }
+        let kind = reader == nil ? "full scan" : "refresh"
+        Self.snapshotLog.info("""
+            \(kind, privacy: .public) took \(String(describing: ContinuousClock.now - began), privacy: .public) \
+            for \(summary.files, privacy: .public) files
+            """)
+        await applyEnvironment(to: store)
+        await swap(to: store, rootName: rootName, target: target, scannedAt: startedAt, fullDiskAccess: fullDiskAccess)
+        update = nil
+        updateProgress = nil
+        await finish(store, summary, target: target, startedAt: startedAt, fullDiskAccess: fullDiskAccess)
+    }
+
+    /// Replaces the shown store by `new`, staying in the folder shown (by path; the root when it
+    /// is gone) and keeping the selection (by path; what is gone drops out). The new store's views
+    /// are laid out first and land in the same main-actor turn as the store, so the charts never
+    /// show empty and nothing on screen names a node of the old one.
+    private func swap(to new: ScanStore, rootName: String, target: ScanTarget, scannedAt: Date,
+                      fullDiskAccess: Bool) async {
+        guard let old = store else {
+            return install(new, rootName: rootName, target: target, scannedAt: scannedAt, fullDiskAccess: fullDiskAccess)
+        }
+        var mapped = FileTree.root
+        var view: ScanStore.Snapshot?
+        var laidOut: (chart: ChartKind, size: CGSize) = (chart, chartSize)
+        for _ in 0..<3 {
+            let wanted = center
+            mapped = await Self.nearest(await old.path(of: wanted), in: new)
+            laidOut = (chart, chartSize)
+            let request: ChartRequest = switch laidOut.chart {
+            case .sunburst: .sunburst(depth: Self.ringDepth)
+            case .treemap: .treemap(width: laidOut.size.width, height: laidOut.size.height, depth: Self.ringDepth)
+            }
+            view = await new.snapshot(center: mapped, chart: request, biggestLimit: Self.biggestLimit)
+            // The user moved meanwhile: lay out where they are now.
+            if wanted == center { break }
+        }
+        var kept: Set<NodeID> = []
+        for id in selection {
+            if let path = await old.path(of: id), let node = await new.node(atPath: path) { kept.insert(node) }
+        }
+        guard store === old else { return }
+        install(new, rootName: rootName, target: target, scannedAt: scannedAt, fullDiskAccess: fullDiskAccess,
+                keepViews: view != nil)
+        center = mapped
+        if let view { apply(view, chart: laidOut.chart, size: laidOut.size) }
+        if !kept.isEmpty { changeSelection { _ in kept } }
+    }
+
+    /// The node of `new` at `path`, or of its nearest ancestor still there (the root at worst).
+    private static func nearest(_ path: String?, in new: ScanStore) async -> NodeID {
+        var path = path
+        while let current = path {
+            if let node = await new.node(atPath: current) { return node }
+            let parent = (current as NSString).deletingLastPathComponent
+            path = parent.count < current.count ? parent : nil
+        }
+        return FileTree.root
+    }
+
+    /// Saves `store`'s finished scan as `target`'s snapshot, written off the main actor.
+    private func save(_ store: ScanStore, target: ScanTarget, startedAt: Date, fullDiskAccess: Bool) async {
+        let saved = await store.savedScan(target: Self.savedTarget(target),
+                                          startedAt: UInt32(clamping: Int64(startedAt.timeIntervalSince1970)),
+                                          hadFullDiskAccess: fullDiskAccess)
+        Task.detached(priority: .utility) {
+            do {
+                try SnapshotFolder.standard.save(saved)
+            } catch {
+                ScanModel.snapshotLog.error("snapshot not saved: \(error.localizedDescription, privacy: .public)")
+            }
+        }
+    }
+
+    nonisolated static let snapshotLog = Logger(subsystem: "com.massilp.macspace", category: "snapshot")
 
     /// The startup volume's name as Finder shows it ("Macintosh HD" unless renamed).
     static let startupDiskName: String = {

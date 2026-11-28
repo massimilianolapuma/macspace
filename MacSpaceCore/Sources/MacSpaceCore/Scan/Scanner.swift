@@ -30,6 +30,24 @@ public struct ScanSummary: Sendable {
     public var wasCancelled: Bool
 }
 
+/// A folder the scanner is about to list, as its parent's listing named it (the root: as `stat`
+/// gave it, zeros when it could not be read).
+public struct DirectoryRequest: Sendable, Equatable {
+    public var path: String
+    public var device: Int32
+    public var inode: UInt64
+
+    public init(path: String, device: Int32, inode: UInt64) {
+        self.path = path
+        self.device = device
+        self.inode = inode
+    }
+}
+
+/// Lists one folder for the scanner: `DirectoryReader.read`, a refresh's saved listings
+/// (`SavedScan.listingReader`), or a stand-in in tests.
+public typealias ListingReader = @Sendable (DirectoryRequest) throws(DirectoryReadError) -> DirectoryListing
+
 /// Walks a directory tree in parallel and fills a `ScanStore`.
 /// At most `maxConcurrency` directory reads are in flight; each read directory costs one
 /// actor hop (`insert`, or `markUnreadable` when the read fails).
@@ -37,8 +55,8 @@ public struct Scanner: Sendable {
     public let rootPath: String
     public let boundary: ScanBoundary
     public let maxConcurrency: Int
-    /// Lists one directory: `DirectoryReader.read`, or a stand-in in tests.
-    let reader: @Sendable (String) throws(DirectoryReadError) -> DirectoryListing
+    /// Lists one directory.
+    let reader: ListingReader
 
     static let progressInterval: Duration = .milliseconds(100)
 
@@ -57,10 +75,18 @@ public struct Scanner: Sendable {
     /// With `reader` in place of `DirectoryReader.read`, so tests can return incomplete listings.
     init(rootPath: String, boundary: ScanBoundary, maxConcurrency: Int = Scanner.defaultConcurrency,
          reader: @escaping @Sendable (String) throws(DirectoryReadError) -> DirectoryListing) {
+        self.init(rootPath: rootPath, boundary: boundary, maxConcurrency: maxConcurrency,
+                  listing: { request throws(DirectoryReadError) in try reader(request.path) })
+    }
+
+    /// With `listing` reading each folder, told which folder the scan expects there (a refresh
+    /// reads saved listings where nothing changed).
+    public init(rootPath: String, boundary: ScanBoundary, maxConcurrency: Int = Scanner.defaultConcurrency,
+                listing: @escaping ListingReader) {
         self.rootPath = rootPath
         self.boundary = boundary
         self.maxConcurrency = max(1, maxConcurrency)
-        self.reader = reader
+        reader = listing
     }
 
     /// Scans from `rootPath` into `store`, whose root node represents `rootPath`.
@@ -74,10 +100,24 @@ public struct Scanner: Sendable {
     /// (`defaultConcurrency`), this keeps store queries responsive while a scan is running.
     public func scan(into store: ScanStore,
                      progress: (@Sendable (ScanProgress) -> Void)? = nil) async -> ScanSummary {
+        await scan(into: store, baseline: store.history.baseline(devices: boundary.allowedDevices), progress: progress)
+    }
+
+    /// `scan(into:progress:)`, with the history's position taken by the caller beforehand: a
+    /// refresh takes it before asking the history what changed (`SavedScan.refreshStart`), so no
+    /// change can fall between the two (one in both is only read twice).
+    public func scan(into store: ScanStore, baseline: ChangeBaseline?,
+                     progress: (@Sendable (ScanProgress) -> Void)? = nil) async -> ScanSummary {
         let clock = ContinuousClock()
         let start = clock.now
         var lastReport = start
-        var pending: [(id: NodeID, path: String)] = [(id: FileTree.root, path: rootPath)]
+        // The root's identity, before the first read: `trash` checks the root is still this folder.
+        // The history's position too, so changes made while the scan runs count as changes.
+        let rootEntry = try? DirectoryReader.stat(path: rootPath)
+        var pending: [(id: NodeID, request: DirectoryRequest)] = [
+            (id: FileTree.root, request: DirectoryRequest(path: rootPath, device: rootEntry?.device ?? 0,
+                                                          inode: rootEntry?.inode ?? 0)),
+        ]
         var inFlight = 0
         var files = 0, directories = 0, unreadable = 0, partlyRead = 0
         var bytes: UInt64 = 0
@@ -87,10 +127,8 @@ public struct Scanner: Sendable {
         var unverified: [NodeID] = []
         let boundary = self.boundary
         let reader = self.reader
-        // The root's identity, before the first read: `trash` checks the root is still this folder.
-        // The history's position too, so changes made while the scan runs count as changes.
-        await store.markScanStarted(rootInode: (try? DirectoryReader.stat(path: rootPath))?.inode ?? 0,
-                                    baseline: store.history.baseline(devices: boundary.allowedDevices))
+        await store.markScanStarted(rootInode: rootEntry?.inode ?? 0, rootDevice: rootEntry?.device ?? 0,
+                                    baseline: baseline)
 
         await withTaskGroup(of: DirectoryResult.self) { group in
             while true {
@@ -101,7 +139,8 @@ public struct Scanner: Sendable {
                     }
                     let next = pending.removeLast()
                     group.addTask(priority: .utility) {
-                        await Self.process(next.id, path: next.path, store: store, boundary: boundary, reader: reader)
+                        await Self.process(next.id, request: next.request, store: store, boundary: boundary,
+                                           reader: reader)
                     }
                     inFlight += 1
                 }
@@ -142,20 +181,21 @@ public struct Scanner: Sendable {
         /// system reported an error for, or a malformed record, was left out) or was cut short by
         /// cancellation, so the directory's contents are not all known (`unverifiedDirectories`).
         /// `incomplete`: the file system left an entry out (not cancellation), counted in `partlyRead`.
-        case read(id: NodeID, children: [(id: NodeID, path: String)], files: Int, directories: Int, bytes: UInt64,
+        case read(id: NodeID, children: [(id: NodeID, request: DirectoryRequest)], files: Int, directories: Int,
+                  bytes: UInt64,
                   partial: Bool, incomplete: Bool)
         case unreadable
         case skipped(NodeID)
     }
 
     /// Reads one directory and inserts its entries: one actor hop either way.
-    private static func process(_ id: NodeID, path: String, store: ScanStore, boundary: ScanBoundary,
-                                reader: @Sendable (String) throws(DirectoryReadError) -> DirectoryListing)
-        async -> DirectoryResult {
+    private static func process(_ id: NodeID, request: DirectoryRequest, store: ScanStore, boundary: ScanBoundary,
+                                reader: ListingReader) async -> DirectoryResult {
+        let path = request.path
         guard !Task.isCancelled else { return .skipped(id) }
         let listing: DirectoryListing
         do {
-            listing = try reader(path)
+            listing = try reader(request)
         } catch {
             await store.markUnreadable(id)
             return .unreadable
@@ -173,7 +213,10 @@ public struct Scanner: Sendable {
         let incomplete = !listing.isComplete && !cancelled
         let partial = !listing.isComplete || cancelled
         let inserted = await store.insert(entries, under: id, parentPath: path, boundary: boundary)
-        return .read(id: id, children: inserted.descend, files: files, directories: directories,
+        let children = inserted.descend.map {
+            (id: $0.id, request: DirectoryRequest(path: $0.path, device: $0.device, inode: $0.inode))
+        }
+        return .read(id: id, children: children, files: files, directories: directories,
                      bytes: inserted.bytes, partial: partial, incomplete: incomplete)
     }
 }

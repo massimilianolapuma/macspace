@@ -53,7 +53,12 @@ public struct SystemChangeHistory: ChangeHistory {
     /// How long a query waits for the history replay before giving up (`.untrusted`).
     let timeout: DispatchTimeInterval
 
+    /// Waits up to 5 s for a query (what `trash` can afford before a move).
     public init() { timeout = .seconds(5) }
+
+    /// Waits up to `timeout` for a query: a refresh at launch replays a whole day's history (8–9 s
+    /// for 70 k events measured on the owner's Mac), so it waits longer (#33).
+    public init(timeout: DispatchTimeInterval) { self.timeout = timeout }
 
     public func baseline(devices: Set<Int32>) -> ChangeBaseline? {
         let id = FSEventsGetCurrentEventId()

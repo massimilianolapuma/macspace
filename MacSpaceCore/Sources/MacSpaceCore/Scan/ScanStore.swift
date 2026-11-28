@@ -58,8 +58,10 @@ public actor ScanStore {
     /// Called by `Scanner.scan(into:)` before it reads anything: records the scan root's inode
     /// (0 when it could not be read), so `trash` can tell the root folder from one put in its place,
     /// and where the change history stood (`history.baseline`), so `trash` can ask what changed since.
-    public func markScanStarted(rootInode: UInt64, baseline: ChangeBaseline?) {
+    /// `rootDevice` (0 when unknown) is kept with the tree, for a refresh to compare folders by.
+    public func markScanStarted(rootInode: UInt64, rootDevice: Int32 = 0, baseline: ChangeBaseline?) {
         tree.setInode(rootInode, for: FileTree.root)
+        tree.setDevice(rootDevice, forDirectory: FileTree.root)
         changeBaseline = baseline
     }
 
@@ -76,20 +78,37 @@ public actor ScanStore {
     public init(rootName: String, rootPath rawRootPath: String, home: String = NSHomeDirectory(),
                 now: UInt32 = UInt32(clamping: Int64(Date().timeIntervalSince1970)),
                 history: any ChangeHistory = SystemChangeHistory()) {
-        self.history = history
         let rootPath = Self.canonicalRoot(rawRootPath)
         let classifier = CategoryClassifier(home: home)
         let root = RootContext.resolve(rootPath: rootPath, classifier: classifier)
-        self.classifier = classifier
+        self.init(tree: FileTree(rootName: rootName, rootPath: rootPath, rootCategory: root.context ?? .other,
+                                 rootFlags: root.flags, now: now),
+                  home: home, history: history)
+    }
+
+    /// A store over `tree`, with the side tables of `saved` when restoring one (`init(saved:…)`):
+    /// verdicts start as for `init(rootName:…)`.
+    init(tree: FileTree, home: String, history: any ChangeHistory, saved: SavedScan? = nil) {
+        self.history = history
+        classifier = CategoryClassifier(home: home)
         environment = .system(home: home, apps: nil)
-        tree = FileTree(rootName: rootName, rootPath: rootPath, rootCategory: root.context ?? .other,
-                        rootFlags: root.flags, now: now)
+        self.tree = tree
+        guard let saved else { return }
+        changeBaseline = saved.baseline
+        for link in saved.hardLinks {
+            let key = HardLinkKey(device: link.device, inode: link.inode)
+            hardLinks[key] = link.links
+            if let counted = link.counted { countedLink[counted] = key }
+        }
+        installerIDs = saved.installerIDs
+        unverifiedDirectories = Set(saved.unverifiedDirectories)
+        scanDevices = Set(saved.scanDevices)
     }
 
     /// What `insert` added.
     public struct Inserted: Sendable {
-        /// Child directories to descend into.
-        public var descend: [(id: NodeID, path: String)]
+        /// Child directories to descend into, with the device and inode their entry gave.
+        public var descend: [(id: NodeID, path: String, device: Int32, inode: UInt64)]
         /// Bytes added to the tree (hard-link duplicates count 0), so progress can match `rootSize`.
         public var bytes: UInt64
     }
@@ -117,7 +136,7 @@ public actor ScanStore {
         let prefix = parentPath.hasSuffix("/") ? parentPath : parentPath + "/"
         let parentContext = tree.context(parent)
         let parentFlags = tree.flags(parent)
-        var descend: [(id: NodeID, path: String)] = []
+        var descend: [(id: NodeID, path: String, device: Int32, inode: UInt64)] = []
         var bytes: UInt64 = 0
         for entry in entries {
             let path = entry.kind == .directory ? prefix + entry.name : nil
@@ -147,14 +166,14 @@ public actor ScanStore {
                 continue
             }
             let id = tree.addChild(of: parent, name: entry.name, kind: entry.kind, allocatedSize: size,
-                                   flags: flags, category: category, inode: entry.inode)
+                                   flags: flags, category: category, inode: entry.inode, device: entry.device)
             // Only in the cloud: its contents are never listed, so they are unknown (fail closed).
             guard !entry.isDataless else {
                 unverifiedDirectories.insert(id)
                 continue
             }
             if boundary.shouldDescend(path: path, device: entry.device, isMountPoint: entry.isMountPoint) {
-                descend.append((id: id, path: path))
+                descend.append((id: id, path: path, device: entry.device, inode: entry.inode))
             } else if !entry.isMountPoint {
                 // Excluded or on another device: its contents are never seen (mount points are flagged).
                 unverifiedDirectories.insert(id)
