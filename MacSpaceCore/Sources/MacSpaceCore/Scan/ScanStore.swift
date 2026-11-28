@@ -58,8 +58,10 @@ public actor ScanStore {
     /// Called by `Scanner.scan(into:)` before it reads anything: records the scan root's inode
     /// (0 when it could not be read), so `trash` can tell the root folder from one put in its place,
     /// and where the change history stood (`history.baseline`), so `trash` can ask what changed since.
-    public func markScanStarted(rootInode: UInt64, baseline: ChangeBaseline?) {
+    /// `rootDevice` (0 when unknown) is kept with the tree, for a refresh to compare folders by.
+    public func markScanStarted(rootInode: UInt64, rootDevice: Int32 = 0, baseline: ChangeBaseline?) {
         tree.setInode(rootInode, for: FileTree.root)
+        tree.setDevice(rootDevice, forDirectory: FileTree.root)
         changeBaseline = baseline
     }
 
@@ -76,14 +78,31 @@ public actor ScanStore {
     public init(rootName: String, rootPath rawRootPath: String, home: String = NSHomeDirectory(),
                 now: UInt32 = UInt32(clamping: Int64(Date().timeIntervalSince1970)),
                 history: any ChangeHistory = SystemChangeHistory()) {
-        self.history = history
         let rootPath = Self.canonicalRoot(rawRootPath)
         let classifier = CategoryClassifier(home: home)
         let root = RootContext.resolve(rootPath: rootPath, classifier: classifier)
-        self.classifier = classifier
+        self.init(tree: FileTree(rootName: rootName, rootPath: rootPath, rootCategory: root.context ?? .other,
+                                 rootFlags: root.flags, now: now),
+                  home: home, history: history)
+    }
+
+    /// A store over `tree`, with the side tables of `saved` when restoring one (`init(saved:…)`):
+    /// verdicts start as for `init(rootName:…)`.
+    init(tree: FileTree, home: String, history: any ChangeHistory, saved: SavedScan? = nil) {
+        self.history = history
+        classifier = CategoryClassifier(home: home)
         environment = .system(home: home, apps: nil)
-        tree = FileTree(rootName: rootName, rootPath: rootPath, rootCategory: root.context ?? .other,
-                        rootFlags: root.flags, now: now)
+        self.tree = tree
+        guard let saved else { return }
+        changeBaseline = saved.baseline
+        for link in saved.hardLinks {
+            let key = HardLinkKey(device: link.device, inode: link.inode)
+            hardLinks[key] = link.links
+            if let counted = link.counted { countedLink[counted] = key }
+        }
+        installerIDs = saved.installerIDs
+        unverifiedDirectories = Set(saved.unverifiedDirectories)
+        scanDevices = Set(saved.scanDevices)
     }
 
     /// What `insert` added.
@@ -147,7 +166,7 @@ public actor ScanStore {
                 continue
             }
             let id = tree.addChild(of: parent, name: entry.name, kind: entry.kind, allocatedSize: size,
-                                   flags: flags, category: category, inode: entry.inode)
+                                   flags: flags, category: category, inode: entry.inode, device: entry.device)
             // Only in the cloud: its contents are never listed, so they are unknown (fail closed).
             guard !entry.isDataless else {
                 unverifiedDirectories.insert(id)

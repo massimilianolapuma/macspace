@@ -38,6 +38,9 @@ public final class FileTree {
     /// Each node's inode (`ATTR_CMN_FILEID`) as the scan read it, 0 when unknown (the root until
     /// `setInode`, hand-built nodes). `trash` compares it to tell a replaced item from the scanned one.
     private var inodes = ContiguousArray<UInt64>()
+    /// Each directory's device as listed, by directory slot (`dirSlots`): its own entry's device,
+    /// the root's from `setDevice`; 0 when unknown. A file is on its parent directory's device.
+    private var dirDevices = ContiguousArray<Int32>()
     private let rootPath: String
     /// Seconds since 1970 that ages are measured from, fixed for the tree's life.
     public let now: UInt32
@@ -62,6 +65,7 @@ public final class FileTree {
         lastUsedStore.append(0)
         inodes.append(0)
         dirSlots.append(0)
+        dirDevices.append(0)
         categoryBytes.append(contentsOf: repeatElement(0, count: Self.categoryCount))
         ageBytes.append(contentsOf: repeatElement(0, count: Self.ageCount))
     }
@@ -77,11 +81,12 @@ public final class FileTree {
     ///
     /// For a directory `category` is the context it imposes (`.other` for none); for anything else
     /// it is the node's own category. A directory's own size, if any, counts under its context.
-    /// `inode` is the object's inode as read, 0 when unknown.
+    /// `inode` is the object's inode as read, 0 when unknown; `device`, a directory's device as listed.
     @discardableResult
     public func addChild(of parent: NodeID, name: String, kind: NodeKind,
                          allocatedSize: UInt64, flags: NodeFlags = [],
-                         category: FileCategory = .other, lastUsed: UInt32 = 0, inode: UInt64 = 0) -> NodeID {
+                         category: FileCategory = .other, lastUsed: UInt32 = 0, inode: UInt64 = 0,
+                         device: Int32 = 0) -> NodeID {
         let id = NodeID(parents.count)
         parents.append(parent)
         firstChildren.append(-1)
@@ -100,6 +105,7 @@ public final class FileTree {
             let slot = categoryBytes.count / Self.categoryCount
             precondition(slot < Int(Int32.max), "FileTree has too many directories")
             dirSlots.append(Int32(slot))
+            dirDevices.append(device)
             categoryBytes.append(contentsOf: repeatElement(0, count: Self.categoryCount))
             categoryBytes[slot * Self.categoryCount + column] = allocatedSize
             ageBytes.append(contentsOf: repeatElement(0, count: Self.ageCount))
@@ -226,6 +232,91 @@ public final class FileTree {
 
     /// Records `id`'s inode (the root's, read when the scan starts).
     public func setInode(_ inode: UInt64, for id: NodeID) { inodes[Int(id)] = inode }
+
+    /// The directory `id`'s device as listed (0 when unknown); for anything else, its parent's.
+    public func device(ofDirectory id: NodeID) -> Int32 {
+        let slot = dirSlots[Int(id)]
+        guard slot >= 0 else { return parents[Int(id)] >= 0 ? device(ofDirectory: parents[Int(id)]) : 0 }
+        return dirDevices[Int(slot)]
+    }
+
+    /// Records the directory `id`'s device (the root's, read when the scan starts).
+    public func setDevice(_ device: Int32, forDirectory id: NodeID) {
+        let slot = dirSlots[Int(id)]
+        precondition(slot >= 0, "FileTree.setDevice: not a directory")
+        dirDevices[Int(slot)] = device
+    }
+
+    // MARK: - Saving
+
+    /// Everything the tree holds, as plain arrays (`saved()`, `init(storage:now:)`): what a
+    /// `SavedScan` keeps. Copying it costs nothing until either side changes (copy-on-write).
+    struct Storage: Sendable, Equatable {
+        var rootPath: String
+        var parents: ContiguousArray<Int32>
+        var firstChildren: ContiguousArray<Int32>
+        var nextSiblings: ContiguousArray<Int32>
+        var sizes: ContiguousArray<UInt64>
+        var kinds: ContiguousArray<NodeKind>
+        var flags: ContiguousArray<NodeFlags>
+        var nameBytes: ContiguousArray<UInt8>
+        var nameEnds: ContiguousArray<UInt32>
+        var categories: ContiguousArray<UInt8>
+        var lastUsed: ContiguousArray<UInt32>
+        var dirSlots: ContiguousArray<Int32>
+        var categoryBytes: ContiguousArray<UInt64>
+        var inodes: ContiguousArray<UInt64>
+        var dirDevices: ContiguousArray<Int32>
+
+        /// Nodes held.
+        var count: Int { parents.count }
+    }
+
+    /// The tree as plain arrays. Age totals are left out: they depend on `now` and are rebuilt.
+    func saved() -> Storage {
+        Storage(rootPath: rootPath, parents: parents, firstChildren: firstChildren, nextSiblings: nextSiblings,
+                sizes: sizes, kinds: kinds, flags: flagsStore, nameBytes: nameBytes, nameEnds: nameEnds,
+                categories: categories, lastUsed: lastUsedStore, dirSlots: dirSlots, categoryBytes: categoryBytes,
+                inodes: inodes, dirDevices: dirDevices)
+    }
+
+    /// A tree holding `storage`, with ages measured from `now`: each directory's age totals are
+    /// rebuilt from its files' sizes and last uses, as `addChild` would have added them at `now`.
+    /// Removed nodes add nothing (they were subtracted). Precondition: `storage` is consistent
+    /// (`SavedScan`'s decoding checks it).
+    init(storage: Storage, now: UInt32) {
+        rootPath = storage.rootPath
+        self.now = now
+        parents = storage.parents
+        firstChildren = storage.firstChildren
+        nextSiblings = storage.nextSiblings
+        sizes = storage.sizes
+        kinds = storage.kinds
+        flagsStore = storage.flags
+        nameBytes = storage.nameBytes
+        nameEnds = storage.nameEnds
+        categories = storage.categories
+        lastUsedStore = storage.lastUsed
+        dirSlots = storage.dirSlots
+        categoryBytes = storage.categoryBytes
+        inodes = storage.inodes
+        dirDevices = storage.dirDevices
+        let ageCount = Self.ageCount
+        var ages = ContiguousArray<UInt64>(repeating: 0, count: storage.dirDevices.count * ageCount)
+        // Children always have larger IDs than their parent: in reverse ID order, a directory's
+        // row is complete when it is added to its parent's.
+        for i in stride(from: parents.count - 1, through: 1, by: -1) {
+            guard !flagsStore[i].contains(.removed) else { continue }
+            let parentRow = Int(dirSlots[Int(parents[i])]) * ageCount
+            let slot = Int(dirSlots[i])
+            if slot >= 0 {
+                for column in 0..<ageCount { ages[parentRow + column] &+= ages[slot * ageCount + column] }
+            } else {
+                ages[parentRow + AgeBucket(lastUsed: lastUsedStore[i], now: now).rawValue] &+= sizes[i]
+            }
+        }
+        ageBytes = ages
+    }
 
     /// The context a directory imposes on its contents, or nil if none (or `id` is not a directory).
     func context(_ id: NodeID) -> FileCategory? {
