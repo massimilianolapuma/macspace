@@ -269,6 +269,9 @@ final class ScanModel {
             await previous?.value
             guard !Task.isCancelled else { return }
             await body()
+            // Only now: until `body` returns, its locals (a decoded snapshot, a refresh's reader)
+            // still hold the replaced tree's arrays.
+            Self.releaseFreedMemory()
         }
     }
 
@@ -521,6 +524,14 @@ final class ScanModel {
             await save(store, target: target, startedAt: startedAt, fullDiskAccess: fullDiskAccess)
         }
         if store === self.store { scanSettled = true }
+    }
+
+    /// Hands the memory a replaced store freed back to the system, once a scan's work has ended.
+    /// The allocator keeps freed large blocks for reuse, and a whole disk's tree is about a
+    /// gigabyte: measured on the owner's disk, the footprint stayed ~1.1 GB above the live tree
+    /// after a refresh (#33).
+    private static func releaseFreedMemory() {
+        Task.detached(priority: .utility) { _ = malloc_zone_pressure_relief(nil, 0) }
     }
 
     private func run(_ target: ScanTarget) async {

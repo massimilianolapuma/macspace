@@ -72,3 +72,17 @@ private func saved(_ fx: Fixture) async throws -> SavedScan {
     link.hardLinks[0].links.append(NodeID(link.tree.count + 10))
     #expect(error(link.encoded()) == .damaged)
 }
+
+/// Saving streams the format to the file, with no copy of it in memory: the file holds exactly
+/// `encoded()`'s bytes, and decodes back.
+@Test func writingStreamsTheSameBytes() async throws {
+    let fx = try richFixture(); defer { fx.cleanup() }
+    let place = try Fixture(); defer { place.cleanup() }
+    var original = try await saved(fx)
+    original.baseline = ChangeBaseline(eventID: 9, deviceUUIDs: [1: "U"])
+    let file = place.root.appendingPathComponent("s.snapshot")
+    try original.write(to: file)
+    let bytes = try Data(contentsOf: file)
+    #expect(bytes == original.encoded())
+    #expect(try SavedScan(decoding: bytes).rootPath == original.rootPath)
+}

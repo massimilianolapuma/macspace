@@ -1,4 +1,5 @@
 import CryptoKit
+import Darwin
 import Foundation
 
 /// Why bytes are not a `SavedScan`.
@@ -23,57 +24,99 @@ extension SavedScan {
     public static let formatVersion: UInt32 = 1
     static let magic = Data("MSPSNAP\0".utf8)
 
+    /// The format in memory (tests, small scans); saving streams it instead (`write(to:)`).
     public func encoded() -> Data {
-        var w = Writer()
-        w.data.append(Self.magic)
-        w.put(Self.formatVersion)
-        switch target {
-        case .startupDisk: w.put(UInt8(0))
-        case let .folder(path):
-            w.put(UInt8(1))
-            w.put(path)
+        var data = Data()
+        var w = Writer { data.append(contentsOf: $0) }
+        try! encode(into: &w)   // appending to memory never throws
+        try! w.finish()
+        return data
+    }
+
+    /// Writes the format to a new file at `url` (replacing one there), streaming it: no copy of
+    /// the whole snapshot is ever held in memory (it is hundreds of MB for a whole disk).
+    public func write(to url: URL) throws {
+        let fd = open(url.path, O_WRONLY | O_CREAT | O_TRUNC | O_CLOEXEC, 0o644)
+        guard fd >= 0 else { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
+        defer { close(fd) }
+        var pending = Data()
+        pending.reserveCapacity(Self.chunk)
+        func flush(_ bytes: UnsafeRawBufferPointer) throws {
+            var offset = 0
+            while offset < bytes.count {
+                let n = Darwin.write(fd, bytes.baseAddress! + offset, bytes.count - offset)
+                if n < 0 {
+                    if errno == EINTR { continue }
+                    throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+                }
+                offset += n
+            }
         }
-        w.put(startedAt)
-        w.put(UInt8(hadFullDiskAccess ? 1 : 0))
+        var w = Writer { bytes in
+            if pending.count + bytes.count > Self.chunk {
+                try pending.withUnsafeBytes { try flush($0) }
+                pending.removeAll(keepingCapacity: true)
+            }
+            // A big array goes straight to the file, without a copy.
+            if bytes.count >= Self.chunk { try flush(bytes) } else { pending.append(contentsOf: bytes) }
+        }
+        try encode(into: &w)
+        try w.finish()
+        try pending.withUnsafeBytes { try flush($0) }
+    }
+
+    /// Writes are gathered up to this many bytes.
+    private static let chunk = 1 << 20
+
+    /// Everything but the checksum, which `Writer.finish` appends.
+    private func encode(into w: inout Writer) throws {
+        try w.raw(Self.magic)
+        try w.put(Self.formatVersion)
+        switch target {
+        case .startupDisk: try w.put(UInt8(0))
+        case let .folder(path):
+            try w.put(UInt8(1))
+            try w.put(path)
+        }
+        try w.put(startedAt)
+        try w.put(UInt8(hadFullDiskAccess ? 1 : 0))
         if let baseline {
-            w.put(UInt8(1))
-            w.put(baseline.eventID)
+            try w.put(UInt8(1))
+            try w.put(baseline.eventID)
             let devices = baseline.deviceUUIDs.sorted { $0.key < $1.key }
-            w.put(UInt64(devices.count))
+            try w.put(UInt64(devices.count))
             for (device, uuid) in devices {
-                w.put(device)
-                w.put(uuid)
+                try w.put(device)
+                try w.put(uuid)
             }
         } else {
-            w.put(UInt8(0))
+            try w.put(UInt8(0))
         }
-        w.put(tree.rootPath)
-        w.put(tree.parents)
-        w.put(tree.firstChildren)
-        w.put(tree.nextSiblings)
-        w.put(tree.sizes)
-        w.put(ContiguousArray(tree.kinds.map(\.rawValue)))
-        w.put(ContiguousArray(tree.flags.map(\.rawValue)))
-        w.put(tree.nameBytes)
-        w.put(tree.nameEnds)
-        w.put(tree.categories)
-        w.put(tree.lastUsed)
-        w.put(tree.dirSlots)
-        w.put(tree.categoryBytes)
-        w.put(tree.inodes)
-        w.put(tree.dirDevices)
-        w.put(UInt64(hardLinks.count))
+        try w.put(tree.rootPath)
+        try w.put(tree.parents)
+        try w.put(tree.firstChildren)
+        try w.put(tree.nextSiblings)
+        try w.put(tree.sizes)
+        try w.put(ContiguousArray(tree.kinds.map(\.rawValue)))
+        try w.put(ContiguousArray(tree.flags.map(\.rawValue)))
+        try w.put(tree.nameBytes)
+        try w.put(tree.nameEnds)
+        try w.put(tree.categories)
+        try w.put(tree.lastUsed)
+        try w.put(tree.dirSlots)
+        try w.put(tree.categoryBytes)
+        try w.put(tree.inodes)
+        try w.put(tree.dirDevices)
+        try w.put(UInt64(hardLinks.count))
         for link in hardLinks {
-            w.put(link.device)
-            w.put(link.inode)
-            w.put(ContiguousArray(link.links))
-            w.put(link.counted ?? -1)
+            try w.put(link.device)
+            try w.put(link.inode)
+            try w.put(ContiguousArray(link.links))
+            try w.put(link.counted ?? -1)
         }
-        w.put(ContiguousArray(installerIDs))
-        w.put(ContiguousArray(unverifiedDirectories))
-        w.put(ContiguousArray(scanDevices))
-        w.data.append(contentsOf: SHA256.hash(data: w.data))
-        return w.data
+        try w.put(ContiguousArray(installerIDs))
+        try w.put(ContiguousArray(unverifiedDirectories))
+        try w.put(ContiguousArray(scanDevices))
     }
 
     public init(decoding data: Data) throws(SavedScanError) {
@@ -202,27 +245,46 @@ extension FileTree.Storage {
     }
 }
 
-/// Appends little-endian values.
+/// Hands little-endian values to `sink`, hashing everything it hands over; `finish` then hands
+/// over the SHA-256 of it all.
 private struct Writer {
-    var data = Data()
+    private var hasher = SHA256()
+    private let sink: (UnsafeRawBufferPointer) throws -> Void
 
-    mutating func put<T: FixedWidthInteger>(_ value: T) {
-        withUnsafeBytes(of: value.littleEndian) { data.append(contentsOf: $0) }
+    init(sink: @escaping (UnsafeRawBufferPointer) throws -> Void) { self.sink = sink }
+
+    mutating func raw(_ bytes: UnsafeRawBufferPointer) throws {
+        hasher.update(bufferPointer: bytes)
+        try sink(bytes)
     }
 
-    mutating func put(_ string: String) {
+    mutating func raw(_ data: Data) throws {
+        try data.withUnsafeBytes { try raw($0) }
+    }
+
+    mutating func put<T: FixedWidthInteger>(_ value: T) throws {
+        try withUnsafeBytes(of: value.littleEndian) { try raw($0) }
+    }
+
+    mutating func put(_ string: String) throws {
         let bytes = Array(string.utf8)
-        put(UInt64(bytes.count))
-        data.append(contentsOf: bytes)
+        try put(UInt64(bytes.count))
+        try bytes.withUnsafeBytes { try raw($0) }
     }
 
-    mutating func put<T: FixedWidthInteger>(_ array: ContiguousArray<T>) {
-        put(UInt64(array.count))
+    mutating func put<T: FixedWidthInteger>(_ array: ContiguousArray<T>) throws {
+        try put(UInt64(array.count))
         if T.self == UInt8.self || (1 as T).littleEndian == 1 {   // little-endian host: raw bytes as they are
-            array.withUnsafeBytes { data.append(contentsOf: $0) }
+            try array.withUnsafeBytes { try raw($0) }
         } else {
-            for value in array { put(value) }
+            for value in array { try put(value) }
         }
+    }
+
+    /// Hands over the checksum.
+    mutating func finish() throws {
+        let digest = hasher.finalize()
+        try digest.withUnsafeBytes { try sink($0) }
     }
 }
 

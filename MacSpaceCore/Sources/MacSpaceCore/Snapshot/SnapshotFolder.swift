@@ -16,7 +16,17 @@ public struct SnapshotFolder: Sendable {
     /// the snapshot of the same kind: the startup disk's, or the folder's (whichever folder it was).
     public func save(_ saved: SavedScan) throws {
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-        try saved.encoded().write(to: file(for: saved.target), options: .atomic)
+        let target = file(for: saved.target)
+        let temporary = url.appending(path: ".\(UUID().uuidString).tmp", directoryHint: .notDirectory)
+        do {
+            try saved.write(to: temporary)
+            guard rename(temporary.path, target.path) == 0 else {
+                throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+            }
+        } catch {
+            try? FileManager.default.removeItem(at: temporary)
+            throw error
+        }
     }
 
     /// The snapshot saved for `target`; nil when there is none, when it is not valid (it is then
