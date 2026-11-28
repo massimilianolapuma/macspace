@@ -247,6 +247,36 @@ public final class FileTree {
         dirDevices[Int(slot)] = device
     }
 
+    /// Makes room for `nodes` nodes, `directories` of them directories, with `nameBytes` bytes of
+    /// names, so growing to that size copies nothing: a refresh knows the size from the snapshot.
+    func reserveCapacity(nodes: Int, directories: Int, nameBytes: Int) {
+        parents.reserveCapacity(nodes)
+        firstChildren.reserveCapacity(nodes)
+        nextSiblings.reserveCapacity(nodes)
+        sizes.reserveCapacity(nodes)
+        kinds.reserveCapacity(nodes)
+        flagsStore.reserveCapacity(nodes)
+        nameEnds.reserveCapacity(nodes)
+        categories.reserveCapacity(nodes)
+        lastUsedStore.reserveCapacity(nodes)
+        dirSlots.reserveCapacity(nodes)
+        inodes.reserveCapacity(nodes)
+        self.nameBytes.reserveCapacity(nameBytes)
+        dirDevices.reserveCapacity(directories)
+        categoryBytes.reserveCapacity(directories * Self.categoryCount)
+        ageBytes.reserveCapacity(directories * Self.ageCount)
+    }
+
+    /// The smallest capacity of the per-node, per-directory and name arrays (tests).
+    var capacity: (nodes: Int, directories: Int, nameBytes: Int) {
+        let nodes = [parents.capacity, firstChildren.capacity, nextSiblings.capacity, sizes.capacity, kinds.capacity,
+                     flagsStore.capacity, nameEnds.capacity, categories.capacity, lastUsedStore.capacity,
+                     dirSlots.capacity, inodes.capacity].min() ?? 0
+        let directories = min(dirDevices.capacity, categoryBytes.capacity / Self.categoryCount,
+                              ageBytes.capacity / Self.ageCount)
+        return (nodes, directories, nameBytes.capacity)
+    }
+
     // MARK: - Saving
 
     /// Everything the tree holds, as plain arrays (`saved()`, `init(storage:now:)`): what a

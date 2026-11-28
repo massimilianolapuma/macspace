@@ -662,6 +662,8 @@ final class ScanModel {
             }
         }
         let store = ScanStore(rootName: rootName, rootPath: rootPath)
+        // The snapshot says how big the tree will be: no array doubles while it fills.
+        await store.reserveCapacity(like: saved)
         let scanner = reader.map { Scanner(rootPath: rootPath, boundary: boundary, listing: $0) }
             ?? Scanner(rootPath: rootPath, boundary: boundary)
         let latest = LatestProgress()

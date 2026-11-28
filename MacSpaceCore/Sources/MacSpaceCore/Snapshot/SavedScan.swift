@@ -73,6 +73,18 @@ extension ScanStore {
         self.init(tree: FileTree(storage: saved.tree, now: now), home: home, history: history, saved: saved)
     }
 
+    /// Makes room for a tree as big as `saved`'s, plus a sixteenth for what was added since, before
+    /// a refresh or a full scan of the same target fills this store: the arrays then never double
+    /// (each doubling copies them and leaves the old buffer to the allocator's cache).
+    public func reserveCapacity(like saved: SavedScan) {
+        let nodes = saved.tree.count, directories = saved.tree.dirDevices.count, names = saved.tree.nameBytes.count
+        tree.reserveCapacity(nodes: nodes + nodes / 16, directories: directories + directories / 16,
+                             nameBytes: names + names / 16)
+    }
+
+    /// The tree's capacity (`FileTree.capacity`), for tests.
+    func treeCapacity() -> (nodes: Int, directories: Int, nameBytes: Int) { tree.capacity }
+
     /// The directory `id`'s device as listed (`FileTree.device(ofDirectory:)`).
     public func device(ofDirectory id: NodeID) -> Int32 { tree.device(ofDirectory: id) }
 }

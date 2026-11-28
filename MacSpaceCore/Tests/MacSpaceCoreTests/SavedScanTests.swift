@@ -116,3 +116,17 @@ private func expectSameTree(_ a: ScanStore, _ b: ScanStore, _ root: String) asyn
     #expect(await restored.device(ofDirectory: FileTree.root) == root)
     #expect(await restored.device(ofDirectory: aID) == a)
 }
+
+/// A refresh rebuilds a tree whose size the snapshot gives: reserving it up front spares the
+/// arrays their doublings (each a copy, and a freed buffer the allocator keeps) (#33).
+@Test func storeReservesWhatASavedScanHolds() async throws {
+    let fx = try richFixture(); defer { fx.cleanup() }
+    let saved = await (try await scannedStore(fx)).savedScan(target: .startupDisk, startedAt: 0, hadFullDiskAccess: true)
+    let fresh = ScanStore(rootName: "r", rootPath: fx.root.path, history: FakeChangeHistory())
+    await fresh.reserveCapacity(like: saved)
+    let capacity = await fresh.treeCapacity()
+    let nodes = saved.tree.count, dirs = saved.tree.dirDevices.count, names = saved.tree.nameBytes.count
+    #expect(capacity.nodes >= nodes + nodes / 16)
+    #expect(capacity.directories >= dirs + dirs / 16)
+    #expect(capacity.nameBytes >= names + names / 16)
+}
