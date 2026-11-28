@@ -148,3 +148,16 @@ private func changed(_ fx: Fixture, _ rels: String...) -> FakeChangeHistory {
     #expect(outcome.skipped.map(\.reason) == [.containsProtected(.photosLibrary)])
     #expect(moved.isEmpty)
 }
+
+/// A changed folder the history spells with other bytes than the tree (case here) is not in the
+/// tree as spelled: it is judged from disk, not skipped (fail closed).
+@Test func changedFolderSpelledOtherwiseIsJudged() async throws {
+    let fx = try Fixture(); defer { fx.cleanup() }
+    let bin = try Fixture(); defer { bin.cleanup() }
+    try fx.file("a/sub/old.txt", bytes: 100)
+    let store = try await scanned(fx, history: changed(fx, "a/SUB"))
+    try fx.file("a/sub/New.photoslibrary/x", bytes: 100)
+    let (outcome, moved) = try await trashA(store, fx, bin)
+    #expect(outcome.skipped.map(\.reason) == [.containsProtected(.photosLibrary)])
+    #expect(moved.isEmpty)
+}

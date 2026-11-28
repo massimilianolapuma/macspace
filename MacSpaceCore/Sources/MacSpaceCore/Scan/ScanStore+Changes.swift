@@ -35,14 +35,62 @@ extension ScanStore {
         }
         for folder in folders.sorted() {
             guard ContinuousClock.now < deadline else { return .containsUnverified }
-            guard let node = tree.node(atPath: folder), node == id || isBelow(node, id),
-                  tree.kind(node) == .directory, !tree.flags(node).contains(.removed) else {
-                // Not in the tree: inside new content, judged whole where that content starts.
+            // The history answers per path; only folders at or below this one concern it.
+            guard SystemChangeHistory.suffix(of: folder, under: path) != nil else { continue }
+            guard let node = tree.node(atPath: folder) else {
+                // Not in the tree as spelled: inside new content, or the history spelled an existing
+                // folder in other bytes. Judged from disk either way (fail closed).
+                if let reason = untrackedFolderBlocker(folder, item: id, devices: devices, deadline: deadline) {
+                    return reason
+                }
                 continue
             }
+            guard node == id || isBelow(node, id), tree.kind(node) == .directory,
+                  !tree.flags(node).contains(.removed) else { continue }
             if let reason = changedFolderBlocker(node, path: folder, devices: devices, deadline: deadline) {
                 return reason
             }
+        }
+        return nil
+    }
+
+    /// A changed folder at `path` (at or below the item `item`) that the tree does not hold as
+    /// spelled: from its nearest folder in the tree down, each missing folder is read from disk and
+    /// judged as new content; the last one with everything below it. Gone is fine.
+    private func untrackedFolderBlocker(_ path: String, item: NodeID, devices: Set<Int32>,
+                                        deadline: ContinuousClock.Instant) -> TrashSkip? {
+        var missing: [String] = []
+        var ancestorPath = path
+        var ancestor: NodeID?
+        while ancestor == nil {
+            guard let slash = ancestorPath.utf8.lastIndex(of: UInt8(ascii: "/")),
+                  slash != ancestorPath.utf8.startIndex else { return .containsUnverified }
+            missing.append(String(ancestorPath[ancestorPath.index(after: slash)...]))
+            ancestorPath = String(ancestorPath[..<slash])
+            ancestor = tree.node(atPath: ancestorPath)
+        }
+        guard let ancestor, ancestor == item || isBelow(ancestor, item) else { return .containsUnverified }
+        var context = tree.context(ancestor), flags = tree.flags(ancestor), current = ancestorPath
+        for (index, name) in missing.reversed().enumerated() {
+            let childPath = current + "/" + name
+            let entry: DirectoryEntry
+            do {
+                entry = try DirectoryReader.stat(path: childPath)
+            } catch .notFound {
+                return nil
+            } catch {
+                return .containsUnverified
+            }
+            if index == missing.count - 1 || entry.kind != .directory {
+                return judgeNew(entry, path: childPath, parentContext: context, parentFlags: flags, siblings: [],
+                                devices: devices, deadline: deadline)
+            }
+            let (category, childFlags) = classify(entry, path: childPath, parentContext: context, parentFlags: flags,
+                                                  siblings: [])
+            if let reason = judged(entry, path: childPath, category: category, flags: childFlags, devices: devices) {
+                return reason
+            }
+            (context, flags, current) = (category == .other ? nil : category, childFlags, childPath)
         }
         return nil
     }

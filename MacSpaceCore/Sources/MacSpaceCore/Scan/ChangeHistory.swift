@@ -109,16 +109,22 @@ public struct SystemChangeHistory: ChangeHistory {
 
     /// What `events` say about `path` (real path `real`): the changed folders at or below it, in
     /// `path`'s spelling, or `.untrusted` when an untrusting event is at, above or below it (or dropped
-    /// events anywhere).
+    /// events anywhere), or when an event is at or below it only once case and Unicode form are
+    /// folded (`SafetyPaths.folded`): such an event cannot be mapped back to the tree's spelling.
     static func changes(at path: String, real: String, in events: [Event]) -> PathChanges {
         var folders: Set<String> = []
+        let foldedReal = SafetyPaths.folded(real)
         for event in events {
-            let suffix = Self.suffix(of: event.path, under: real)
             if event.flags & globalFlags != 0 { return .untrusted }
-            if event.flags & untrustedFlags != 0, suffix != nil || Self.suffix(of: real, under: event.path) != nil {
-                return .untrusted
+            if let suffix = Self.suffix(of: event.path, under: real) {
+                if event.flags & untrustedFlags != 0 { return .untrusted }
+                folders.insert(path + suffix)
+                continue
             }
-            if let suffix { folders.insert(path + suffix) }
+            let folded = SafetyPaths.folded(event.path)
+            let below = Self.suffix(of: folded, under: foldedReal) != nil
+            let above = Self.suffix(of: foldedReal, under: folded) != nil
+            if below || (above && event.flags & untrustedFlags != 0) { return .untrusted }
         }
         return .folders(folders)
     }
@@ -217,13 +223,19 @@ public struct SystemChangeHistory: ChangeHistory {
             let createFlags = FSEventStreamCreateFlags(kFSEventStreamCreateFlagNoDefer | kFSEventStreamCreateFlagWatchRoot)
             guard let stream = FSEventStreamCreate(nil, callback, &context, (realPaths + [cookieFolder]) as CFArray,
                                                    eventID, 0, createFlags) else { return nil }
-            FSEventStreamSetDispatchQueue(stream, DispatchQueue(label: "MacSpace.ChangeHistory"))
+            let queue = DispatchQueue(label: "MacSpace.ChangeHistory")
+            FSEventStreamSetDispatchQueue(stream, queue)
+            var started = false
             defer {
-                FSEventStreamStop(stream)
+                if started { FSEventStreamStop(stream) }
                 FSEventStreamInvalidate(stream)
                 FSEventStreamRelease(stream)
+                // A callback already queued still runs: wait for it while `collector` is alive (the
+                // context holds it unretained).
+                queue.sync {}
             }
-            guard FSEventStreamStart(stream) else { return nil }
+            started = FSEventStreamStart(stream)
+            guard started else { return nil }
             guard collector.historyDone.wait(timeout: deadline) == .success else { return nil }
             let cookie = cookieFolder + "/cookie"
             let fd = open(cookie, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0o600)
