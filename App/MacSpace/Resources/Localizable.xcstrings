@@ -103,10 +103,22 @@
     "aggiornamento in corso" : {
 
     },
+    "Aggiornamento in corso…" : {
+
+    },
     "Aggiornato" : {
 
     },
     "altre %lld app" : {
+
+    },
+    "Aggiornato a %@" : {
+
+    },
+    "Aggiornato a %@ · Aggiornamento in corso…" : {
+
+    },
+    "Aggiornato a %@ · Analisi completa in corso…" : {
 
     },
     "Altre %lld voci" : {
@@ -122,6 +134,9 @@
 
     },
     "Altro" : {
+
+    },
+    "Analisi completa" : {
 
     },
     "Analisi delle app in corso: riprova tra poco" : {

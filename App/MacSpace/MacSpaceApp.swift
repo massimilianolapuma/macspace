@@ -15,6 +15,7 @@ struct MacSpaceApp: App {
             // The View menu's show/hide inspector item and its ⌃⌘I shortcut.
             InspectorCommands()
             GoCommands()
+            ScanCommands()
         }
     }
 }
@@ -43,7 +44,39 @@ struct GoUpAction: Equatable {
     static func == (lhs: GoUpAction, rhs: GoUpAction) -> Bool { lhs.model === rhs.model }
 }
 
+/// "Archivio › Analisi completa": the key window's target scanned again in full, its snapshot
+/// (if one is shown) staying on screen until the scan ends.
+struct ScanCommands: Commands {
+    @FocusedValue(\.fullScan) private var fullScan
+
+    var body: some Commands {
+        CommandGroup(after: .newItem) {
+            Button("Analisi completa") { fullScan?() }
+                .disabled(fullScan == nil)
+        }
+    }
+}
+
+/// A full scan of one window's target, published by the key window while it can start one (see
+/// `GoUpAction`); the installed apps are indexed again, as for "Analizza".
+struct FullScanAction: Equatable {
+    let model: ScanModel
+    let safety: SafetyEnvironmentProvider
+    let target: ScanTarget
+
+    @MainActor func callAsFunction() {
+        safety.rebuildApps()
+        model.fullScan(target)
+    }
+
+    static func == (lhs: FullScanAction, rhs: FullScanAction) -> Bool {
+        lhs.model === rhs.model && lhs.safety === rhs.safety && lhs.target == rhs.target
+    }
+}
+
 extension FocusedValues {
     /// The key window's way up a level; nil while it has none.
     @Entry var goUp: GoUpAction?
+    /// The key window's full scan; nil while it cannot start one.
+    @Entry var fullScan: FullScanAction?
 }

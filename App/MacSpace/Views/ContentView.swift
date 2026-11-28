@@ -4,9 +4,10 @@ import SwiftUI
 
 struct ContentView: View {
     @State private var model = ScanModel()
-    @State private var target: ScanTarget = .startupDisk
+    /// What to scan; the last one used, across launches (`lastTargetKey`).
+    @State private var target: ScanTarget = Self.rememberedFolder().map { .folder($0.url) } ?? .startupDisk
     /// The folder picked with "Scegli cartella…" and its display name, resolved once.
-    @State private var chosenFolder: (url: URL, name: String)?
+    @State private var chosenFolder: (url: URL, name: String)? = Self.rememberedFolder()
     @State private var choosingFolder = false
     @State private var showOnboarding = false
     @State private var showHistory = false
@@ -61,6 +62,7 @@ struct ContentView: View {
                                           max: WindowLayout.inspectorMaxWidth)
             }
             .focusedSceneValue(\.goUp, canGoUp ? GoUpAction(model: model) : nil)
+            .focusedSceneValue(\.fullScan, canFullScan ? FullScanAction(model: model, safety: safety, target: target) : nil)
             .background {
                 // ⌘[ also goes up a level, as in Finder (⌘↑ is "Vai › Cartella superiore").
                 Button { model.goUp() } label: { EmptyView() }
@@ -79,6 +81,12 @@ struct ContentView: View {
                 model.updateEnvironment(safety.environment)
             }
             .task { safety.start() }
+            .task {
+                // The last target reopens from its snapshot, refreshed out of sight; without one,
+                // the window waits for "Analizza" as on a first launch.
+                forgetMissingFolder()
+                model.open(target, scanIfMissing: false)
+            }
             .navigationTitle(Text(verbatim: model.breadcrumb.last?.name ?? "MacSpace"))
             .toolbar(removing: .title)
             .toolbar { toolbar }
@@ -90,8 +98,12 @@ struct ContentView: View {
                 }
             }
             .onChange(of: target) {
-                // Picking another target mid-scan replaces the running scan.
-                if model.isScanning { startScan() }
+                Self.remember(target)
+                // Its snapshot shows at once and refreshes; without one, picking another target
+                // mid-scan replaces the running scan, else nothing starts.
+                let running = model.isScanning || model.update != nil
+                if running { safety.rebuildApps() }
+                model.open(target, scanIfMissing: running)
             }
             .sheet(isPresented: $showOnboarding) {
                 OnboardingView(dismiss: { showOnboarding = false })
@@ -108,7 +120,18 @@ struct ContentView: View {
     /// Whether the status already shows a spinner of its own (a chosen folder's scan, whose total is
     /// unknown): the wait slot then stays empty rather than add a second one.
     private var statusShowsSpinner: Bool {
-        model.isScanning && !(model.disk.map { $0.used > 0 } ?? false)
+        let estimated = model.disk.map { $0.used > 0 } ?? false
+        return switch model.update {
+        case .refresh: true
+        case .fullScan: !estimated
+        case nil: model.isScanning && !estimated
+        }
+    }
+
+    /// "Archivio › Analisi completa" acts on this window: not while it scans, nor with a sheet up.
+    private var canFullScan: Bool {
+        !model.isScanning && model.update == nil && model.pendingTrash == nil && model.trashReport == nil
+            && !showOnboarding && !choosingFolder
     }
 
     /// Below the scan root, with no sheet up (the Trash confirmation or its result, the onboarding,
@@ -213,7 +236,7 @@ struct ContentView: View {
             }
         }
         ToolbarItem(placement: .primaryAction) {
-            if model.isScanning {
+            if model.isScanning || model.update != nil {
                 Button("Interrompi", systemImage: "stop.fill") { model.cancel() }
                     .labelStyle(.titleAndIcon)
             } else {
@@ -230,9 +253,37 @@ struct ContentView: View {
 
     /// Scans `target`; the installed apps are indexed again meanwhile (apps installed or removed
     /// since launch), keeping the previous index until the new one lands.
+    /// With a snapshot of it on screen, refreshes it (only what changed since).
     private func startScan() {
         safety.rebuildApps()
-        model.start(target)
+        model.open(target, scanIfMissing: true)
+    }
+
+    /// Where the last target is remembered: "startupDisk", or a folder's path.
+    private static let lastTargetKey = "lastScanTarget"
+
+    /// The remembered folder, when the last target was one that still exists.
+    private static func rememberedFolder() -> (url: URL, name: String)? {
+        guard let path = UserDefaults.standard.string(forKey: lastTargetKey), path != "startupDisk",
+              FileManager.default.fileExists(atPath: path) else { return nil }
+        let url = URL(filePath: path, directoryHint: .isDirectory)
+        return (url, ScanModel.root(of: .folder(url)).name)
+    }
+
+    private static func remember(_ target: ScanTarget) {
+        let value = switch target {
+        case .startupDisk: "startupDisk"
+        case .folder: ScanModel.root(of: target).path
+        }
+        UserDefaults.standard.set(value, forKey: lastTargetKey)
+    }
+
+    /// The remembered folder is gone: its snapshot goes too, and the startup disk is remembered.
+    private func forgetMissingFolder() {
+        guard let path = UserDefaults.standard.string(forKey: Self.lastTargetKey), path != "startupDisk",
+              !FileManager.default.fileExists(atPath: path) else { return }
+        SnapshotFolder.standard.forgetFolder()
+        Self.remember(.startupDisk)
     }
 
     /// Up while the Trash confirmation or its result shows; closing it (never during a move)
@@ -419,7 +470,10 @@ struct PathRowFacts: View {
     }
 
     private func state(atRoot: Bool) -> PathRowFactsContent.State? {
-        switch model.phase {
+        if let date = model.shownSnapshotDate {
+            return .snapshot(date: date, update: model.update, progress: model.updateProgress, estimate: model.disk)
+        }
+        return switch model.phase {
         case .idle: nil
         case let .scanning(progress): .scanning(progress, estimate: model.disk)
         case let .done(summary) where summary.wasCancelled:
@@ -444,6 +498,11 @@ struct PathRowFacts: View {
                                                                          partlyRead: 88_888), disk: nil)
                 PathRowFactsContent(total: total, state: .finished(files: 8_888_888, unreadable: 88_888,
                                                                         partlyRead: 88_888), disk: disk)
+                // "28 set, 22:22": the widest day and month names in Italian are short.
+                PathRowFactsContent(total: total, state: .snapshot(
+                    date: Date(timeIntervalSince1970: 1_790_000_000), update: .fullScan,
+                    progress: ScanProgress(filesSeen: 1, bytesSeen: total, directoriesPending: 1), estimate: disk),
+                    disk: nil)
             }
             .fixedSize()
         }
@@ -457,6 +516,9 @@ struct PathRowFactsContent: View {
         case scanning(ScanProgress, estimate: DiskUsage?)
         case cancelled(files: Int, unreadable: Int, partlyRead: Int)
         case finished(files: Int, unreadable: Int, partlyRead: Int)
+        /// A snapshot from an earlier launch, taken at `date`, with the scan replacing it, if any:
+        /// its progress for the startup disk's bar (`estimate`) during a full scan.
+        case snapshot(date: Date, update: ScanModel.Update?, progress: ScanProgress?, estimate: DiskUsage?)
     }
 
     let total: UInt64?
@@ -543,10 +605,37 @@ struct PathRowFactsContent: View {
             case let .finished(files, unreadable, partlyRead):
                 Text(verbatim: Self.withCoverage(String(localized: "\(Formatters.count(files)) file"), unreadable,
                                                  partlyRead))
+            case let .snapshot(date, update, progress, estimate):
+                HStack(spacing: WindowLayout.gap) {
+                    if update == .fullScan, let estimate, estimate.used > 0 {
+                        let fraction = estimate.progress(bytesSeen: progress?.bytesSeen ?? 0)
+                        ProgressView(value: fraction)
+                            .progressViewStyle(.linear)
+                            .controlSize(.small)
+                            .frame(width: Self.progressWidth)
+                            .animation(reduceMotion ? nil : .easeOut(duration: 0.24), value: fraction)
+                            .accessibilityLabel(Text("Avanzamento stimato"))
+                            .accessibilityValue(Text("circa \(Int((fraction * 100).rounded()))%"))
+                    } else if update != nil {
+                        ProgressView()
+                            .controlSize(.small)
+                    }
+                    Self.snapshotLine(date: date, update: update)
+                }
             }
         }
         .foregroundStyle(FusionPalette.secondaryText(scheme))
         .accessibilityElement(children: .combine)
+    }
+
+    /// "Aggiornato a <data e ora>", then what is replacing it.
+    private static func snapshotLine(date: Date, update: ScanModel.Update?) -> Text {
+        let when = date.formatted(.dateTime.day().month(.abbreviated).hour().minute())
+        return switch update {
+        case .refresh: Text("Aggiornato a \(when) · Aggiornamento in corso…")
+        case .fullScan: Text("Aggiornato a \(when) · Analisi completa in corso…")
+        case nil: Text("Aggiornato a \(when)")
+        }
     }
 
     /// "Analisi in corso… <files> file · <bytes>".
