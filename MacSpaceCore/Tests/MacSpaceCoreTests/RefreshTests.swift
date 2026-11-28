@@ -162,3 +162,66 @@ private func plan(_ saved: SavedScan, now: UInt32? = nil, rootInode: UInt64? = n
     // Granted since: nothing was hidden from the history then.
     #expect(plan(await save(store, fx, fullDiskAccess: false), history: history) == .incremental(changed: changed))
 }
+
+// MARK: - Review C1, C2
+
+/// Records the order of its calls; answers with `current` for the baseline now.
+private final class RecordingHistory: ChangeHistory, @unchecked Sendable {
+    let current: ChangeBaseline?
+    let answer: PathChanges
+    let calls = Mutex<[String]>([])
+    init(current: ChangeBaseline?, answer: PathChanges) {
+        self.current = current
+        self.answer = answer
+    }
+    func baseline(devices: Set<Int32>) -> ChangeBaseline? {
+        calls.withLock { $0.append("baseline") }
+        return current
+    }
+    func changes(since baseline: ChangeBaseline, under paths: [String], devices: [String: Int32]) -> [String: PathChanges] {
+        calls.withLock { $0.append("changes") }
+        return Dictionary(uniqueKeysWithValues: paths.map { ($0, answer) })
+    }
+}
+
+@Test func refreshStartTakesItsBaselineBeforeAskingTheHistory() async throws {   // review C1
+    let fx = try Fixture(); defer { fx.cleanup() }
+    try fx.file("a/f", bytes: 10)
+    let start = ChangeBaseline(eventID: 1, deviceUUIDs: [5: "DATA", 6: "SYSTEM"])
+    let saved = await save(try await scannedStore(fx, history: FakeChangeHistory(start: start)), fx)
+    let now = ChangeBaseline(eventID: 99, deviceUUIDs: [5: "DATA", 6: "SYSTEM"])
+    let history = RecordingHistory(current: now, answer: .folders([fx.root.path + "/a"]))
+    let start2 = saved.refreshStart(now: saved.startedAt + 60, rootInode: saved.rootInode, hasFullDiskAccess: true,
+                                    history: history, devices: [5, 6])
+    #expect(start2.plan == .incremental(changed: [fx.root.path + "/a"]))
+    #expect(start2.baseline == now)
+    #expect(history.calls.withLock { $0 } == ["baseline", "changes"])
+}
+
+@Test func refreshStartFallsBackWhenAVolumeHistoryChanged() async throws {   // review C2
+    let fx = try Fixture(); defer { fx.cleanup() }
+    try fx.file("a/f", bytes: 10)
+    let start = ChangeBaseline(eventID: 1, deviceUUIDs: [5: "DATA", 6: "SYSTEM"])
+    let saved = await save(try await scannedStore(fx, history: FakeChangeHistory(start: start)), fx)
+    func plan(_ uuids: [Int32: String]) -> RefreshPlan {
+        saved.refreshStart(now: saved.startedAt + 60, rootInode: saved.rootInode, hasFullDiskAccess: true,
+                           history: RecordingHistory(current: ChangeBaseline(eventID: 9, deviceUUIDs: uuids),
+                                                     answer: .folders([])),
+                           devices: [5, 6]).plan
+    }
+    #expect(plan([5: "DATA", 6: "SYSTEM"]) == .incremental(changed: []))
+    #expect(plan([5: "DATA-RESET", 6: "SYSTEM"]) == .fullScan(.historyUntrusted))   // the Data volume's history was reset
+    #expect(plan([6: "SYSTEM"]) == .fullScan(.historyUntrusted))                      // no longer keeps one
+    #expect(plan([7: "DATA", 6: "SYSTEM"]) == .fullScan(.historyUntrusted))           // renumbered
+}
+
+@Test func scanRecordsTheBaselineItIsGiven() async throws {   // review C1
+    let fx = try Fixture(); defer { fx.cleanup() }
+    try fx.file("a/f", bytes: 10)
+    let given = ChangeBaseline(eventID: 7, deviceUUIDs: [1: "U"])
+    let store = ScanStore(rootName: "r", rootPath: fx.root.path,
+                          history: FakeChangeHistory(start: ChangeBaseline(eventID: 1000, deviceUUIDs: [:])))
+    _ = await Scanner(rootPath: fx.root.path, boundary: try .forFolder(fx.root.path)).scan(into: store, baseline: given)
+    let saved = await store.savedScan(target: .startupDisk, startedAt: 0, hadFullDiskAccess: true)
+    #expect(saved.baseline == given)
+}

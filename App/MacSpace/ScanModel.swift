@@ -153,6 +153,8 @@ final class ScanModel {
     private(set) var shownScanDate: Date?
     /// What the shown tree is of; nil before any scan.
     @ObservationIgnored private var shownTarget: ScanTarget?
+    /// Whether MacSpace had Full Disk Access when the shown tree was read.
+    @ObservationIgnored private var shownFullDiskAccess = false
     /// That scan's progress, for the startup disk's bar; nil before its first report.
     private(set) var updateProgress: ScanProgress?
     /// The snapshot on screen, kept to refresh it again (it shares its arrays with the shown tree).
@@ -463,11 +465,12 @@ final class ScanModel {
     /// `keepViews` leaves the charts, list, crumbs and legends up, for a caller that puts the new
     /// store's own in this same turn (`swap`); otherwise they start empty, with the root's crumb.
     private func install(_ store: ScanStore, rootName: String, target: ScanTarget, scannedAt: Date,
-                         keepViews: Bool = false) {
+                         fullDiskAccess: Bool, keepViews: Bool = false) {
         let startupDisk = target == .startupDisk
         self.store = store
         shownTarget = target
         shownScanDate = scannedAt
+        shownFullDiskAccess = fullDiskAccess
         beginNavigation()
         center = FileTree.root
         hovered = nil
@@ -549,7 +552,7 @@ final class ScanModel {
         let startedAt = Date.now
         let fullDiskAccess = FullDiskAccess.isGranted
         let store = ScanStore(rootName: rootName, rootPath: rootPath)
-        install(store, rootName: rootName, target: target, scannedAt: startedAt)
+        install(store, rootName: rootName, target: target, scannedAt: startedAt, fullDiskAccess: fullDiskAccess)
         phase = .scanning(ScanProgress(filesSeen: 0, bytesSeen: 0, directoriesPending: 1))
         await applyEnvironment(to: store)
 
@@ -588,14 +591,21 @@ final class ScanModel {
                 await update(target, from: shown.saved, full: false)
                 return
             }
+            if shownTarget == target, let store, let scannedAt = shownScanDate {
+                // This target's scanned tree is on screen ("Analizza" after a scan): it stays,
+                // browsable where the user is, while it is brought up to date behind it. Its own
+                // saved form shares its arrays (no snapshot read back from disk, no third tree).
+                let saved = await store.savedScan(target: Self.savedTarget(target),
+                                                  startedAt: UInt32(clamping: Int64(scannedAt.timeIntervalSince1970)),
+                                                  hadFullDiskAccess: shownFullDiskAccess)
+                guard !Task.isCancelled else { return }
+                await update(target, from: saved, full: false)
+                return
+            }
             let key = Self.savedTarget(target)
             let saved = await Task.detached(priority: .userInitiated) { SnapshotFolder.standard.load(key) }.value
             guard !Task.isCancelled else { return }
-            if let saved, shownTarget == target, store != nil {
-                // This target's tree is on screen already ("Analizza" after a scan): it stays,
-                // browsable where the user is, while its snapshot is brought up to date behind it.
-                await update(target, from: saved, full: false)
-            } else if let saved {
+            if let saved {
                 guard await show(saved, target: target) else { return }
                 await update(target, from: saved, full: false)
             } else if scanIfMissing {
@@ -633,7 +643,7 @@ final class ScanModel {
         let store = await Task.detached(priority: .userInitiated) { ScanStore(saved: saved, now: now) }.value
         guard !Task.isCancelled else { return false }
         let date = Date(timeIntervalSince1970: TimeInterval(saved.startedAt))
-        install(store, rootName: rootName, target: target, scannedAt: date)
+        install(store, rootName: rootName, target: target, scannedAt: date, fullDiskAccess: saved.hadFullDiskAccess)
         shownSaved = (target, saved)
         shownSnapshotDate = date
         phase = .idle
@@ -659,16 +669,21 @@ final class ScanModel {
         // The tree on screen says how big the new one will be: no array doubles while it fills.
         let size = await store?.treeSize()
         var reader: ListingReader?
+        // Where the history stood before it was asked what changed: the new tree records it, so
+        // nothing changed in between escapes both the refresh and later checks.
+        var baseline: ChangeBaseline?
         if !full, let saved {
             let rootInode = (try? DirectoryReader.stat(path: rootPath))?.inode ?? 0
             let now = UInt32(clamping: Int64(startedAt.timeIntervalSince1970))
+            let devices = boundary.allowedDevices
             // A whole day's history can take seconds to replay (measured: 8–9 s for 70 k events).
-            let plan = await Task.detached(priority: .userInitiated) {
-                saved.refreshPlan(now: now, rootInode: rootInode, hasFullDiskAccess: fullDiskAccess,
-                                  history: SystemChangeHistory(timeout: .seconds(30)))
+            let start = await Task.detached(priority: .userInitiated) {
+                saved.refreshStart(now: now, rootInode: rootInode, hasFullDiskAccess: fullDiskAccess,
+                                   history: SystemChangeHistory(timeout: .seconds(30)), devices: devices)
             }.value
             guard !Task.isCancelled else { return }
-            switch plan {
+            baseline = start.baseline
+            switch start.plan {
             case let .incremental(changed):
                 Self.snapshotLog.info("refresh: \(changed.count, privacy: .public) changed folders")
                 reader = saved.listingReader(changed: changed)
@@ -690,7 +705,11 @@ final class ScanModel {
             }
         }
         let began = ContinuousClock.now
-        let summary = await scanner.scan(into: store) { latest.value = $0 }
+        let summary = if let baseline {
+            await scanner.scan(into: store, baseline: baseline) { latest.value = $0 }
+        } else {
+            await scanner.scan(into: store) { latest.value = $0 }
+        }
         ticker.cancel()
         await ticker.value
         guard !summary.wasCancelled, !Task.isCancelled else { return }
@@ -700,7 +719,7 @@ final class ScanModel {
             for \(summary.files, privacy: .public) files
             """)
         await applyEnvironment(to: store)
-        await swap(to: store, rootName: rootName, target: target, scannedAt: startedAt)
+        await swap(to: store, rootName: rootName, target: target, scannedAt: startedAt, fullDiskAccess: fullDiskAccess)
         update = nil
         updateProgress = nil
         await finish(store, summary, target: target, startedAt: startedAt, fullDiskAccess: fullDiskAccess)
@@ -710,8 +729,11 @@ final class ScanModel {
     /// is gone) and keeping the selection (by path; what is gone drops out). The new store's views
     /// are laid out first and land in the same main-actor turn as the store, so the charts never
     /// show empty and nothing on screen names a node of the old one.
-    private func swap(to new: ScanStore, rootName: String, target: ScanTarget, scannedAt: Date) async {
-        guard let old = store else { return install(new, rootName: rootName, target: target, scannedAt: scannedAt) }
+    private func swap(to new: ScanStore, rootName: String, target: ScanTarget, scannedAt: Date,
+                      fullDiskAccess: Bool) async {
+        guard let old = store else {
+            return install(new, rootName: rootName, target: target, scannedAt: scannedAt, fullDiskAccess: fullDiskAccess)
+        }
         var mapped = FileTree.root
         var view: ScanStore.Snapshot?
         var laidOut: (chart: ChartKind, size: CGSize) = (chart, chartSize)
@@ -732,7 +754,8 @@ final class ScanModel {
             if let path = await old.path(of: id), let node = await new.node(atPath: path) { kept.insert(node) }
         }
         guard store === old else { return }
-        install(new, rootName: rootName, target: target, scannedAt: scannedAt, keepViews: view != nil)
+        install(new, rootName: rootName, target: target, scannedAt: scannedAt, fullDiskAccess: fullDiskAccess,
+                keepViews: view != nil)
         center = mapped
         if let view { apply(view, chart: laidOut.chart, size: laidOut.size) }
         if !kept.isEmpty { changeSelection { _ in kept } }

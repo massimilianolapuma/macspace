@@ -100,6 +100,14 @@ public struct Scanner: Sendable {
     /// (`defaultConcurrency`), this keeps store queries responsive while a scan is running.
     public func scan(into store: ScanStore,
                      progress: (@Sendable (ScanProgress) -> Void)? = nil) async -> ScanSummary {
+        await scan(into: store, baseline: store.history.baseline(devices: boundary.allowedDevices), progress: progress)
+    }
+
+    /// `scan(into:progress:)`, with the history's position taken by the caller beforehand: a
+    /// refresh takes it before asking the history what changed (`SavedScan.refreshStart`), so no
+    /// change can fall between the two (one in both is only read twice).
+    public func scan(into store: ScanStore, baseline: ChangeBaseline?,
+                     progress: (@Sendable (ScanProgress) -> Void)? = nil) async -> ScanSummary {
         let clock = ContinuousClock()
         let start = clock.now
         var lastReport = start
@@ -120,7 +128,7 @@ public struct Scanner: Sendable {
         let boundary = self.boundary
         let reader = self.reader
         await store.markScanStarted(rootInode: rootEntry?.inode ?? 0, rootDevice: rootEntry?.device ?? 0,
-                                    baseline: store.history.baseline(devices: boundary.allowedDevices))
+                                    baseline: baseline)
 
         await withTaskGroup(of: DirectoryResult.self) { group in
             while true {

@@ -57,3 +57,16 @@ private func files(_ url: URL) -> Set<String> {
 @Test func standardFolderIsInTheAppsCaches() {
     #expect(SnapshotFolder.standard.url.path.hasSuffix("/Library/Caches/com.massilp.macspace/Snapshots"))
 }
+
+@Test func saveAndLoadDropLeftoverTemporaryFiles() async throws {   // review I3
+    let place = try Fixture(); defer { place.cleanup() }
+    let url = place.root.appendingPathComponent("Snapshots")
+    let folder = SnapshotFolder(url: url)
+    try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+    try Data([1, 2, 3]).write(to: url.appendingPathComponent(".ABC.tmp"))
+    #expect(folder.load(.startupDisk) == nil)
+    #expect(files(url).isEmpty)
+    try Data([1, 2, 3]).write(to: url.appendingPathComponent(".DEF.tmp"))
+    try folder.save(try await saved(.startupDisk))
+    #expect(files(url) == ["startup-disk.snapshot"])
+}

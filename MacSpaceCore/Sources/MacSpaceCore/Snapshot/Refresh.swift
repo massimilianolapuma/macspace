@@ -30,18 +30,43 @@ extension SavedScan {
     /// Seven days.
     public static let maxRefreshAge: UInt32 = 7 * 86_400
 
-    /// How to refresh this scan now. The reasons are checked in `FullScanReason`'s order, and the
-    /// history is asked (once, about the root) only when none applies. `rootInode` is the root's
-    /// inode now.
+    /// How a refresh starts: its plan, and the history's position for the refresh's scan to
+    /// record (`Scanner.scan(into:baseline:)`), taken before the history is asked what changed, so
+    /// a change made meanwhile is in one or the other (or both), never in neither.
+    public struct RefreshStart: Sendable, Equatable {
+        public var plan: RefreshPlan
+        /// Nil when the plan was decided before the history was asked, or no volume keeps one.
+        public var baseline: ChangeBaseline?
+    }
+
+    /// How to refresh this scan now, for a scan confined to `devices`. The reasons are checked in
+    /// `FullScanReason`'s order. Then the history's position is taken; every volume must keep the
+    /// history it kept then (the same FSEvents UUID per device: a reset database, a volume that
+    /// keeps none now, or renumbered devices are `.historyUntrusted`); then the history is asked,
+    /// once, about the root. `rootInode` is the root's inode now.
+    public func refreshStart(now: UInt32, rootInode: UInt64, hasFullDiskAccess: Bool, history: any ChangeHistory,
+                             devices: Set<Int32>) -> RefreshStart {
+        func fullScan(_ reason: FullScanReason, _ baseline: ChangeBaseline? = nil) -> RefreshStart {
+            RefreshStart(plan: .fullScan(reason), baseline: baseline)
+        }
+        if now > startedAt, now - startedAt > Self.maxRefreshAge { return fullScan(.tooOld) }
+        guard rootInode == self.rootInode else { return fullScan(.rootReplaced) }
+        guard hasFullDiskAccess || !hadFullDiskAccess else { return fullScan(.fullDiskAccessLost) }
+        guard let baseline else { return fullScan(.noBaseline) }
+        let current = history.baseline(devices: devices)
+        guard let current, current.deviceUUIDs == baseline.deviceUUIDs else { return fullScan(.historyUntrusted, current) }
+        let answers = history.changes(since: baseline, under: [rootPath], devices: [rootPath: rootDevice])
+        guard case let .folders(changed) = answers[rootPath] ?? .untrusted else {
+            return fullScan(.historyUntrusted, current)
+        }
+        return RefreshStart(plan: .incremental(changed: changed), baseline: current)
+    }
+
+    /// `refreshStart`'s plan, for a scan confined to the devices the saved baseline names.
     public func refreshPlan(now: UInt32, rootInode: UInt64, hasFullDiskAccess: Bool,
                             history: any ChangeHistory) -> RefreshPlan {
-        if now > startedAt, now - startedAt > Self.maxRefreshAge { return .fullScan(.tooOld) }
-        guard rootInode == self.rootInode else { return .fullScan(.rootReplaced) }
-        guard hasFullDiskAccess || !hadFullDiskAccess else { return .fullScan(.fullDiskAccessLost) }
-        guard let baseline else { return .fullScan(.noBaseline) }
-        let answers = history.changes(since: baseline, under: [rootPath], devices: [rootPath: rootDevice])
-        guard case let .folders(changed) = answers[rootPath] ?? .untrusted else { return .fullScan(.historyUntrusted) }
-        return .incremental(changed: changed)
+        refreshStart(now: now, rootInode: rootInode, hasFullDiskAccess: hasFullDiskAccess, history: history,
+                     devices: Set(baseline?.deviceUUIDs.keys ?? [:].keys)).plan
     }
 
     /// The reader of an incremental refresh. A folder's saved listing is used when the folder

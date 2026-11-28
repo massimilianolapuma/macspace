@@ -16,6 +16,7 @@ public struct SnapshotFolder: Sendable {
     /// the snapshot of the same kind: the startup disk's, or the folder's (whichever folder it was).
     public func save(_ saved: SavedScan) throws {
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        removeLeftovers()
         let target = file(for: saved.target)
         let temporary = url.appending(path: ".\(UUID().uuidString).tmp", directoryHint: .notDirectory)
         do {
@@ -33,6 +34,7 @@ public struct SnapshotFolder: Sendable {
     /// deleted), or when the folder snapshot is another folder's (deleted too: only the last folder
     /// is kept).
     public func load(_ target: SavedScan.Target) -> SavedScan? {
+        removeLeftovers()
         let file = file(for: target)
         guard let data = try? Data(contentsOf: file, options: .mappedIfSafe) else { return nil }
         guard let saved = try? SavedScan(decoding: data), saved.target == target else {
@@ -45,6 +47,16 @@ public struct SnapshotFolder: Sendable {
     /// Deletes the folder snapshot (the folder it was taken of is gone).
     public func forgetFolder() {
         try? FileManager.default.removeItem(at: file(for: .folder(path: "")))
+    }
+
+    /// Deletes the temporary files of saves that never finished (the app quit or crashed while
+    /// writing): each can be as big as a whole snapshot. A save running in this process at the
+    /// same time loses its file and fails; the next scan's end saves again.
+    private func removeLeftovers() {
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: url.path)) ?? []
+        for name in names where name.hasPrefix(".") && name.hasSuffix(".tmp") {
+            try? FileManager.default.removeItem(at: url.appending(path: name, directoryHint: .notDirectory))
+        }
     }
 
     private func file(for target: SavedScan.Target) -> URL {
