@@ -808,3 +808,15 @@ private func synced(_ path: String, kind: NodeKind = .directory, flags: NodeFlag
     #expect(SafetyEnvironment.system(home: home, apps: nil).syncedHomeFolders
             == [home + "/Desktop", home + "/Documents"])
 }
+
+@Test func datalessUnderUnknownLibraryChildIsCaution() {   // plan-3 minor: the stronger warning wins
+    #expect(v(lib + "/SomethingUnknown/x", kind: .file, flags: [.dataless])
+            == SafetyVerdict(level: .caution, reason: .libraryInternal, owner: nil))
+}
+
+@Test func notRemovableIsProtected() {   // plan-3 minor: sticky-bit folders
+    let env = SafetyEnvironment(home: "/Users/u", apps: testApps, runningBundleIDs: [], runningAppPaths: [], now: now,
+                                isWritable: { _ in true }, isRemovable: { _ in false })
+    #expect(SafetyRules.evaluate(facts("/Users/u/Projects/theirs.log", kind: .file), in: env)
+            == SafetyVerdict(level: .protected, reason: .notWritable, owner: nil))
+}

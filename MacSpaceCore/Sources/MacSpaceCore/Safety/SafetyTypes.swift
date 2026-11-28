@@ -80,6 +80,10 @@ public struct SafetyEnvironment: Sendable {
     public let now: UInt32
     /// Whether the current user may modify the given directory (add or remove entries).
     public let isWritable: @Sendable (String) -> Bool
+    /// Whether the current user may remove the item at the given path from its folder: false only
+    /// in a sticky folder (`/tmp`, `/Users/Shared`) for an item neither the user nor the folder's
+    /// owner owns.
+    public let isRemovable: @Sendable (String) -> Bool
 
     /// Lowercased path tables derived from `home`.
     let paths: SafetyPaths
@@ -90,7 +94,8 @@ public struct SafetyEnvironment: Sendable {
 
     public init(home: String, apps: AppsIndex?, runningBundleIDs: Set<String>, runningAppPaths: Set<String>,
                 syncedHomeFolders: Set<String> = [], now: UInt32,
-                isWritable: @escaping @Sendable (String) -> Bool) {
+                isWritable: @escaping @Sendable (String) -> Bool,
+                isRemovable: @escaping @Sendable (String) -> Bool = { _ in true }) {
         self.home = home
         self.apps = apps
         self.runningBundleIDs = runningBundleIDs
@@ -98,6 +103,7 @@ public struct SafetyEnvironment: Sendable {
         self.syncedHomeFolders = syncedHomeFolders
         self.now = now
         self.isWritable = isWritable
+        self.isRemovable = isRemovable
         paths = SafetyPaths(home: home)
         running = RunningApps(bundleIDs: runningBundleIDs, paths: runningAppPaths)
         syncedFolderKeys = syncedHomeFolders.map { SafetyPaths.key(SafetyTables.normalized($0)) }.sorted()
@@ -112,8 +118,9 @@ public struct SafetyEnvironment: Sendable {
             && syncedHomeFolders == other.syncedHomeFolders
     }
 
-    /// The live environment: the current time, `access(dir, W_OK)` for write checks and the home
-    /// folders iCloud Drive syncs right now (`iCloudSyncedHomeFolders`).
+    /// The live environment: the current time, `access(dir, W_OK)` for write checks, the sticky-bit
+    /// rule for removal (`isRemovableNow`) and the home folders iCloud Drive syncs right now
+    /// (`iCloudSyncedHomeFolders`).
     public static func system(home: String, apps: AppsIndex?, runningBundleIDs: Set<String> = [],
                               runningAppPaths: Set<String> = []) -> SafetyEnvironment {
         let seconds = Date().timeIntervalSince1970
@@ -121,7 +128,20 @@ public struct SafetyEnvironment: Sendable {
         return SafetyEnvironment(home: home, apps: apps, runningBundleIDs: runningBundleIDs,
                                  runningAppPaths: runningAppPaths,
                                  syncedHomeFolders: iCloudSyncedHomeFolders(home: home), now: now,
-                                 isWritable: { access($0, W_OK) == 0 })
+                                 isWritable: { access($0, W_OK) == 0 }, isRemovable: isRemovableNow)
+    }
+
+    /// Whether the current user may remove `path` from its folder as far as the sticky bit goes: in
+    /// a folder with `S_ISVTX` (`/tmp`, `/Users/Shared`) owned by someone else, only the item's own
+    /// owner may (root may always). A `stat` that fails says no (fail closed).
+    @Sendable public static func isRemovableNow(_ path: String) -> Bool {
+        var folder = Darwin.stat()
+        let parent = (path as NSString).deletingLastPathComponent
+        guard fstatat(AT_FDCWD, parent.isEmpty ? "/" : parent, &folder, 0) == 0 else { return false }
+        let uid = getuid()
+        guard folder.st_mode & S_ISVTX != 0, uid != 0, folder.st_uid != uid else { return true }
+        var item = Darwin.stat()
+        return lstat(path, &item) == 0 && item.st_uid == uid
     }
 
     /// Which of `SafetyTables.iCloudSyncableHomeFolders` iCloud Drive syncs ("Desktop and Documents

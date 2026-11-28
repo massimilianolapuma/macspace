@@ -508,3 +508,17 @@ private func scanLeftoverHome(_ fx: Fixture) async throws -> ScanStore {
     #expect(summary.unreadable == 0)
     #expect(!summary.wasCancelled)
 }
+
+@Test func appNamedLibraryFolderIsNotAppCategory() async throws {   // seen live: com.usebruno.app
+    // A bundle-ID folder ending in ".app" in a `~/Library` location: its category comes from the
+    // location (App data), not its name; its contents stay protected as inside a package.
+    let fx = try Fixture(); defer { fx.cleanup() }
+    try fx.file("Library/Caches/com.example.app/data.bin", bytes: 50_000)
+    let store = ScanStore(rootName: "home", rootPath: fx.root.path, home: fx.root.path)
+    _ = await Scanner(rootPath: fx.root.path, boundary: try .forFolder(fx.root.path)).scan(into: store)
+    let caches = fx.root.path + "/Library/Caches"
+    let folder = try #require(await store.node(atPath: caches + "/com.example.app"))
+    let data = try #require(await store.node(atPath: caches + "/com.example.app/data.bin"))
+    #expect(await store.categoryTotals(of: folder).keys.sorted { $0.rawValue < $1.rawValue } == [.appData])
+    #expect(await store.row(data)?.flags.contains(.insidePackage) == true)
+}

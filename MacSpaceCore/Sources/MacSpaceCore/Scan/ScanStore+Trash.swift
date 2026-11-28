@@ -89,9 +89,12 @@ extension ScanStore {
     /// not what the user agreed to). With a map, an item absent from it was never confirmed and is
     /// skipped `.verdictChanged` (fail closed); a nil map compares nothing. It has no default: a
     /// caller that confirms no verdicts says so with `nil`.
-    public func trash(_ ids: Set<NodeID>, actions: any DiskActions, packages: any PackageProbe,
-                      openFiles: @Sendable () -> OpenFileSet,
-                      expectedVerdicts: [NodeID: SafetyVerdict]?) -> TrashOutcome {
+    ///
+    /// Internal: the app always passes the live environment (`trash(_:environment:…)`, ruling R41);
+    /// tests set one beforehand.
+    func trash(_ ids: Set<NodeID>, actions: any DiskActions, packages: any PackageProbe,
+               openFiles: @Sendable () -> OpenFileSet,
+               expectedVerdicts: [NodeID: SafetyVerdict]?) -> TrashOutcome {
         trash(ids, actions: actions, packages: packages, openFiles: openFiles, expectedVerdicts: expectedVerdicts,
               mountPoints: MountTable.current)
     }
