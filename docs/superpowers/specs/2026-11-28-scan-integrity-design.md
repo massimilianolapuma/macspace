@@ -63,7 +63,7 @@ Changes made while the scan is running are therefore also caught.
    The outcome is the same `TrashSkip` step 6 gives (`.containsProtected(reason)` or `.containsUnverified`). New content that passes is moved along with the folder, as the Finder would. The user confirmed the folder, and the open-files check (step 5) is already live.
 6. **Fallback (approach A).** Judge the item's entire on-disk subtree as new content.
 7. **Budget.** Judging stops after 10 s per `trash` call. Items not yet judged are skipped `.containsUnverified`, never moved unchecked.
-8. **Where it runs.** Steps 1–7 happen after step 6 and before the on-disk step 7, so the order stays: cheap tree checks first, disk last.
+8. **Where it runs.** Right after the on-disk identity check (step 7), as the last check before the move. The item must first be shown to be the same object as scanned (1), so a replaced item reads `.changed`, not as new content. The order stays: cheap tree checks first, disk last. The history is queried once per `trash` call, for every item, before the per-item checks.
 
 **What the sheet shows.** The check and the moves stay inside the one `trash` actor call, so no other change can land between them (ruling R41). The core API does not change. The sheet already shows "Spostamento nel Cestino…" while the call runs. If the call lasts more than 0.5 s, the sheet's own timer switches the text to "Verifica dei contenuti e spostamento…", so a fallback walk does not look frozen. Other store queries wait behind the actor meanwhile. That is acceptable: the sheet is modal, and the common case is instant. *My call.*
 
@@ -85,7 +85,7 @@ These touch safety or correctness. The builder first checks that each still appl
 
 1. Make the public `trash` overload without an environment internal (test-only). The app must always pass the live environment (ruling R41).
 2. Rule order: a dataless item under an unknown `~/Library` child must get at least `.caution`. Today rule 11 (dataless) comes after 12b, which can give it less. Swap so the stronger warning wins, and add a test.
-3. A foreign or stale node ID must never trap. Today `row`, `rows`, `path`, `breadcrumb` and `verdict` assume the ID is in the tree; the store guard covers only the snapshot and Spotlight. Guard them all, with tests.
+3. ~~A foreign or stale node ID must never trap.~~ Already fixed on `main`: `row`, `rows`, `breadcrumb`, `path` and `verdict` all check `contains`. Dropped.
 4. A `~/Library` folder whose name looks like a bundle ID ending in ".app" (seen live: `com.usebruno.app`) is taken for a package and shows as category App. Fix only the category: inside `~/Library/<location>/`, a folder with that name and no `Contents/Info.plist` gets the category its contents give, not App. Keep its contents protected as `.insidePackage`. The live LaunchServices check at move time (step 4) also treats it as a package, so relaxing the protection would only make its items look trashable and then fail. The folder itself can still be moved as a whole. *My call.* Add a test.
 5. Sticky-bit folders (`/tmp`, `/Users/Shared`): an item the user does not own there looks trashable, then fails. Judge it `.notWritable` up front.
 6. The `TrashGuard` U+FFFD descendant residual (S2): document it in the `trash` doc comment, as for S3 and S4.
