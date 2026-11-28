@@ -40,6 +40,16 @@ public struct SavedScan: Sendable {
         var counted: NodeID?
     }
 
+    /// How many nodes, directories and bytes of names a tree holds.
+    public struct TreeSize: Sendable, Equatable {
+        public var nodes: Int
+        public var directories: Int
+        public var nameBytes: Int
+    }
+
+    /// The saved tree's size.
+    public var treeSize: TreeSize { tree.size }
+
     /// The scan root's path, as the tree keeps it.
     public var rootPath: String { tree.rootPath }
     /// The scan root's inode when the scan started (0 when unknown).
@@ -73,18 +83,30 @@ extension ScanStore {
         self.init(tree: FileTree(storage: saved.tree, now: now), home: home, history: history, saved: saved)
     }
 
-    /// Makes room for a tree as big as `saved`'s, plus a sixteenth for what was added since, before
-    /// a refresh or a full scan of the same target fills this store: the arrays then never double
-    /// (each doubling copies them and leaves the old buffer to the allocator's cache).
-    public func reserveCapacity(like saved: SavedScan) {
-        let nodes = saved.tree.count, directories = saved.tree.dirDevices.count, names = saved.tree.nameBytes.count
-        tree.reserveCapacity(nodes: nodes + nodes / 16, directories: directories + directories / 16,
-                             nameBytes: names + names / 16)
+    /// How big this store's tree is, for a scan of the same target to reserve (`reserveCapacity`).
+    public func treeSize() -> SavedScan.TreeSize { tree.saved().size }
+
+    /// Makes room for a tree of `size`, plus a sixteenth for what was added since, before a refresh
+    /// or a full scan of the same target fills this store: the arrays then never double (each
+    /// doubling copies them and leaves the old buffer to the allocator's cache).
+    public func reserveCapacity(for size: SavedScan.TreeSize) {
+        tree.reserveCapacity(nodes: size.nodes + size.nodes / 16,
+                             directories: size.directories + size.directories / 16,
+                             nameBytes: size.nameBytes + size.nameBytes / 16)
     }
+
+    /// `reserveCapacity(for:)` with `saved`'s size.
+    public func reserveCapacity(like saved: SavedScan) { reserveCapacity(for: saved.treeSize) }
 
     /// The tree's capacity (`FileTree.capacity`), for tests.
     func treeCapacity() -> (nodes: Int, directories: Int, nameBytes: Int) { tree.capacity }
 
     /// The directory `id`'s device as listed (`FileTree.device(ofDirectory:)`).
     public func device(ofDirectory id: NodeID) -> Int32 { tree.device(ofDirectory: id) }
+}
+
+extension FileTree.Storage {
+    var size: SavedScan.TreeSize {
+        SavedScan.TreeSize(nodes: count, directories: dirDevices.count, nameBytes: nameBytes.count)
+    }
 }

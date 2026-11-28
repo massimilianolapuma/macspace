@@ -604,12 +604,12 @@ final class ScanModel {
         }
     }
 
-    /// Scans `target` in full; a snapshot of it on screen stays there, browsable, until the scan
-    /// ends ("Analisi completa").
+    /// Scans `target` in full ("Analisi completa"); a tree of it on screen (a snapshot, or an
+    /// earlier scan) stays there, browsable, until the scan ends, and stays if it is cancelled.
     func fullScan(_ target: ScanTarget) {
         startTask { [self] in
-            if let shown = shownSaved, shown.target == target {
-                await update(target, from: shown.saved, full: true)
+            if shownTarget == target, store != nil {
+                await update(target, from: nil, full: true)
             } else {
                 await run(target)
             }
@@ -645,19 +645,21 @@ final class ScanModel {
         return true
     }
 
-    /// Scans `target` out of sight behind the snapshot `saved` on screen: only what changed
-    /// (`SavedScan.refreshPlan`), or everything when `full` or when the history cannot vouch for
-    /// the snapshot. When it ends, its store replaces the snapshot (`swap`); when it is cancelled,
-    /// the snapshot stays.
-    private func update(_ target: ScanTarget, from saved: SavedScan, full: Bool) async {
+    /// Scans `target` out of sight behind the tree of it on screen: only what changed since
+    /// `saved` (`SavedScan.refreshPlan`), or everything when `full`, when there is no `saved`, or
+    /// when the history cannot vouch for it. When it ends, its store replaces the shown one
+    /// (`swap`); when it is cancelled, the shown tree stays.
+    private func update(_ target: ScanTarget, from saved: SavedScan?, full: Bool) async {
         let (rootPath, rootName) = Self.root(of: target)
         let boundary = Self.boundary(of: target, rootPath: rootPath)
         let startedAt = Date.now
         let fullDiskAccess = FullDiskAccess.isGranted
-        update = full ? .fullScan : .refresh
+        update = full || saved == nil ? .fullScan : .refresh
         updateProgress = nil
+        // The tree on screen says how big the new one will be: no array doubles while it fills.
+        let size = await store?.treeSize()
         var reader: ListingReader?
-        if !full {
+        if !full, let saved {
             let rootInode = (try? DirectoryReader.stat(path: rootPath))?.inode ?? 0
             let now = UInt32(clamping: Int64(startedAt.timeIntervalSince1970))
             // A whole day's history can take seconds to replay (measured: 8–9 s for 70 k events).
@@ -676,8 +678,7 @@ final class ScanModel {
             }
         }
         let store = ScanStore(rootName: rootName, rootPath: rootPath)
-        // The snapshot says how big the tree will be: no array doubles while it fills.
-        await store.reserveCapacity(like: saved)
+        if let size { await store.reserveCapacity(for: size) }
         let scanner = reader.map { Scanner(rootPath: rootPath, boundary: boundary, listing: $0) }
             ?? Scanner(rootPath: rootPath, boundary: boundary)
         let latest = LatestProgress()
