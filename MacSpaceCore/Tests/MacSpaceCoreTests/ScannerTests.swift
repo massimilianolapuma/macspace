@@ -486,3 +486,25 @@ private func scanLeftoverHome(_ fx: Fixture) async throws -> ScanStore {
                                      biggestLimit: 5)
     #expect(tiles.tiles.isEmpty)
 }
+
+@Test func partlyReadCountsIncompleteListings() async throws {
+    func entry(_ name: String, _ kind: NodeKind) -> DirectoryEntry {
+        DirectoryEntry(name: name, kind: kind, allocatedSize: kind == .file ? 100 : 0, device: 1, inode: 0,
+                       linkCount: 1, isMountPoint: false, isDataless: false)
+    }
+    let listings: [String: DirectoryListing] = [
+        "/x": DirectoryListing(entries: [entry("a", .directory), entry("b", .directory)], isComplete: true),
+        "/x/a": DirectoryListing(entries: [entry("f", .file)], isComplete: false),
+        "/x/b": DirectoryListing(entries: [entry("g", .file)], isComplete: true),
+    ]
+    let scanner = Scanner(rootPath: "/x", boundary: ScanBoundary(allowedDevices: [1], excludedPaths: [])) {
+        path throws(DirectoryReadError) in
+        guard let listing = listings[path] else { throw .notFound }
+        return listing
+    }
+    let store = ScanStore(rootName: "x", rootPath: "/x", history: FakeChangeHistory(start: nil))
+    let summary = await scanner.scan(into: store)
+    #expect(summary.partlyRead == 1)
+    #expect(summary.unreadable == 0)
+    #expect(!summary.wasCancelled)
+}

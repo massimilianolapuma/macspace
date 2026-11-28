@@ -22,6 +22,9 @@ public struct ScanSummary: Sendable {
     public var directories: Int
     /// Directories that could not be read.
     public var unreadable: Int
+    /// Directories read only in part: the file system left an entry out (`DirectoryListing.isComplete`
+    /// false), not a read cut short by cancellation.
+    public var partlyRead: Int
     public var totalSize: UInt64
     public var duration: Duration
     public var wasCancelled: Bool
@@ -76,7 +79,7 @@ public struct Scanner: Sendable {
         var lastReport = start
         var pending: [(id: NodeID, path: String)] = [(id: FileTree.root, path: rootPath)]
         var inFlight = 0
-        var files = 0, directories = 0, unreadable = 0
+        var files = 0, directories = 0, unreadable = 0, partlyRead = 0
         var bytes: UInt64 = 0
         var cancelled = false
         /// Directories whose listing is missing (never read, the scan was cancelled) or partial
@@ -110,8 +113,9 @@ public struct Scanner: Sendable {
                     unverified.append(id)
                 case .unreadable:
                     unreadable += 1
-                case let .read(id, children, fileCount, directoryCount, byteCount, partial):
+                case let .read(id, children, fileCount, directoryCount, byteCount, partial, incomplete):
                     if partial { unverified.append(id) }
+                    if incomplete { partlyRead += 1 }
                     pending.append(contentsOf: children)
                     files += fileCount
                     directories += directoryCount
@@ -128,7 +132,7 @@ public struct Scanner: Sendable {
         await store.markScanFinished(allowedDevices: boundary.allowedDevices, unverifiedDirectories: unverified)
         progress?(ScanProgress(filesSeen: files, bytesSeen: bytes, directoriesPending: 0))
 
-        return ScanSummary(files: files, directories: directories, unreadable: unreadable,
+        return ScanSummary(files: files, directories: directories, unreadable: unreadable, partlyRead: partlyRead,
                            totalSize: await store.rootSize(), duration: clock.now - start,
                            wasCancelled: cancelled)
     }
@@ -137,8 +141,9 @@ public struct Scanner: Sendable {
         /// `partial`: the listing is incomplete (`DirectoryListing.isComplete`: an entry the file
         /// system reported an error for, or a malformed record, was left out) or was cut short by
         /// cancellation, so the directory's contents are not all known (`unverifiedDirectories`).
+        /// `incomplete`: the file system left an entry out (not cancellation), counted in `partlyRead`.
         case read(id: NodeID, children: [(id: NodeID, path: String)], files: Int, directories: Int, bytes: UInt64,
-                  partial: Bool)
+                  partial: Bool, incomplete: Bool)
         case unreadable
         case skipped(NodeID)
     }
@@ -162,9 +167,13 @@ public struct Scanner: Sendable {
         }
         // `read` stops early without throwing once the task is cancelled (the listing then says
         // incomplete too); checked again here in case cancellation came right after it.
-        let partial = !listing.isComplete || Task.isCancelled
+        // `read` also stops early (incomplete) once cancelled: only an incomplete listing of a task
+        // still running is the file system's doing.
+        let cancelled = Task.isCancelled
+        let incomplete = !listing.isComplete && !cancelled
+        let partial = !listing.isComplete || cancelled
         let inserted = await store.insert(entries, under: id, parentPath: path, boundary: boundary)
         return .read(id: id, children: inserted.descend, files: files, directories: directories,
-                     bytes: inserted.bytes, partial: partial)
+                     bytes: inserted.bytes, partial: partial, incomplete: incomplete)
     }
 }
