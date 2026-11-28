@@ -107,8 +107,8 @@ public actor ScanStore {
 
     /// What `insert` added.
     public struct Inserted: Sendable {
-        /// Child directories to descend into.
-        public var descend: [(id: NodeID, path: String)]
+        /// Child directories to descend into, with the device and inode their entry gave.
+        public var descend: [(id: NodeID, path: String, device: Int32, inode: UInt64)]
         /// Bytes added to the tree (hard-link duplicates count 0), so progress can match `rootSize`.
         public var bytes: UInt64
     }
@@ -136,7 +136,7 @@ public actor ScanStore {
         let prefix = parentPath.hasSuffix("/") ? parentPath : parentPath + "/"
         let parentContext = tree.context(parent)
         let parentFlags = tree.flags(parent)
-        var descend: [(id: NodeID, path: String)] = []
+        var descend: [(id: NodeID, path: String, device: Int32, inode: UInt64)] = []
         var bytes: UInt64 = 0
         for entry in entries {
             let path = entry.kind == .directory ? prefix + entry.name : nil
@@ -173,7 +173,7 @@ public actor ScanStore {
                 continue
             }
             if boundary.shouldDescend(path: path, device: entry.device, isMountPoint: entry.isMountPoint) {
-                descend.append((id: id, path: path))
+                descend.append((id: id, path: path, device: entry.device, inode: entry.inode))
             } else if !entry.isMountPoint {
                 // Excluded or on another device: its contents are never seen (mount points are flagged).
                 unverifiedDirectories.insert(id)
