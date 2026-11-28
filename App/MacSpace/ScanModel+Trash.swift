@@ -102,6 +102,20 @@ extension ScanModel {
         return TrashVerdicts(allowed: allowed, verdicts: verdicts, removed: removed)
     }
 
+    /// What `ScanStore.trash` would skip among `ids` right now, with why, without moving anything
+    /// (`ScanStore.trashPreview`, the same checks): what the sheet greys out before the user
+    /// confirms. Judged against the store's environment, the one the rows show; verdicts are not
+    /// compared (the sheet shows a changed verdict in place). Nil without a store, or when the store
+    /// changed meanwhile.
+    func trashPreview(_ ids: [NodeID]) async -> [NodeID: TrashSkip]? {
+        guard let store else { return nil }
+        let blocked = await store.trashPreview(Set(ids), packages: SystemPackageProbe(),
+                                               // MacSpace's own descriptors (the estimates) never hold an item back.
+                                               openFiles: { OpenFileSet.current(excludingOwnProcess: true) },
+                                               expectedVerdicts: nil)
+        return store === self.store ? blocked : nil
+    }
+
     /// Moves `ids` to the Trash through `ScanStore.trash`, which re-checks each one right before
     /// moving it (still there and unchanged, not open, not protected, not inside a package, and with
     /// the verdict in `expectedVerdicts`, level, reason and owner alike: what the user saw and
