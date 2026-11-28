@@ -1,6 +1,9 @@
 {
   "sourceLanguage" : "it",
   "strings" : {
+    "%@ cartelle lette in parte" : {
+
+    },
     "%@ cartelle non leggibili" : {
 
     },
@@ -8,6 +11,9 @@
 
     },
     "%@ file" : {
+
+    },
+    "%@ lette in parte" : {
 
     },
     "%@ occupati: parte dello spazio è condivisa con copie APFS, la stima è per difetto" : {
@@ -82,7 +88,13 @@
         }
       }
     },
+    "1 cartella letta in parte" : {
+
+    },
     "1 cartella non leggibile" : {
+
+    },
+    "1 letta in parte" : {
 
     },
     "1–2 anni fa" : {
@@ -651,6 +663,9 @@
 
     },
     "Vai" : {
+
+    },
+    "Verifica dei contenuti e spostamento…" : {
 
     },
     "Versioni non salvate dei documenti: controlla prima" : {

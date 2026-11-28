@@ -77,8 +77,11 @@ public enum SafetyRules {
         if env.running.isRunning(path: path, key: key) {
             return SafetyVerdict(level: .protected, reason: .runningApp, owner: AppsIndex.baseName(ofPath: path))
         }
-        // 9. The user may not remove it from its folder.
-        if !env.isWritable(parent(of: path)) { return SafetyVerdict(level: .protected, reason: .notWritable) }
+        // 9. The user may not remove it from its folder (not writable, or a sticky folder's item of
+        //    another user's).
+        if !env.isWritable(parent(of: path)) || !env.isRemovable(path) {
+            return SafetyVerdict(level: .protected, reason: .notWritable)
+        }
         // 10. Synced by iCloud Drive (its folder, or the Desktop and Documents it syncs) or a File
         //     Provider: deleting it deletes it everywhere, downloaded or not (ruling R42). A cloud-only
         //     item in Desktop or Documents counts as synced even when the sync was not detected.
@@ -92,8 +95,13 @@ public enum SafetyRules {
                 .map(String.init) ?? ""
             return SafetyVerdict(level: .caution, reason: .cloudSynced, owner: provider.isEmpty ? folder : provider)
         }
-        // 11. Cloud-only placeholder anywhere else: frees nothing locally.
-        if f.flags.contains(.dataless) { return SafetyVerdict(level: .normal, reason: .cloudOnly) }
+        // 11. Cloud-only placeholder anywhere else: frees nothing locally. Under a `~/Library` child no
+        //     table describes, rule 12b's caution is the stronger warning and wins.
+        let libraryInternal = libraryChild.flatMap { child -> SafetyVerdict? in
+            guard !t.libraryKnownChildren.contains(child) else { return nil }
+            return SafetyVerdict(level: .caution, reason: child == t.autosaveFolder ? .autosave : .libraryInternal)
+        }
+        if f.flags.contains(.dataless) { return libraryInternal ?? SafetyVerdict(level: .normal, reason: .cloudOnly) }
         // 12. Developer caches that their tools rebuild.
         if let cache = t.developerCaches.first(where: { SafetyPaths.isUnder(key, $0.path) }) {
             return SafetyVerdict(level: .safe, reason: .developerCache, owner: cache.name)
@@ -101,10 +109,7 @@ public enum SafetyRules {
         // 12b. Any other `~/Library` child (and below) outside the known locations: macOS or app
         //      internals no table describes, so only caution (ruling R43). Unsaved versions of
         //      documents get their own caution (ruling R44).
-        if let child = libraryChild, !t.libraryKnownChildren.contains(child) {
-            if child == t.autosaveFolder { return SafetyVerdict(level: .caution, reason: .autosave) }
-            return SafetyVerdict(level: .caution, reason: .libraryInternal)
-        }
+        if let libraryInternal { return libraryInternal }
         if let anchor, let ownership {
             // 13. `L/<location>/<name>` (and below) while the apps index is not ready.
             guard env.apps != nil else { return SafetyVerdict(level: .normal, reason: .analysisPending) }

@@ -486,3 +486,39 @@ private func scanLeftoverHome(_ fx: Fixture) async throws -> ScanStore {
                                      biggestLimit: 5)
     #expect(tiles.tiles.isEmpty)
 }
+
+@Test func partlyReadCountsIncompleteListings() async throws {
+    func entry(_ name: String, _ kind: NodeKind) -> DirectoryEntry {
+        DirectoryEntry(name: name, kind: kind, allocatedSize: kind == .file ? 100 : 0, device: 1, inode: 0,
+                       linkCount: 1, isMountPoint: false, isDataless: false)
+    }
+    let listings: [String: DirectoryListing] = [
+        "/x": DirectoryListing(entries: [entry("a", .directory), entry("b", .directory)], isComplete: true),
+        "/x/a": DirectoryListing(entries: [entry("f", .file)], isComplete: false),
+        "/x/b": DirectoryListing(entries: [entry("g", .file)], isComplete: true),
+    ]
+    let scanner = Scanner(rootPath: "/x", boundary: ScanBoundary(allowedDevices: [1], excludedPaths: [])) {
+        path throws(DirectoryReadError) in
+        guard let listing = listings[path] else { throw .notFound }
+        return listing
+    }
+    let store = ScanStore(rootName: "x", rootPath: "/x", history: FakeChangeHistory(start: nil))
+    let summary = await scanner.scan(into: store)
+    #expect(summary.partlyRead == 1)
+    #expect(summary.unreadable == 0)
+    #expect(!summary.wasCancelled)
+}
+
+@Test func appNamedLibraryFolderIsNotAppCategory() async throws {   // seen live: com.usebruno.app
+    // A bundle-ID folder ending in ".app" in a `~/Library` location: its category comes from the
+    // location (App data), not its name; its contents stay protected as inside a package.
+    let fx = try Fixture(); defer { fx.cleanup() }
+    try fx.file("Library/Caches/com.example.app/data.bin", bytes: 50_000)
+    let store = ScanStore(rootName: "home", rootPath: fx.root.path, home: fx.root.path)
+    _ = await Scanner(rootPath: fx.root.path, boundary: try .forFolder(fx.root.path)).scan(into: store)
+    let caches = fx.root.path + "/Library/Caches"
+    let folder = try #require(await store.node(atPath: caches + "/com.example.app"))
+    let data = try #require(await store.node(atPath: caches + "/com.example.app/data.bin"))
+    #expect(await store.categoryTotals(of: folder).keys.sorted { $0.rawValue < $1.rawValue } == [.appData])
+    #expect(await store.row(data)?.flags.contains(.insidePackage) == true)
+}

@@ -264,3 +264,39 @@ import Testing
     #expect(t.children(of: 0).isEmpty && t.size(0) == 0 && !t.row(0).hasChildren)
     #expect(t.categoryTotals(0).isEmpty && t.ageTotals(0).isEmpty)
 }
+
+@Test func inodeRoundTrips() {
+    let t = FileTree(rootName: "r", rootPath: "/r")
+    let a = t.addChild(of: FileTree.root, name: "a", kind: .directory, allocatedSize: 0, inode: 42)
+    let b = t.addChild(of: a, name: "b", kind: .file, allocatedSize: 10)
+    #expect(t.inode(a) == 42)
+    #expect(t.inode(b) == 0)
+    #expect(t.inode(FileTree.root) == 0)
+    t.setInode(7, for: FileTree.root)
+    #expect(t.inode(FileTree.root) == 7)
+}
+
+@Test func creditMatchesAddChild() {
+    let now: UInt32 = 2_000_000_000
+    let used = now - 400 * 86_400
+    let credited = FileTree(rootName: "r", rootPath: "/r", now: now)
+    let added = FileTree(rootName: "r", rootPath: "/r", now: now)
+    for t in [credited, added] {
+        let d = t.addChild(of: FileTree.root, name: "d", kind: .directory, allocatedSize: 0)
+        t.addChild(of: d, name: "other.txt", kind: .file, allocatedSize: 100, category: .document, lastUsed: now)
+    }
+    let creditedDir = credited.children(of: FileTree.root)[0]
+    let link = credited.addChild(of: creditedDir, name: "f.mov", kind: .file, allocatedSize: 0,
+                                 flags: .hardLinkDuplicate, category: .video, lastUsed: used)
+    credited.credit(4096, to: link)
+    let addedDir = added.children(of: FileTree.root)[0]
+    added.addChild(of: addedDir, name: "f.mov", kind: .file, allocatedSize: 4096, category: .video, lastUsed: used)
+
+    #expect(credited.size(link) == 4096)
+    #expect(!credited.flags(link).contains(.hardLinkDuplicate))
+    #expect(credited.size(FileTree.root) == added.size(FileTree.root))
+    #expect(credited.categoryTotals(FileTree.root) == added.categoryTotals(FileTree.root))
+    #expect(credited.ageTotals(FileTree.root) == added.ageTotals(FileTree.root))
+    #expect(credited.categoryTotals(creditedDir) == added.categoryTotals(addedDir))
+    #expect(credited.ageTotals(creditedDir) == added.ageTotals(addedDir))
+}

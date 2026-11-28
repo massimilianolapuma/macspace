@@ -40,7 +40,8 @@ public struct TrashOutcome: Sendable {
     public struct Moved: Sendable, Hashable {
         public var node: NodeID
         public var name: String
-        /// Its size in the tree right before it was removed.
+        /// What the tree's total dropped by when it was removed: its size, less the bytes of
+        /// hard-linked files that passed to a link still in the tree (0 for a lone counted link).
         public var size: UInt64
         /// Where it is now inside the Trash; nil when the system reported no resulting path.
         public var trashedPath: String?

@@ -51,21 +51,34 @@ extension ScanStore {
     ///    (it or a folder inside it is a mount point, unreadable, dataless, not fully listed or not
     ///    descended by the scan, or a volume is mounted at or below it right now) → `.containsUnverified`;
     /// 7. on disk, checked last, right before the move: gone → `.missing`; cannot be examined →
-    ///    `.failed`; another kind of object than scanned, now a mount point, on a device the scan
-    ///    was not confined to, or a folder above it (up to the scan root) no longer a folder → `.changed`;
-    /// 8. `moveToTrash` throws → `.failed(error.localizedDescription)`.
+    ///    `.failed`; another kind of object than scanned, another object (inode) than scanned, now a
+    ///    mount point, on a device the scan was not confined to, or a folder above it (up to the scan
+    ///    root) no longer a folder or another folder (inode) than scanned → `.changed`. Inodes are
+    ///    compared only where the scan recorded one (not for nodes filled by hand);
+    /// 8. a folder whose contents changed since the scan started holds something new that the
+    ///    scan's rules would protect as a whole (as in step 6) → `.containsProtected(reason)`, or new
+    ///    contents that cannot all be read (unlistable, listed in part, dataless, a mount point, on
+    ///    another device) → `.containsUnverified`. The change history (`history`, one query per
+    ///    call, from the baseline `markScanStarted` recorded) names the folders to list again;
+    ///    without a baseline, or when it cannot vouch for a folder (dropped events, another volume
+    ///    database), the folder's whole content on disk is read. New plain content moves along with
+    ///    the folder, as in the Finder. All of it within `contentBudget` per call (10 s): items not
+    ///    judged by then → `.containsUnverified`;
+    /// 9. `moveToTrash` throws → `.failed(error.localizedDescription)`.
+    ///
+    /// A hard-linked file whose counted link moved gives its bytes to a link still in the tree
+    /// (`hardLinks`); `Moved.size` is what the root total dropped by, so it is 0 for such a link.
     ///
     /// Residuals (security review, documented):
-    /// - S3: between the step-7 `stat` and the rename inside `moveToTrash` the item can still be
-    ///   swapped; its identity is checked by kind, mount status and device only (not inode), and the
-    ///   mount table is read without waiting (`MNT_NOWAIT`).
-    /// - S4: step 6 walks the scan-time tree. Contents added after the scan are not re-walked on
-    ///   disk: a Photos library or a `.Trashes` folder moved inside a folder since, or a running app
-    ///   placed there (running apps are matched by their live bundle paths, but only those). Open
-    ///   files, running apps and mounts are read live.
+    /// - S3: the item and the folders above it are checked by kind, inode, mount status and device
+    ///   at step 7; only the window between that `stat` and the rename inside `moveToTrash` remains,
+    ///   and the mount table is read without waiting (`MNT_NOWAIT`).
+    /// - S4: contents added after the scan are judged at step 8; only changes made while that check
+    ///   runs, before the move, remain. Open files, running apps and mounts are read live.
     /// - S2: names are decoded lossily; `TrashGuard` refuses a path holding U+FFFD, and a descendant
     ///   directory whose name was not decoded exactly fails the reader, so it is `.unreadable` in the
-    ///   tree and its folder is `.containsUnverified`.
+    ///   tree (or unlistable at step 8) and its folder is `.containsUnverified`. A descendant *file*
+    ///   with such a name is not judged by name, only moved along with its folder.
     /// - Environment: the store judges against the environment it was last given; the app hands it
     ///   the apps running right before the move, in the same actor call (`trash(_:environment:…)`,
     ///   ruling R41), so only the window between that read and the move remains.
@@ -76,9 +89,12 @@ extension ScanStore {
     /// not what the user agreed to). With a map, an item absent from it was never confirmed and is
     /// skipped `.verdictChanged` (fail closed); a nil map compares nothing. It has no default: a
     /// caller that confirms no verdicts says so with `nil`.
-    public func trash(_ ids: Set<NodeID>, actions: any DiskActions, packages: any PackageProbe,
-                      openFiles: @Sendable () -> OpenFileSet,
-                      expectedVerdicts: [NodeID: SafetyVerdict]?) -> TrashOutcome {
+    ///
+    /// Internal: the app always passes the live environment (`trash(_:environment:…)`, ruling R41);
+    /// tests set one beforehand.
+    func trash(_ ids: Set<NodeID>, actions: any DiskActions, packages: any PackageProbe,
+               openFiles: @Sendable () -> OpenFileSet,
+               expectedVerdicts: [NodeID: SafetyVerdict]?) -> TrashOutcome {
         trash(ids, actions: actions, packages: packages, openFiles: openFiles, expectedVerdicts: expectedVerdicts,
               mountPoints: MountTable.current)
     }
@@ -95,10 +111,10 @@ extension ScanStore {
     }
 
     /// `trash` with the mount table injectable for tests: `mountPoints` returns every mount-on
-    /// path, or nil when they cannot be read.
+    /// path, or nil when they cannot be read. `contentBudget` bounds step 8 for the whole call.
     func trash(_ ids: Set<NodeID>, actions: any DiskActions, packages: any PackageProbe,
                openFiles: @Sendable () -> OpenFileSet, expectedVerdicts: [NodeID: SafetyVerdict]?,
-               mountPoints: () -> [String]?) -> TrashOutcome {
+               mountPoints: () -> [String]?, contentBudget: Duration = .seconds(10)) -> TrashOutcome {
         defer { verdictCache.removeAll() }
         let items = topMost(ids, keepingRemoved: true)
         var outcome = TrashOutcome()
@@ -113,26 +129,64 @@ extension ScanStore {
         guard let rawMounts = mountPoints() else { return skipAll(.containsUnverified) }
         let mounts = MountTable.canonical(rawMounts)
         let devices = allowedDevices()
+        let deadline = ContinuousClock.now + contentBudget
+        let changes = contentChanges(for: items)
         for id in items {
             let name = tree.name(id)
             if let reason = trashBlocker(id, open: open, packages: packages, mounts: mounts, devices: devices,
                                          comparesVerdict: expectedVerdicts != nil,
-                                         expectedVerdict: expectedVerdicts?[id]) {
+                                         expectedVerdict: expectedVerdicts?[id])
+                // 8. Contents added since the scan, last (after step 7 proved it is the scanned object).
+                ?? (tree.kind(id) == .directory
+                    ? contentBlocker(id, path: tree.path(of: id), changes: changes[id], devices: devices,
+                                     deadline: deadline)
+                    : nil) {
                 outcome.skipped.append(TrashOutcome.Skipped(node: id, name: name, reason: reason))
                 continue
             }
-            let size = tree.size(id)
             do {
                 let trashed = try actions.moveToTrash(tree.path(of: id))
+                let before = tree.size(FileTree.root)
+                let counted = countedLinks(atOrBelow: id)
                 tree.remove(id)
+                reattribute(counted)
                 dropVerdicts()
-                outcome.moved.append(TrashOutcome.Moved(node: id, name: name, size: size, trashedPath: trashed))
+                let freed = before &- tree.size(FileTree.root)
+                outcome.moved.append(TrashOutcome.Moved(node: id, name: name, size: freed, trashedPath: trashed))
             } catch {
                 outcome.skipped.append(TrashOutcome.Skipped(node: id, name: name,
                                                             reason: .failed(error.localizedDescription)))
             }
         }
         return outcome
+    }
+
+    /// The links carrying a hard-linked file's bytes (`countedLink`) at or below `id`, with their sizes.
+    private func countedLinks(atOrBelow id: NodeID) -> [(id: NodeID, size: UInt64)] {
+        guard !countedLink.isEmpty else { return [] }
+        var found: [(id: NodeID, size: UInt64)] = []
+        var stack = [id]
+        while let n = stack.popLast() {
+            if countedLink[n] != nil { found.append((n, tree.size(n))) }
+            if tree.kind(n) == .directory { tree.forEachChild(of: n) { stack.append($0) } }
+        }
+        return found
+    }
+
+    /// After counted links left the tree: each file's bytes go to its lowest-ID link still in the
+    /// tree, which becomes the counted one. A file with no link left is freed (nothing to do).
+    private func reattribute(_ counted: [(id: NodeID, size: UInt64)]) {
+        for (gone, size) in counted {
+            guard let key = countedLink.removeValue(forKey: gone) else { continue }
+            let remaining = hardLinks[key, default: []].filter { !tree.flags($0).contains(.removed) }
+            if let heir = remaining.first {
+                tree.credit(size, to: heir)
+                countedLink[heir] = key
+                hardLinks[key] = remaining
+            } else {
+                hardLinks[key] = nil
+            }
+        }
     }
 
     /// The devices items must still be on: those the scan was confined to, or, when none were
@@ -178,9 +232,11 @@ extension ScanStore {
             return .failed(Self.message(for: error))
         }
         if let change = Self.onDiskChange(entry, kind: kind, devices: devices) { return change }
+        if !Self.sameObject(entry, inode: tree.inode(id)) { return .changed }
         var ancestor = tree.parent(id)
         while let a = ancestor {
-            guard (try? DirectoryReader.stat(path: tree.path(of: a)))?.kind == .directory else { return .changed }
+            guard let folder = try? DirectoryReader.stat(path: tree.path(of: a)), folder.kind == .directory,
+                  Self.sameObject(folder, inode: tree.inode(a)) else { return .changed }
             ancestor = tree.parent(a)
         }
         return nil
@@ -192,6 +248,10 @@ extension ScanStore {
         if entry.kind != kind || entry.isMountPoint || !devices.contains(entry.device) { return .changed }
         return nil
     }
+
+    /// Whether a fresh `stat` names the object the scan read: the same inode, when one was recorded
+    /// (0 = unknown, not compared).
+    static func sameObject(_ entry: DirectoryEntry, inode: UInt64) -> Bool { inode == 0 || entry.inode == inode }
 
     /// Protected reasons that make a whole folder untrashable when a folder inside it has them.
     /// `.insidePackage` and `.notWritable` are absent: the package or folder goes along as a whole.

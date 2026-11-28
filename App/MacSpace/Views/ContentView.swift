@@ -423,8 +423,9 @@ struct PathRowFacts: View {
         case .idle: nil
         case let .scanning(progress): .scanning(progress, estimate: model.disk)
         case let .done(summary) where summary.wasCancelled:
-            .cancelled(files: summary.files, unreadable: summary.unreadable)
-        case let .done(summary): atRoot ? .finished(files: summary.files, unreadable: summary.unreadable) : nil
+            .cancelled(files: summary.files, unreadable: summary.unreadable, partlyRead: summary.partlyRead)
+        case let .done(summary): atRoot
+            ? .finished(files: summary.files, unreadable: summary.unreadable, partlyRead: summary.partlyRead) : nil
         }
     }
 
@@ -439,8 +440,10 @@ struct PathRowFacts: View {
                 PathRowFactsContent(total: total, state: .scanning(
                     ScanProgress(filesSeen: 8_888_888, bytesSeen: total, directoriesPending: 1), estimate: disk),
                     disk: nil)
-                PathRowFactsContent(total: total, state: .cancelled(files: 8_888_888, unreadable: 88_888), disk: nil)
-                PathRowFactsContent(total: total, state: .finished(files: 8_888_888, unreadable: 88_888), disk: disk)
+                PathRowFactsContent(total: total, state: .cancelled(files: 8_888_888, unreadable: 88_888,
+                                                                         partlyRead: 88_888), disk: nil)
+                PathRowFactsContent(total: total, state: .finished(files: 8_888_888, unreadable: 88_888,
+                                                                        partlyRead: 88_888), disk: disk)
             }
             .fixedSize()
         }
@@ -452,8 +455,8 @@ struct PathRowFactsContent: View {
     enum State {
         /// `estimate`: the disk whose used space the progress is estimated against (nil: a folder).
         case scanning(ScanProgress, estimate: DiskUsage?)
-        case cancelled(files: Int, unreadable: Int)
-        case finished(files: Int, unreadable: Int)
+        case cancelled(files: Int, unreadable: Int, partlyRead: Int)
+        case finished(files: Int, unreadable: Int, partlyRead: Int)
     }
 
     let total: UInt64?
@@ -530,15 +533,16 @@ struct PathRowFactsContent: View {
                         .animation(reduceMotion ? nil : .easeOut(duration: 0.24), value: progress.filesSeen)
                     }
                 }
-            case let .cancelled(files, unreadable):
+            case let .cancelled(files, unreadable, partlyRead):
                 HStack(spacing: WindowLayout.inlineSpacing) {
                     Image(systemName: "pause.circle")
                         .accessibilityHidden(true)
-                    Text(verbatim: Self.withUnreadable(
-                        String(localized: "Analisi interrotta · \(Formatters.count(files)) file"), unreadable))
+                    Text(verbatim: Self.withCoverage(
+                        String(localized: "Analisi interrotta · \(Formatters.count(files)) file"), unreadable, partlyRead))
                 }
-            case let .finished(files, unreadable):
-                Text(verbatim: Self.withUnreadable(String(localized: "\(Formatters.count(files)) file"), unreadable))
+            case let .finished(files, unreadable, partlyRead):
+                Text(verbatim: Self.withCoverage(String(localized: "\(Formatters.count(files)) file"), unreadable,
+                                                 partlyRead))
             }
         }
         .foregroundStyle(FusionPalette.secondaryText(scheme))
@@ -550,15 +554,27 @@ struct PathRowFactsContent: View {
         Text("Analisi in corso… \(Formatters.count(files)) file · \(bytes)")
     }
 
-    /// `line`, then " · N cartelle non leggibili" when the scan could not read some folders, so the
-    /// count never reads as the whole disk.
-    private static func withUnreadable(_ line: String, _ unreadable: Int) -> String {
-        guard unreadable > 0 else { return line }
-        // Two strings rather than a catalog plural: the count is formatted like the file count.
-        let folders = unreadable == 1
-            ? String(localized: "1 cartella non leggibile")
-            : String(localized: "\(Formatters.count(unreadable)) cartelle non leggibili")
-        return line + " · " + folders
+    /// `line`, then " · N cartelle non leggibili" when the scan could not read some folders and
+    /// " · N lette in parte" when it read some only in part ("cartelle" moves to the second when it
+    /// stands alone), so the count never reads as the whole disk. Each part only when above 0.
+    private static func withCoverage(_ line: String, _ unreadable: Int, _ partlyRead: Int) -> String {
+        // Separate strings rather than a catalog plural: the count is formatted like the file count.
+        var result = line
+        if unreadable > 0 {
+            result += " · " + (unreadable == 1
+                ? String(localized: "1 cartella non leggibile")
+                : String(localized: "\(Formatters.count(unreadable)) cartelle non leggibili"))
+        }
+        if partlyRead > 0 {
+            let part = switch (unreadable > 0, partlyRead == 1) {
+            case (true, true): String(localized: "1 letta in parte")
+            case (true, false): String(localized: "\(Formatters.count(partlyRead)) lette in parte")
+            case (false, true): String(localized: "1 cartella letta in parte")
+            case (false, false): String(localized: "\(Formatters.count(partlyRead)) cartelle lette in parte")
+            }
+            result += " · " + part
+        }
+        return result
     }
 }
 

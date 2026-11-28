@@ -815,3 +815,127 @@ private func exists(_ path: String) -> Bool {
     #expect(same.moved.map(\.node) == [id] && same.skipped.isEmpty)
     #expect(actions.moved == [fx.root.path + "/Library/Caches/com.example.app"])
 }
+
+@Test func replacedSameNameFolderIsChanged() async throws {   // audit SEC-01
+    let fx = try Fixture(); defer { fx.cleanup() }
+    let bin = try Fixture(); defer { bin.cleanup() }
+    try fx.file("Projects/a/x.bin", bytes: 10_000)
+    let store = try await scanned(fx)
+    let a = try await node(store, fx, "Projects/a")
+    // Same name, same kind, another folder: not what the user saw.
+    try FileManager.default.removeItem(atPath: fx.root.path + "/Projects/a")
+    try fx.file("Projects/a/x.bin", bytes: 10_000)
+
+    let actions = RecordingDiskActions(trash: bin.root.path)
+    let outcome = await store.trash([a], actions: actions, packages: noPackages, openFiles: nothingOpen,
+                                    expectedVerdicts: nil)
+    #expect(outcome.skipped.map(\.reason) == [.changed])
+    #expect(outcome.moved.isEmpty && actions.moved.isEmpty)
+    #expect(exists(fx.root.path + "/Projects/a/x.bin"))
+}
+
+@Test func replacedAncestorIsChanged() async throws {   // audit SEC-01
+    let fx = try Fixture(); defer { fx.cleanup() }
+    let bin = try Fixture(); defer { bin.cleanup() }
+    try fx.file("Projects/p/a/x.bin", bytes: 10_000)
+    let store = try await scanned(fx)
+    let a = try await node(store, fx, "Projects/p/a")
+    // `Projects/p` is now another folder holding another `a`.
+    #expect(rename(fx.root.path + "/Projects/p", fx.root.path + "/Projects/p-old") == 0)
+    try fx.file("Projects/p/a/x.bin", bytes: 10_000)
+
+    let actions = RecordingDiskActions(trash: bin.root.path)
+    let outcome = await store.trash([a], actions: actions, packages: noPackages, openFiles: nothingOpen,
+                                    expectedVerdicts: nil)
+    #expect(outcome.skipped.map(\.reason) == [.changed])
+    #expect(actions.moved.isEmpty)
+    #expect(exists(fx.root.path + "/Projects/p/a/x.bin") && exists(fx.root.path + "/Projects/p-old/a/x.bin"))
+}
+
+@Test func unknownInodeIsNotCompared() async throws {
+    let fx = try Fixture(); defer { fx.cleanup() }
+    let bin = try Fixture(); defer { bin.cleanup() }
+    try fx.file("Projects/a/x.bin", bytes: 10_000)
+    // Filled by hand, without inodes (0 = unknown): step 7 compares kinds and devices only.
+    let store = ScanStore(rootName: "home", rootPath: fx.root.path, home: fx.root.path, now: fixedNow)
+    let device = try DirectoryReader.stat(path: fx.root.path).device
+    func entry(_ name: String) -> DirectoryEntry {
+        DirectoryEntry(name: name, kind: .directory, allocatedSize: 0, device: device, inode: 0, linkCount: 1,
+                       isMountPoint: false, isDataless: false)
+    }
+    let boundary = ScanBoundary(allowedDevices: [device], excludedPaths: [])
+    let projects = try #require(await store.insert([entry("Projects")], under: FileTree.root,
+                                                   parentPath: fx.root.path, boundary: boundary).descend.first)
+    let a = try #require(await store.insert([entry("a")], under: projects.id, parentPath: projects.path,
+                                            boundary: boundary).descend.first)
+    _ = await store.insert([], under: a.id, parentPath: a.path, boundary: boundary)
+    await store.markScanFinished(allowedDevices: [device])
+    await store.setEnvironment(.system(home: fx.root.path, apps: .empty))
+
+    let actions = RecordingDiskActions(trash: bin.root.path)
+    let outcome = await store.trash([a.id], actions: actions, packages: noPackages, openFiles: nothingOpen,
+                                    expectedVerdicts: nil)
+    #expect(outcome.skipped.isEmpty)
+    #expect(actions.moved == [fx.root.path + "/Projects/a"])
+}
+
+@Test func trashingCountedLinkMovesBytesToOtherLink() async throws {   // audit CODE-02
+    let fx = try Fixture(); defer { fx.cleanup() }
+    let bin = try Fixture(); defer { bin.cleanup() }
+    let file = try fx.file("Projects/a/f.bin", bytes: 1_000_000)
+    try fx.dir("Projects/b")
+    #expect(link(file.path, fx.root.path + "/Projects/b/f.bin") == 0)
+    let store = try await scanned(fx)
+    let a = try await node(store, fx, "Projects/a"), b = try await node(store, fx, "Projects/b")
+    let (sizeA, sizeB) = (try #require(await store.row(a)).size, try #require(await store.row(b)).size)
+    #expect(min(sizeA, sizeB) == 0 && max(sizeA, sizeB) >= 1_000_000)
+    let (counted, other) = sizeA > 0 ? (a, b) : (b, a)
+    let before = await store.rootSize()
+
+    let actions = RecordingDiskActions(trash: bin.root.path)
+    let outcome = await store.trash([counted], actions: actions, packages: noPackages, openFiles: nothingOpen,
+                                    expectedVerdicts: nil)
+    #expect(outcome.moved.map(\.node) == [counted])
+    #expect(outcome.moved.first?.size == 0)
+    #expect(await store.row(other)?.size == max(sizeA, sizeB))
+    #expect(await store.rootSize() == before)
+    let link = try await node(store, fx, other == a ? "Projects/a/f.bin" : "Projects/b/f.bin")
+    #expect(await store.row(link)?.flags.contains(.hardLinkDuplicate) == false)
+}
+
+@Test func trashingBothLinksFreesTheFile() async throws {   // audit CODE-02, Review Focus 4
+    let fx = try Fixture(); defer { fx.cleanup() }
+    let bin = try Fixture(); defer { bin.cleanup() }
+    let file = try fx.file("Projects/c/f1.bin", bytes: 1_000_000)
+    #expect(link(file.path, fx.root.path + "/Projects/c/f2.bin") == 0)
+    try fx.file("Projects/keep.bin", bytes: 20_000)
+    let store = try await scanned(fx)
+    let c = try await node(store, fx, "Projects/c"), keep = try await node(store, fx, "Projects/keep.bin")
+    let fileSize = try #require(await store.row(c)).size
+    #expect(fileSize >= 1_000_000)
+    let keepSize = await store.row(keep)?.size
+    let before = await store.rootSize()
+
+    let actions = RecordingDiskActions(trash: bin.root.path)
+    let outcome = await store.trash([c], actions: actions, packages: noPackages, openFiles: nothingOpen,
+                                    expectedVerdicts: nil)
+    #expect(outcome.moved.first?.size == fileSize)
+    #expect(await store.rootSize() == before - fileSize)
+    #expect(await store.row(keep)?.size == keepSize)
+}
+
+@Test func movedSizeIsWhatTheRootLost() async throws {
+    let fx = try Fixture(); defer { fx.cleanup() }
+    let bin = try Fixture(); defer { bin.cleanup() }
+    try fx.file("Projects/old/f", bytes: 300_000)
+    try fx.file("Projects/keep", bytes: 20_000)
+    let store = try await scanned(fx)
+    let old = try await node(store, fx, "Projects/old")
+    let before = await store.rootSize()
+    let actions = RecordingDiskActions(trash: bin.root.path)
+    let outcome = await store.trash([old], actions: actions, packages: noPackages, openFiles: nothingOpen,
+                                    expectedVerdicts: nil)
+    let after = await store.rootSize()
+    #expect(outcome.moved.first?.size == before - after)
+    #expect(before - after >= 300_000)
+}

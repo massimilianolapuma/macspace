@@ -35,6 +35,9 @@ public final class FileTree {
     private var categoryBytes = ContiguousArray<UInt64>()
     /// `ageCount` byte totals per directory slot, indexed `slot * ageCount + AgeBucket.rawValue`.
     private var ageBytes = ContiguousArray<UInt64>()
+    /// Each node's inode (`ATTR_CMN_FILEID`) as the scan read it, 0 when unknown (the root until
+    /// `setInode`, hand-built nodes). `trash` compares it to tell a replaced item from the scanned one.
+    private var inodes = ContiguousArray<UInt64>()
     private let rootPath: String
     /// Seconds since 1970 that ages are measured from, fixed for the tree's life.
     public let now: UInt32
@@ -57,6 +60,7 @@ public final class FileTree {
         appendName(rootName)
         categories.append(rootCategory.rawValue)
         lastUsedStore.append(0)
+        inodes.append(0)
         dirSlots.append(0)
         categoryBytes.append(contentsOf: repeatElement(0, count: Self.categoryCount))
         ageBytes.append(contentsOf: repeatElement(0, count: Self.ageCount))
@@ -73,10 +77,11 @@ public final class FileTree {
     ///
     /// For a directory `category` is the context it imposes (`.other` for none); for anything else
     /// it is the node's own category. A directory's own size, if any, counts under its context.
+    /// `inode` is the object's inode as read, 0 when unknown.
     @discardableResult
     public func addChild(of parent: NodeID, name: String, kind: NodeKind,
                          allocatedSize: UInt64, flags: NodeFlags = [],
-                         category: FileCategory = .other, lastUsed: UInt32 = 0) -> NodeID {
+                         category: FileCategory = .other, lastUsed: UInt32 = 0, inode: UInt64 = 0) -> NodeID {
         let id = NodeID(parents.count)
         parents.append(parent)
         firstChildren.append(-1)
@@ -88,6 +93,7 @@ public final class FileTree {
         appendName(name)
         categories.append(category.rawValue)
         lastUsedStore.append(lastUsed)
+        inodes.append(inode)
         let column = Int(category.rawValue)
         let ageColumn = AgeBucket(lastUsed: lastUsed, now: now).rawValue
         if kind == .directory {
@@ -180,6 +186,26 @@ public final class FileTree {
         }
     }
 
+    /// Gives `bytes` to the non-directory node `id`, as if `addChild` had added it with them: adds
+    /// them to its size and to every ancestor's size, total for its category and total for its
+    /// age bucket, and clears `.hardLinkDuplicate`. Used when the link that carried a hard-linked
+    /// file's bytes leaves the tree and another link takes them over. O(depth).
+    public func credit(_ bytes: UInt64, to id: NodeID) {
+        let i = Int(id)
+        precondition(dirSlots[i] < 0, "FileTree.credit: a directory")
+        flagsStore[i].remove(.hardLinkDuplicate)
+        sizes[i] &+= bytes
+        let column = Int(categories[i])
+        let ageColumn = AgeBucket(lastUsed: lastUsedStore[i], now: now).rawValue
+        var p = Int(parents[i])
+        while p >= 0 {
+            sizes[p] &+= bytes
+            categoryBytes[Int(dirSlots[p]) * Self.categoryCount + column] &+= bytes
+            ageBytes[Int(dirSlots[p]) * Self.ageCount + ageColumn] &+= bytes
+            p = Int(parents[p])
+        }
+    }
+
     public func insertFlags(_ flags: NodeFlags, for id: NodeID) {
         flagsStore[Int(id)].formUnion(flags)
     }
@@ -194,6 +220,12 @@ public final class FileTree {
 
     /// A file's own last use; for a directory, the latest over its subtree (0 if unknown or empty).
     public func lastUsed(_ id: NodeID) -> UInt32 { lastUsedStore[Int(id)] }
+
+    /// The inode the scan read for `id`; 0 = unknown.
+    public func inode(_ id: NodeID) -> UInt64 { inodes[Int(id)] }
+
+    /// Records `id`'s inode (the root's, read when the scan starts).
+    public func setInode(_ inode: UInt64, for id: NodeID) { inodes[Int(id)] = inode }
 
     /// The context a directory imposes on its contents, or nil if none (or `id` is not a directory).
     func context(_ id: NodeID) -> FileCategory? {
