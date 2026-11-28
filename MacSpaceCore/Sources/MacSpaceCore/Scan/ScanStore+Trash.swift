@@ -55,7 +55,16 @@ extension ScanStore {
     ///    mount point, on a device the scan was not confined to, or a folder above it (up to the scan
     ///    root) no longer a folder or another folder (inode) than scanned → `.changed`. Inodes are
     ///    compared only where the scan recorded one (not for nodes filled by hand);
-    /// 8. `moveToTrash` throws → `.failed(error.localizedDescription)`.
+    /// 8. a folder whose contents changed since the scan started holds something new that the
+    ///    scan's rules would protect as a whole (as in step 6) → `.containsProtected(reason)`, or new
+    ///    contents that cannot all be read (unlistable, listed in part, dataless, a mount point, on
+    ///    another device) → `.containsUnverified`. The change history (`history`, one query per
+    ///    call, from the baseline `markScanStarted` recorded) names the folders to list again;
+    ///    without a baseline, or when it cannot vouch for a folder (dropped events, another volume
+    ///    database), the folder's whole content on disk is read. New plain content moves along with
+    ///    the folder, as in the Finder. All of it within `contentBudget` per call (10 s): items not
+    ///    judged by then → `.containsUnverified`;
+    /// 9. `moveToTrash` throws → `.failed(error.localizedDescription)`.
     ///
     /// A hard-linked file whose counted link moved gives its bytes to a link still in the tree
     /// (`hardLinks`); `Moved.size` is what the root total dropped by, so it is 0 for such a link.
@@ -64,13 +73,12 @@ extension ScanStore {
     /// - S3: the item and the folders above it are checked by kind, inode, mount status and device
     ///   at step 7; only the window between that `stat` and the rename inside `moveToTrash` remains,
     ///   and the mount table is read without waiting (`MNT_NOWAIT`).
-    /// - S4: step 6 walks the scan-time tree. Contents added after the scan are not re-walked on
-    ///   disk: a Photos library or a `.Trashes` folder moved inside a folder since, or a running app
-    ///   placed there (running apps are matched by their live bundle paths, but only those). Open
-    ///   files, running apps and mounts are read live.
+    /// - S4: contents added after the scan are judged at step 8; only changes made while that check
+    ///   runs, before the move, remain. Open files, running apps and mounts are read live.
     /// - S2: names are decoded lossily; `TrashGuard` refuses a path holding U+FFFD, and a descendant
     ///   directory whose name was not decoded exactly fails the reader, so it is `.unreadable` in the
-    ///   tree and its folder is `.containsUnverified`.
+    ///   tree (or unlistable at step 8) and its folder is `.containsUnverified`. A descendant *file*
+    ///   with such a name is not judged by name, only moved along with its folder.
     /// - Environment: the store judges against the environment it was last given; the app hands it
     ///   the apps running right before the move, in the same actor call (`trash(_:environment:…)`,
     ///   ruling R41), so only the window between that read and the move remains.
@@ -100,10 +108,10 @@ extension ScanStore {
     }
 
     /// `trash` with the mount table injectable for tests: `mountPoints` returns every mount-on
-    /// path, or nil when they cannot be read.
+    /// path, or nil when they cannot be read. `contentBudget` bounds step 8 for the whole call.
     func trash(_ ids: Set<NodeID>, actions: any DiskActions, packages: any PackageProbe,
                openFiles: @Sendable () -> OpenFileSet, expectedVerdicts: [NodeID: SafetyVerdict]?,
-               mountPoints: () -> [String]?) -> TrashOutcome {
+               mountPoints: () -> [String]?, contentBudget: Duration = .seconds(10)) -> TrashOutcome {
         defer { verdictCache.removeAll() }
         let items = topMost(ids, keepingRemoved: true)
         var outcome = TrashOutcome()
@@ -118,11 +126,18 @@ extension ScanStore {
         guard let rawMounts = mountPoints() else { return skipAll(.containsUnverified) }
         let mounts = MountTable.canonical(rawMounts)
         let devices = allowedDevices()
+        let deadline = ContinuousClock.now + contentBudget
+        let changes = contentChanges(for: items)
         for id in items {
             let name = tree.name(id)
             if let reason = trashBlocker(id, open: open, packages: packages, mounts: mounts, devices: devices,
                                          comparesVerdict: expectedVerdicts != nil,
-                                         expectedVerdict: expectedVerdicts?[id]) {
+                                         expectedVerdict: expectedVerdicts?[id])
+                // 8. Contents added since the scan, last (after step 7 proved it is the scanned object).
+                ?? (tree.kind(id) == .directory
+                    ? contentBlocker(id, path: tree.path(of: id), changes: changes[id], devices: devices,
+                                     deadline: deadline)
+                    : nil) {
                 outcome.skipped.append(TrashOutcome.Skipped(node: id, name: name, reason: reason))
                 continue
             }

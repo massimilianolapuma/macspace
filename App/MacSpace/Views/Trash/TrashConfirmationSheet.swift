@@ -43,6 +43,9 @@ struct TrashConfirmationSheet: View {
     /// `PrivateSize.freed` of each item, as each estimate finishes.
     @State private var freed: [NodeID: PrivateSize.Estimate] = [:]
     @State private var moving = false
+    /// The move has run for `slowMoveDelay`: checking what a folder holds now can take a while, so
+    /// the status says so instead of looking stuck.
+    @State private var movingSlowly = false
     /// `ScanModel.trashUnavailableReason` has lasted `unavailableGrace`: only then the status says
     /// it. A brief re-judging (an app launched or quit) only holds the move button, so the sheet
     /// does not jump.
@@ -69,6 +72,8 @@ struct TrashConfirmationSheet: View {
     }
 
     static let unavailableGrace: Duration = .seconds(1)
+    /// How long a move runs before the status says contents are being checked.
+    static let slowMoveDelay: Duration = .milliseconds(500)
 
     /// Estimates run at most this many at a time (each walks a folder on disk).
     static let estimateWidth = 4
@@ -90,6 +95,11 @@ struct TrashConfirmationSheet: View {
             work = Task { await prepare() }
         }
         .onDisappear { work?.cancel() }
+        .task(id: moving) {
+            guard moving else { movingSlowly = false; return }
+            try? await Task.sleep(for: Self.slowMoveDelay)
+            if !Task.isCancelled, moving { movingSlowly = true }
+        }
         .task(id: model.trashUnavailableReason == nil) {
             guard model.trashUnavailableReason != nil else { unavailableShown = false; return }
             try? await Task.sleep(for: Self.unavailableGrace)
@@ -198,7 +208,9 @@ struct TrashConfirmationSheet: View {
     /// Why the move button waits, or what is happening: a spinner or a warning, in words.
     @ViewBuilder
     private var status: some View {
-        if moving {
+        if moving, movingSlowly {
+            statusLine("Verifica dei contenuti e spostamento…", warning: false, spinner: true)
+        } else if moving {
             statusLine("Spostamento nel Cestino…", warning: false, spinner: true)
         } else if changedBeforeMove {
             statusLine("La situazione è cambiata: controlla di nuovo l'elenco", warning: true, spinner: false)

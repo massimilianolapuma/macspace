@@ -13,7 +13,12 @@ public enum ChartRequest: Sendable {
 public actor ScanStore {
     /// Internal (not private) for the `ScanStore+…` extensions.
     let tree: FileTree
-    private let classifier: CategoryClassifier
+    let classifier: CategoryClassifier
+    /// Where `trash` learns which folders changed since the scan started (S4).
+    nonisolated let history: any ChangeHistory
+    /// The history's position when the scan started (`markScanStarted`); nil for a store filled by
+    /// hand, or a volume without history: `trash` then re-reads every folder it moves.
+    var changeBaseline: ChangeBaseline?
     /// Every link of each multiply-linked file (`linkCount > 1`) in the tree, in insertion (ID)
     /// order. Only one of them carries the file's bytes: the one in `countedLink`.
     var hardLinks: [HardLinkKey: [NodeID]] = [:]
@@ -51,9 +56,11 @@ public actor ScanStore {
     }
 
     /// Called by `Scanner.scan(into:)` before it reads anything: records the scan root's inode
-    /// (0 when it could not be read), so `trash` can tell the root folder from one put in its place.
-    public func markScanStarted(rootInode: UInt64) {
+    /// (0 when it could not be read), so `trash` can tell the root folder from one put in its place,
+    /// and where the change history stood (`history.baseline`), so `trash` can ask what changed since.
+    public func markScanStarted(rootInode: UInt64, baseline: ChangeBaseline?) {
         tree.setInode(rootInode, for: FileTree.root)
+        changeBaseline = baseline
     }
 
     /// How many installer files the scan has found.
@@ -64,9 +71,12 @@ public actor ScanStore {
     /// `now` (seconds since 1970, by default the scan start) is what ages are measured from.
     /// `rootPath` is kept with runs of `/` collapsed and trailing slashes removed (not resolved).
     /// Verdicts start against `SafetyEnvironment.system(home: home, apps: nil)`: nothing in
-    /// `~/Library` is judged until `setEnvironment` brings the apps index.
+    /// `~/Library` is judged until `setEnvironment` brings the apps index. `history` tells `trash`
+    /// what changed on disk since the scan started.
     public init(rootName: String, rootPath rawRootPath: String, home: String = NSHomeDirectory(),
-                now: UInt32 = UInt32(clamping: Int64(Date().timeIntervalSince1970))) {
+                now: UInt32 = UInt32(clamping: Int64(Date().timeIntervalSince1970)),
+                history: any ChangeHistory = SystemChangeHistory()) {
+        self.history = history
         let rootPath = Self.canonicalRoot(rawRootPath)
         let classifier = CategoryClassifier(home: home)
         let root = RootContext.resolve(rootPath: rootPath, classifier: classifier)
@@ -107,15 +117,13 @@ public actor ScanStore {
         let prefix = parentPath.hasSuffix("/") ? parentPath : parentPath + "/"
         let parentContext = tree.context(parent)
         let parentFlags = tree.flags(parent)
-        let interior: NodeFlags = parentFlags.isDisjoint(with: [.package, .insidePackage]) ? [] : .insidePackage
         var descend: [(id: NodeID, path: String)] = []
         var bytes: UInt64 = 0
-        /// Whether the listing holds a `Cargo.toml`, looked up only once a `target` folder needs it.
-        var hasCargoToml: Bool?
         for entry in entries {
-            var flags = interior
-            if entry.isDataless { flags.insert(.dataless) }
-            if entry.isMountPoint { flags.insert(.mountPoint) }
+            let path = entry.kind == .directory ? prefix + entry.name : nil
+            let (category, classified) = classify(entry, path: path, parentContext: parentContext,
+                                                  parentFlags: parentFlags, siblings: entries)
+            var flags = classified
             var size = entry.allocatedSize
             let linkKey = entry.kind != .directory && entry.linkCount > 1
                 ? HardLinkKey(device: entry.device, inode: entry.inode) : nil
@@ -125,9 +133,9 @@ public actor ScanStore {
                 size = 0
             }
             bytes &+= size
-            guard entry.kind == .directory else {
+            guard let path else {
                 let id = tree.addChild(of: parent, name: entry.name, kind: entry.kind, allocatedSize: size, flags: flags,
-                              category: classifier.category(forFile: entry.name, context: parentContext),
+                              category: category,
                               lastUsed: Self.lastUse(modification: entry.modificationTime,
                                                      access: entry.accessTime, now: tree.now),
                               inode: entry.inode)
@@ -138,15 +146,8 @@ public actor ScanStore {
                 if classifier.isInstaller(fileName: entry.name) { installerIDs.append(id) }
                 continue
             }
-            let path = prefix + entry.name
-            if hasCargoToml == nil, entry.name == "target" {
-                hasCargoToml = entries.contains { $0.kind != .directory && $0.name == "Cargo.toml" }
-            }
-            let context = classifier.context(forDirectory: entry.name, path: path, parent: parentContext,
-                                             siblingHasCargoToml: hasCargoToml ?? false)
-            if classifier.isPackage(directoryName: entry.name) { flags.insert(.package) }
             let id = tree.addChild(of: parent, name: entry.name, kind: entry.kind, allocatedSize: size,
-                                   flags: flags, category: context ?? .other, inode: entry.inode)
+                                   flags: flags, category: category, inode: entry.inode)
             // Only in the cloud: its contents are never listed, so they are unknown (fail closed).
             guard !entry.isDataless else {
                 unverifiedDirectories.insert(id)
@@ -160,6 +161,28 @@ public actor ScanStore {
             }
         }
         return Inserted(descend: descend, bytes: bytes)
+    }
+
+    /// How the scan classifies `entry`, listed with `siblings` in a folder whose context is
+    /// `parentContext` and whose flags are `parentFlags`: its category (for a directory, the context
+    /// it imposes, `.other` for none) and its flags (`.insidePackage` below a package, `.dataless`,
+    /// `.mountPoint`, `.package`). `path` is the entry's path, needed for a directory (nil for
+    /// anything else). `insert` and the content check of `trash` both use it, so new content is
+    /// judged as a scan would have seen it.
+    func classify(_ entry: DirectoryEntry, path: String?, parentContext: FileCategory?, parentFlags: NodeFlags,
+                  siblings: [DirectoryEntry]) -> (category: FileCategory, flags: NodeFlags) {
+        var flags: NodeFlags = parentFlags.isDisjoint(with: [.package, .insidePackage]) ? [] : .insidePackage
+        if entry.isDataless { flags.insert(.dataless) }
+        if entry.isMountPoint { flags.insert(.mountPoint) }
+        guard entry.kind == .directory else {
+            return (classifier.category(forFile: entry.name, context: parentContext), flags)
+        }
+        let hasCargoToml = entry.name == "target"
+            && siblings.contains { $0.kind != .directory && $0.name == "Cargo.toml" }
+        let context = classifier.context(forDirectory: entry.name, path: path ?? entry.name, parent: parentContext,
+                                         siblingHasCargoToml: hasCargoToml)
+        if classifier.isPackage(directoryName: entry.name) { flags.insert(.package) }
+        return (context ?? .other, flags)
     }
 
     public func markUnreadable(_ id: NodeID) {
