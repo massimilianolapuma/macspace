@@ -14,8 +14,12 @@ public actor ScanStore {
     /// Internal (not private) for the `ScanStore+…` extensions.
     let tree: FileTree
     private let classifier: CategoryClassifier
-    /// `(device, inode)` of every multiply-linked file already counted.
-    private var seenHardLinks = Set<HardLinkKey>()
+    /// Every link of each multiply-linked file (`linkCount > 1`) in the tree, in insertion (ID)
+    /// order. Only one of them carries the file's bytes: the one in `countedLink`.
+    var hardLinks: [HardLinkKey: [NodeID]] = [:]
+    /// The link carrying each multiply-linked file's bytes; the others have size 0 and
+    /// `.hardLinkDuplicate`. `trash` hands the bytes to another link when this one leaves the tree.
+    var countedLink: [NodeID: HardLinkKey] = [:]
     /// Installer files (`dmg pkg mpkg xip`) found so far.
     var installerIDs: [NodeID] = []
 
@@ -86,7 +90,7 @@ public actor ScanStore {
     /// not descend (a mount point aside), joins `unverifiedDirectories`, since its contents are
     /// never seen: `trash` skips it, and any folder holding it, as `.containsUnverified`. A file
     /// with `linkCount > 1` is counted once per `(device, inode)`: later links are added with size 0
-    /// and `.hardLinkDuplicate`.
+    /// and `.hardLinkDuplicate` (all are kept in `hardLinks`, so `trash` can move the bytes).
     ///
     /// Each entry is classified under `parent`'s context: a directory stores the context it
     /// imposes, anything else its category. Non-directories record `lastUse(modification:access:now:)`
@@ -113,8 +117,10 @@ public actor ScanStore {
             if entry.isDataless { flags.insert(.dataless) }
             if entry.isMountPoint { flags.insert(.mountPoint) }
             var size = entry.allocatedSize
-            if entry.kind != .directory, entry.linkCount > 1,
-               !seenHardLinks.insert(HardLinkKey(device: entry.device, inode: entry.inode)).inserted {
+            let linkKey = entry.kind != .directory && entry.linkCount > 1
+                ? HardLinkKey(device: entry.device, inode: entry.inode) : nil
+            let isCounted = linkKey.map { hardLinks[$0] == nil } ?? true
+            if !isCounted {
                 flags.insert(.hardLinkDuplicate)
                 size = 0
             }
@@ -125,6 +131,10 @@ public actor ScanStore {
                               lastUsed: Self.lastUse(modification: entry.modificationTime,
                                                      access: entry.accessTime, now: tree.now),
                               inode: entry.inode)
+                if let linkKey {
+                    hardLinks[linkKey, default: []].append(id)
+                    if isCounted { countedLink[id] = linkKey }
+                }
                 if classifier.isInstaller(fileName: entry.name) { installerIDs.append(id) }
                 continue
             }
@@ -278,7 +288,7 @@ public actor ScanStore {
                         verdicts: verdicts)
     }
 
-    private struct HardLinkKey: Hashable {
+    struct HardLinkKey: Hashable {
         let device: Int32
         let inode: UInt64
     }

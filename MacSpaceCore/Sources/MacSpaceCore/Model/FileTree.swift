@@ -186,6 +186,26 @@ public final class FileTree {
         }
     }
 
+    /// Gives `bytes` to the non-directory node `id`, as if `addChild` had added it with them: adds
+    /// them to its size and to every ancestor's size, total for its category and total for its
+    /// age bucket, and clears `.hardLinkDuplicate`. Used when the link that carried a hard-linked
+    /// file's bytes leaves the tree and another link takes them over. O(depth).
+    public func credit(_ bytes: UInt64, to id: NodeID) {
+        let i = Int(id)
+        precondition(dirSlots[i] < 0, "FileTree.credit: a directory")
+        flagsStore[i].remove(.hardLinkDuplicate)
+        sizes[i] &+= bytes
+        let column = Int(categories[i])
+        let ageColumn = AgeBucket(lastUsed: lastUsedStore[i], now: now).rawValue
+        var p = Int(parents[i])
+        while p >= 0 {
+            sizes[p] &+= bytes
+            categoryBytes[Int(dirSlots[p]) * Self.categoryCount + column] &+= bytes
+            ageBytes[Int(dirSlots[p]) * Self.ageCount + ageColumn] &+= bytes
+            p = Int(parents[p])
+        }
+    }
+
     public func insertFlags(_ flags: NodeFlags, for id: NodeID) {
         flagsStore[Int(id)].formUnion(flags)
     }

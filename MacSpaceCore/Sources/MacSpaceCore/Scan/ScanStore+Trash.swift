@@ -57,6 +57,9 @@ extension ScanStore {
     ///    compared only where the scan recorded one (not for nodes filled by hand);
     /// 8. `moveToTrash` throws → `.failed(error.localizedDescription)`.
     ///
+    /// A hard-linked file whose counted link moved gives its bytes to a link still in the tree
+    /// (`hardLinks`); `Moved.size` is what the root total dropped by, so it is 0 for such a link.
+    ///
     /// Residuals (security review, documented):
     /// - S3: the item and the folders above it are checked by kind, inode, mount status and device
     ///   at step 7; only the window between that `stat` and the rename inside `moveToTrash` remains,
@@ -123,18 +126,49 @@ extension ScanStore {
                 outcome.skipped.append(TrashOutcome.Skipped(node: id, name: name, reason: reason))
                 continue
             }
-            let size = tree.size(id)
             do {
                 let trashed = try actions.moveToTrash(tree.path(of: id))
+                let before = tree.size(FileTree.root)
+                let counted = countedLinks(atOrBelow: id)
                 tree.remove(id)
+                reattribute(counted)
                 dropVerdicts()
-                outcome.moved.append(TrashOutcome.Moved(node: id, name: name, size: size, trashedPath: trashed))
+                let freed = before &- tree.size(FileTree.root)
+                outcome.moved.append(TrashOutcome.Moved(node: id, name: name, size: freed, trashedPath: trashed))
             } catch {
                 outcome.skipped.append(TrashOutcome.Skipped(node: id, name: name,
                                                             reason: .failed(error.localizedDescription)))
             }
         }
         return outcome
+    }
+
+    /// The links carrying a hard-linked file's bytes (`countedLink`) at or below `id`, with their sizes.
+    private func countedLinks(atOrBelow id: NodeID) -> [(id: NodeID, size: UInt64)] {
+        guard !countedLink.isEmpty else { return [] }
+        var found: [(id: NodeID, size: UInt64)] = []
+        var stack = [id]
+        while let n = stack.popLast() {
+            if countedLink[n] != nil { found.append((n, tree.size(n))) }
+            if tree.kind(n) == .directory { tree.forEachChild(of: n) { stack.append($0) } }
+        }
+        return found
+    }
+
+    /// After counted links left the tree: each file's bytes go to its lowest-ID link still in the
+    /// tree, which becomes the counted one. A file with no link left is freed (nothing to do).
+    private func reattribute(_ counted: [(id: NodeID, size: UInt64)]) {
+        for (gone, size) in counted {
+            guard let key = countedLink.removeValue(forKey: gone) else { continue }
+            let remaining = hardLinks[key, default: []].filter { !tree.flags($0).contains(.removed) }
+            if let heir = remaining.first {
+                tree.credit(size, to: heir)
+                countedLink[heir] = key
+                hardLinks[key] = remaining
+            } else {
+                hardLinks[key] = nil
+            }
+        }
     }
 
     /// The devices items must still be on: those the scan was confined to, or, when none were
