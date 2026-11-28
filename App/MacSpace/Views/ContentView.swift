@@ -470,7 +470,8 @@ struct PathRowFacts: View {
     }
 
     private func state(atRoot: Bool) -> PathRowFactsContent.State? {
-        if let date = model.shownSnapshotDate {
+        // A snapshot, or a scanned tree being brought up to date behind the screen.
+        if let date = model.shownSnapshotDate ?? (model.update != nil ? model.shownScanDate : nil) {
             return .snapshot(date: date, update: model.update, progress: model.updateProgress, estimate: model.disk)
         }
         return switch model.phase {

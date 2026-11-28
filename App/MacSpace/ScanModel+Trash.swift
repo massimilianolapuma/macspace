@@ -131,7 +131,7 @@ extension ScanModel {
         guard !isTrashing else { return TrashOutcome() }
         guard trashUnavailableReason == nil, let environment else {
             // Said as it is: the scan has not settled, or verdicts are still being updated.
-            let reason: TrashSkip = isScanning || !scanSettled || shownSnapshotDate != nil
+            let reason: TrashSkip = isScanning || !scanSettled || shownSnapshotDate != nil || update != nil
                 ? .scanInProgress : .appsAnalysisInProgress
             var skipped: [TrashOutcome.Skipped] = []
             for id in ids {

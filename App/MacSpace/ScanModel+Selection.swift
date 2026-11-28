@@ -84,7 +84,7 @@ extension ScanModel {
     var trashUnavailableReason: LocalizedStringResource? {
         guard store != nil else { return nil }
         // A snapshot from an earlier launch: nothing is moved on it, only on the scan replacing it.
-        if shownSnapshotDate != nil { return "Aggiornamento in corso…" }
+        if shownSnapshotDate != nil || update != nil { return "Aggiornamento in corso…" }
         if isScanning || !scanSettled { return "Analisi in corso…" }
         if !appsReady || environmentUpdates > 0 { return "Analisi delle app in corso…" }
         return nil

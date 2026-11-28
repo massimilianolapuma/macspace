@@ -146,8 +146,13 @@ final class ScanModel {
     /// When the shown store is a restored snapshot: when its scan started; nil once a scanned store
     /// shows. The Trash is unavailable meanwhile.
     private(set) var shownSnapshotDate: Date?
-    /// The scan running out of sight behind the shown snapshot, if any.
+    /// The scan running out of sight behind the shown tree (a snapshot, or a scan "Analizza" brings
+    /// up to date), if any. The Trash is unavailable meanwhile.
     private(set) var update: Update?
+    /// When the shown tree was read: its scan's start (a snapshot's, or this launch's scan's).
+    private(set) var shownScanDate: Date?
+    /// What the shown tree is of; nil before any scan.
+    @ObservationIgnored private var shownTarget: ScanTarget?
     /// That scan's progress, for the startup disk's bar; nil before its first report.
     private(set) var updateProgress: ScanProgress?
     /// The snapshot on screen, kept to refresh it again (it shares its arrays with the shown tree).
@@ -457,8 +462,12 @@ final class ScanModel {
     /// same main-actor turn as the store itself, before any await: node IDs are per store.
     /// `keepViews` leaves the charts, list, crumbs and legends up, for a caller that puts the new
     /// store's own in this same turn (`swap`); otherwise they start empty, with the root's crumb.
-    private func install(_ store: ScanStore, rootName: String, startupDisk: Bool, keepViews: Bool = false) {
+    private func install(_ store: ScanStore, rootName: String, target: ScanTarget, scannedAt: Date,
+                         keepViews: Bool = false) {
+        let startupDisk = target == .startupDisk
         self.store = store
+        shownTarget = target
+        shownScanDate = scannedAt
         beginNavigation()
         center = FileTree.root
         hovered = nil
@@ -540,7 +549,7 @@ final class ScanModel {
         let startedAt = Date.now
         let fullDiskAccess = FullDiskAccess.isGranted
         let store = ScanStore(rootName: rootName, rootPath: rootPath)
-        install(store, rootName: rootName, startupDisk: target == .startupDisk)
+        install(store, rootName: rootName, target: target, scannedAt: startedAt)
         phase = .scanning(ScanProgress(filesSeen: 0, bytesSeen: 0, directoriesPending: 1))
         await applyEnvironment(to: store)
 
@@ -582,7 +591,11 @@ final class ScanModel {
             let key = Self.savedTarget(target)
             let saved = await Task.detached(priority: .userInitiated) { SnapshotFolder.standard.load(key) }.value
             guard !Task.isCancelled else { return }
-            if let saved {
+            if let saved, shownTarget == target, store != nil {
+                // This target's tree is on screen already ("Analizza" after a scan): it stays,
+                // browsable where the user is, while its snapshot is brought up to date behind it.
+                await update(target, from: saved, full: false)
+            } else if let saved {
                 guard await show(saved, target: target) else { return }
                 await update(target, from: saved, full: false)
             } else if scanIfMissing {
@@ -619,9 +632,10 @@ final class ScanModel {
         let now = UInt32(clamping: Int64(Date().timeIntervalSince1970))
         let store = await Task.detached(priority: .userInitiated) { ScanStore(saved: saved, now: now) }.value
         guard !Task.isCancelled else { return false }
-        install(store, rootName: rootName, startupDisk: target == .startupDisk)
+        let date = Date(timeIntervalSince1970: TimeInterval(saved.startedAt))
+        install(store, rootName: rootName, target: target, scannedAt: date)
         shownSaved = (target, saved)
-        shownSnapshotDate = Date(timeIntervalSince1970: TimeInterval(saved.startedAt))
+        shownSnapshotDate = date
         phase = .idle
         await applyEnvironment(to: store)
         await refreshViews()
@@ -685,7 +699,7 @@ final class ScanModel {
             for \(summary.files, privacy: .public) files
             """)
         await applyEnvironment(to: store)
-        await swap(to: store, rootName: rootName, startupDisk: target == .startupDisk)
+        await swap(to: store, rootName: rootName, target: target, scannedAt: startedAt)
         update = nil
         updateProgress = nil
         await finish(store, summary, target: target, startedAt: startedAt, fullDiskAccess: fullDiskAccess)
@@ -695,15 +709,14 @@ final class ScanModel {
     /// is gone) and keeping the selection (by path; what is gone drops out). The new store's views
     /// are laid out first and land in the same main-actor turn as the store, so the charts never
     /// show empty and nothing on screen names a node of the old one.
-    private func swap(to new: ScanStore, rootName: String, startupDisk: Bool) async {
-        guard let old = store else { return install(new, rootName: rootName, startupDisk: startupDisk) }
+    private func swap(to new: ScanStore, rootName: String, target: ScanTarget, scannedAt: Date) async {
+        guard let old = store else { return install(new, rootName: rootName, target: target, scannedAt: scannedAt) }
         var mapped = FileTree.root
         var view: ScanStore.Snapshot?
         var laidOut: (chart: ChartKind, size: CGSize) = (chart, chartSize)
         for _ in 0..<3 {
             let wanted = center
-            mapped = FileTree.root
-            if let path = await old.path(of: wanted), let node = await new.node(atPath: path) { mapped = node }
+            mapped = await Self.nearest(await old.path(of: wanted), in: new)
             laidOut = (chart, chartSize)
             let request: ChartRequest = switch laidOut.chart {
             case .sunburst: .sunburst(depth: Self.ringDepth)
@@ -718,10 +731,21 @@ final class ScanModel {
             if let path = await old.path(of: id), let node = await new.node(atPath: path) { kept.insert(node) }
         }
         guard store === old else { return }
-        install(new, rootName: rootName, startupDisk: startupDisk, keepViews: view != nil)
+        install(new, rootName: rootName, target: target, scannedAt: scannedAt, keepViews: view != nil)
         center = mapped
         if let view { apply(view, chart: laidOut.chart, size: laidOut.size) }
         if !kept.isEmpty { changeSelection { _ in kept } }
+    }
+
+    /// The node of `new` at `path`, or of its nearest ancestor still there (the root at worst).
+    private static func nearest(_ path: String?, in new: ScanStore) async -> NodeID {
+        var path = path
+        while let current = path {
+            if let node = await new.node(atPath: current) { return node }
+            let parent = (current as NSString).deletingLastPathComponent
+            path = parent.count < current.count ? parent : nil
+        }
+        return FileTree.root
     }
 
     /// Saves `store`'s finished scan as `target`'s snapshot, written off the main actor.
