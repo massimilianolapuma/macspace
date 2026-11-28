@@ -25,6 +25,11 @@ import Foundation
 /// longer name a file at all; that is reasoned, not proven for every case. Per-descriptor reasons
 /// are an open set, and counting any of them as incomplete would block every move.
 ///
+/// Ignored: descriptors that Spotlight's indexers (`isSystemIndexer`) hold open read-only. They
+/// open files at unpredictable times, a reader is not harmed when the file moves to the Trash (its
+/// descriptor stays valid, the index updates itself), and the Finder moves such files anyway. A
+/// descriptor they hold open for writing still counts (#30).
+///
 /// Each open file also records who holds it (`OpenFileHolder`, see `holder(of:record:)`), named
 /// while the processes are inspected; `use(of:isDirectory:)` answers both whether and by whom.
 ///
@@ -90,7 +95,9 @@ public struct OpenFileSet: Sendable {
             records[pid] = found
             return found
         }
-        return collect(pids: pids, inspect: { inspect($0, user: user, fds: &fds) },
+        return collect(pids: pids,
+                       inspect: { inspect($0, user: user, fds: &fds,
+                                          writesOnly: { isSystemIndexer(record($0)?.executable) }) },
                        holder: { holder(of: $0, record: record) })
     }
 
@@ -118,12 +125,34 @@ public struct OpenFileSet: Sendable {
     }
 
     /// Every process's inspection, as `current` sees them, for diagnostics; nil when the process
-    /// list cannot be read in full.
-    static func inspectAll() -> [(pid: pid_t, inspection: Inspection)]? {
+    /// list cannot be read in full. `writesOnly` says whose read-only descriptors are left out
+    /// (`current`: Spotlight's indexers).
+    static func inspectAll(
+        writesOnly: (pid_t) -> Bool = { isSystemIndexer(processRecord($0)?.executable) }
+    ) -> [(pid: pid_t, inspection: Inspection)]? {
         guard let pids = allPIDs() else { return nil }
         var fds = DescriptorBuffer()
         let user = geteuid()
-        return pids.filter { $0 > 0 }.map { ($0, inspect($0, user: user, fds: &fds)) }
+        return pids.filter { $0 > 0 }.map { ($0, inspect($0, user: user, fds: &fds, writesOnly: writesOnly)) }
+    }
+
+    // MARK: - Spotlight's indexers
+
+    /// The indexers' executables, in `Metadata.framework` (inside CoreServices): they read files
+    /// to index them.
+    private static let indexers: Set<String> = ["mdworker_shared", "mdworker", "mds", "mds_stores"]
+
+    /// Whether `executable` is one of Spotlight's indexers, by its full path: a binary named in
+    /// `indexers` directly inside `/System/Library/Frameworks/CoreServices.framework/…/
+    /// Metadata.framework/…` (the sealed system volume, which no user can write), never by name
+    /// alone, so a process of the same name elsewhere is an ordinary holder. Nil (unreadable) is
+    /// none.
+    static func isSystemIndexer(_ executable: String?) -> Bool {
+        guard let executable,
+              executable.hasPrefix("/System/Library/Frameworks/CoreServices.framework/"),
+              executable.contains("/Metadata.framework/"),
+              !executable.split(separator: "/").contains(where: { $0 == ".." || $0 == "." }) else { return false }
+        return indexers.contains((executable as NSString).lastPathComponent)
     }
 
     /// Whether the file at exactly `path` is open.
@@ -280,8 +309,10 @@ public struct OpenFileSet: Sendable {
     }
 
     /// Examines `pid`: its effective user (`PROC_PIDT_SHORTBSDINFO`, readable for any process),
-    /// then, when it is `user`, the paths of its vnode descriptors.
-    private static func inspect(_ pid: pid_t, user: uid_t, fds: inout DescriptorBuffer) -> Inspection {
+    /// then, when it is `user`, the paths of its vnode descriptors: only those open for writing
+    /// when `writesOnly(pid)`.
+    private static func inspect(_ pid: pid_t, user: uid_t, fds: inout DescriptorBuffer,
+                                writesOnly: (pid_t) -> Bool) -> Inspection {
         var info = proc_bsdshortinfo()
         let size = Int32(MemoryLayout<proc_bsdshortinfo>.size)
         errno = 0
@@ -293,18 +324,27 @@ public struct OpenFileSet: Sendable {
         case let .failure(error):
             return failure(error.code)
         case let .success(listed):
-            return listing(listed.descriptors, truncated: listed.truncated) { vnodePath(pid: pid, fd: $0) }
+            return listing(listed.descriptors, truncated: listed.truncated, writesOnly: writesOnly(pid)) {
+                vnodeDescriptor(pid: pid, fd: $0)
+            }
         }
     }
 
+    /// What a vnode descriptor names, and whether it was opened for writing (`FWRITE`).
+    struct VnodeDescriptor: Equatable {
+        var path: String
+        var writable: Bool
+    }
+
     /// A process's inspection from its descriptor list: the paths `path` gives for its vnode
-    /// descriptors. A descriptor whose path cannot be read (nil) is skipped and leaves the listing
-    /// complete (see the type's residual); only `truncated` makes it incomplete.
-    static func listing(_ descriptors: some Sequence<proc_fdinfo>, truncated: Bool,
-                        path: (Int32) -> String?) -> Inspection {
+    /// descriptors, only those open for writing when `writesOnly`. A descriptor whose path cannot
+    /// be read (nil) is skipped and leaves the listing complete (see the type's residual); only
+    /// `truncated` makes it incomplete.
+    static func listing(_ descriptors: some Sequence<proc_fdinfo>, truncated: Bool, writesOnly: Bool = false,
+                        path: (Int32) -> VnodeDescriptor?) -> Inspection {
         var paths: [String] = []
         for fd in descriptors where fd.proc_fdtype == UInt32(PROX_FDTYPE_VNODE) {
-            if let found = path(fd.proc_fd) { paths.append(found) }
+            if let found = path(fd.proc_fd), found.writable || !writesOnly { paths.append(found.path) }
         }
         return .listed(paths: paths, truncated: truncated)
     }
@@ -383,17 +423,19 @@ public struct OpenFileSet: Sendable {
         }
     }
 
-    /// The path of `pid`'s descriptor `fd`; nil when it cannot be read, for whatever reason (any
-    /// errno, a short read, an empty path, no NUL inside the buffer): the caller skips it.
-    private static func vnodePath(pid: pid_t, fd: Int32) -> String? {
+    /// The path of `pid`'s descriptor `fd`, and its open mode; nil when it cannot be read, for
+    /// whatever reason (any errno, a short read, an empty path, no NUL inside the buffer): the
+    /// caller skips it.
+    private static func vnodeDescriptor(pid: pid_t, fd: Int32) -> VnodeDescriptor? {
         var info = vnode_fdinfowithpath()
         let size = Int32(MemoryLayout<vnode_fdinfowithpath>.size)
         guard proc_pidfdinfo(pid, fd, PROC_PIDFDVNODEPATHINFO, &info, size) == size else { return nil }
-        return withUnsafeBytes(of: &info.pvip.vip_path) { raw -> String? in
+        let path = withUnsafeBytes(of: &info.pvip.vip_path) { raw -> String? in
             let bytes = raw.prefix(while: { $0 != 0 })
             guard !bytes.isEmpty, bytes.count < raw.count else { return nil }
             return String(decoding: bytes, as: UTF8.self)
         }
+        return path.map { VnodeDescriptor(path: $0, writable: info.pfi.fi_openflags & UInt32(FWRITE) != 0) }
     }
 }
 

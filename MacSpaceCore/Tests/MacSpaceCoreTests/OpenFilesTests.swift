@@ -119,7 +119,10 @@ private func processName(_ pid: pid_t) -> String {
     #expect(OpenFileSet.collect(pids: [7]) { _ in unreadable }.isComplete)
     // Only vnode descriptors are asked for.
     var asked: [Int32] = []
-    let some = OpenFileSet.listing(fds, truncated: false) { fd in asked.append(fd); return fd == 1 ? "/u/f" : nil }
+    let some = OpenFileSet.listing(fds, truncated: false) { fd in
+        asked.append(fd)
+        return fd == 1 ? .init(path: "/u/f", writable: false) : nil
+    }
     #expect(some == .listed(paths: ["/u/f"], truncated: false) && asked == [0, 1])
     #expect(OpenFileSet.listing([], truncated: true) { _ in nil } == .listed(paths: [], truncated: true))
 }
@@ -146,11 +149,12 @@ private func reap(_ pid: pid_t) {
 
 /// `pid`'s inspection once it equals `expected`, polling for up to 5 s (the child may still be
 /// starting); else the last one seen (nil when the pid was never listed).
-private func inspection(of pid: pid_t, becoming expected: OpenFileSet.Inspection) -> OpenFileSet.Inspection? {
+private func inspection(of pid: pid_t, becoming expected: OpenFileSet.Inspection,
+                        writesOnly: @escaping (pid_t) -> Bool = { _ in false }) -> OpenFileSet.Inspection? {
     let deadline = ContinuousClock.now + .seconds(5)
     var last: OpenFileSet.Inspection?
     repeat {
-        last = OpenFileSet.inspectAll()?.first { $0.pid == pid }?.inspection ?? last
+        last = OpenFileSet.inspectAll(writesOnly: writesOnly)?.first { $0.pid == pid }?.inspection ?? last
         if last == expected { return last }
         usleep(20_000)
     } while ContinuousClock.now < deadline
@@ -186,6 +190,65 @@ private func inspection(of pid: pid_t, becoming expected: OpenFileSet.Inspection
     try #require(revoke(slave) == 0)
     let skipped = OpenFileSet.Inspection.listed(paths: [], truncated: false)
     #expect(inspection(of: pid, becoming: skipped) == skipped)
+}
+
+// MARK: - Spotlight's indexers (#30)
+
+private let metadataSupport =
+    "/System/Library/Frameworks/CoreServices.framework/Versions/A/Frameworks/Metadata.framework/Versions/A/Support/"
+
+@Test func systemIndexerIsKnownByItsExecutablePath() {
+    for name in ["mdworker_shared", "mdworker", "mds", "mds_stores"] {
+        #expect(OpenFileSet.isSystemIndexer(metadataSupport + name), "\(name)")
+    }
+    // The same names anywhere else are ordinary processes, and so are Metadata's other tools.
+    #expect(!OpenFileSet.isSystemIndexer("/usr/local/bin/mdworker_shared"))
+    #expect(!OpenFileSet.isSystemIndexer("/Users/u/Metadata.framework/Support/mds"))
+    #expect(!OpenFileSet.isSystemIndexer("/System/Library/Frameworks/CoreServices.framework/../../../../Users/u/Metadata.framework/mds"))
+    #expect(!OpenFileSet.isSystemIndexer(metadataSupport + "corespotlightd"))
+    #expect(!OpenFileSet.isSystemIndexer(metadataSupport + "mdworker_shared/x"))
+    #expect(!OpenFileSet.isSystemIndexer(nil))
+}
+
+@Test func writesOnlyListingKeepsDescriptorsOpenForWriting() {
+    let vnode = UInt32(PROX_FDTYPE_VNODE)
+    let fds = (0..<3).map { proc_fdinfo(proc_fd: $0, proc_fdtype: vnode) }
+    let path: (Int32) -> OpenFileSet.VnodeDescriptor? = { fd in
+        [OpenFileSet.VnodeDescriptor(path: "/u/read", writable: false),
+         OpenFileSet.VnodeDescriptor(path: "/u/write", writable: true),
+         OpenFileSet.VnodeDescriptor(path: "/u/both", writable: true)][Int(fd)]
+    }
+    #expect(OpenFileSet.listing(fds, truncated: false, writesOnly: true, path: path)
+            == .listed(paths: ["/u/write", "/u/both"], truncated: false))
+    #expect(OpenFileSet.listing(fds, truncated: false, path: path)
+            == .listed(paths: ["/u/read", "/u/write", "/u/both"], truncated: false))
+}
+
+@Test func writesOnlyReadsHowEachDescriptorWasOpened() throws {
+    let fx = try Fixture(); defer { fx.cleanup() }
+    let read = try fx.file("read.bin", bytes: 10).path
+    let write = try fx.file("write.bin", bytes: 10).path
+    let both = try fx.file("both.bin", bytes: 10).path
+    var actions: posix_spawn_file_actions_t?
+    posix_spawn_file_actions_init(&actions)
+    defer { posix_spawn_file_actions_destroy(&actions) }
+    posix_spawn_file_actions_addopen(&actions, 0, read, O_RDONLY, 0)
+    posix_spawn_file_actions_addopen(&actions, 1, write, O_WRONLY, 0)
+    posix_spawn_file_actions_addopen(&actions, 2, both, O_RDWR, 0)
+    let pid = try spawnSleep(&actions)
+    defer { reap(pid) }
+    // The kernel's form of the fixture's paths (`/private/var/…`), as the descriptors name them.
+    let all = OpenFileSet.Inspection.listed(paths: [read, write, both].map(realPath), truncated: false)
+    try #require(inspection(of: pid, becoming: all) == all)
+    let writes = OpenFileSet.Inspection.listed(paths: [write, both].map(realPath), truncated: false)
+    #expect(inspection(of: pid, becoming: writes, writesOnly: { $0 == pid }) == writes)
+}
+
+/// `realpath(3)`: Foundation's `resolvingSymlinksInPath` drops `/private`, the kernel keeps it.
+private func realPath(_ path: String) -> String {
+    guard let resolved = realpath(path, nil) else { return path }
+    defer { free(resolved) }
+    return String(cString: resolved)
 }
 
 /// Opt-in: `MACSPACE_OPENFILES=1 swift test --filter openFilesCompleteInNormalConditions`.
